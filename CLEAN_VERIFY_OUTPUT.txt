@@ -1,0 +1,7 @@
+npm ci --ignore-scripts: PASS
+Typecheck and tests: PASS (18 files, 239 tests)
+Wrangler dry-run bundle: PASS
+Static assets: 3
+Hyperdrive binding: HYPERDRIVE
+node_modules in ZIP: 0
+dist-worker in ZIP: 0

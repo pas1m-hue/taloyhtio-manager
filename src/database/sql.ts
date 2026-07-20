@@ -1,0 +1,74 @@
+import { Pool, type PoolClient, type PoolConfig } from "pg";
+
+export interface SqlQueryResult<
+  Row extends Record<string, unknown> = Record<string, unknown>,
+> {
+  readonly rows: readonly Row[];
+  readonly rowCount: number;
+}
+
+export interface SqlExecutor {
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<SqlQueryResult<Row>>;
+}
+
+export interface SqlTransactionClient extends SqlExecutor {
+  release(): void;
+}
+
+export interface SqlPool extends SqlExecutor {
+  connect(): Promise<SqlTransactionClient>;
+}
+
+/** Thin node-postgres wrapper keeping repositories easy to contract-test. */
+export class NodePostgresPool implements SqlPool {
+  readonly #pool: Pool;
+
+  public constructor(config: PoolConfig | Pool) {
+    this.#pool = config instanceof Pool ? config : new Pool(config);
+  }
+
+  public async query<Row extends Record<string, unknown>>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<SqlQueryResult<Row>> {
+    const result = await this.#pool.query<Row>(text, [...values]);
+    return {
+      rows: result.rows,
+      rowCount: result.rowCount ?? result.rows.length,
+    };
+  }
+
+  public async connect(): Promise<SqlTransactionClient> {
+    return new NodePostgresClient(await this.#pool.connect());
+  }
+
+  public async end(): Promise<void> {
+    await this.#pool.end();
+  }
+}
+
+class NodePostgresClient implements SqlTransactionClient {
+  readonly #client: PoolClient;
+
+  public constructor(client: PoolClient) {
+    this.#client = client;
+  }
+
+  public async query<Row extends Record<string, unknown>>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<SqlQueryResult<Row>> {
+    const result = await this.#client.query<Row>(text, [...values]);
+    return {
+      rows: result.rows,
+      rowCount: result.rowCount ?? result.rows.length,
+    };
+  }
+
+  public release(): void {
+    this.#client.release();
+  }
+}

@@ -1,0 +1,381 @@
+import { PGlite } from "@electric-sql/pglite";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type {
+  AdminDataBatchCommand,
+  CreateVisitorSessionCommand,
+  Horizon,
+  PublishAdminDataCommand,
+  VisitorSessionBatchCommand,
+} from "../domain/types.js";
+import { applyAdminBatch } from "../admin/applyAdminBatch.js";
+import { commitAdminBatch } from "../admin/adminEntryService.js";
+import { publishAdminRevision } from "../application/publishingApplicationService.js";
+import {
+  applyVisitorSessionChanges,
+  createVisitorSession,
+  loadVisitorScenario,
+} from "../application/visitorApplicationService.js";
+import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
+import {
+  loadPostgresMigrations,
+  runPostgresMigrations,
+  splitPostgresStatements,
+  type SqlMigration,
+} from "./migrationRunner.js";
+import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
+import { PostgresSessionWorkspaceRepository } from "./postgresSessionRepository.js";
+import type {
+  SqlPool,
+  SqlQueryResult,
+  SqlTransactionClient,
+} from "./sql.js";
+
+const COMPANY_ID = adminBaselineSnapshot.companyId;
+const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
+const PUBLISHED_AT = "2026-07-17T19:00:00+03:00";
+const SESSION_CREATED_AT = "2026-07-17T20:00:00+03:00";
+const SESSION_EXPIRES_AT = "2026-07-18T20:00:00+03:00";
+
+class PGliteSqlPool implements SqlPool {
+  readonly #db = new PGlite();
+
+  public async query<Row extends Record<string, unknown>>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<SqlQueryResult<Row>> {
+    const result = await this.#db.query<Row>(text, [...values]);
+    return {
+      rows: result.rows,
+      rowCount: result.affectedRows ?? result.rows.length,
+    };
+  }
+
+  public async connect(): Promise<SqlTransactionClient> {
+    return {
+      query: <Row extends Record<string, unknown>>(
+        text: string,
+        values: readonly unknown[] = [],
+      ) => this.query<Row>(text, values),
+      release: () => undefined,
+    };
+  }
+
+  public async close(): Promise<void> {
+    await this.#db.close();
+  }
+}
+
+function publishCommand(
+  expectedAdminRevision: number,
+  expectedPublishedVersion: number,
+  publishedAt = PUBLISHED_AT,
+): PublishAdminDataCommand {
+  return {
+    companyId: COMPANY_ID,
+    expectedAdminRevision,
+    expectedPublishedVersion,
+    publishedAt,
+    publishedBy: "admin:pasi",
+    sourceIds: [`publication_${expectedPublishedVersion + 1}`],
+    explanation: `Publish version ${expectedPublishedVersion + 1}.`,
+  };
+}
+
+function adminBatch(
+  expectedRevision: number,
+  name: string,
+): AdminDataBatchCommand {
+  return {
+    companyId: COMPANY_ID,
+    expectedRevision,
+    actorId: "admin:pasi",
+    occurredAt: `2026-07-17T19:${String(expectedRevision + 1).padStart(2, "0")}:00+03:00`,
+    operations: [{
+      type: "save_housing_company",
+      value: { ...adminBaselineSnapshot.housingCompany, name },
+      sourceIds: ["manual_admin_update"],
+      explanation: "Update company display name.",
+    }],
+  };
+}
+
+function sessionCommand(
+  sessionId = "visitor-db-session",
+  createdAt = SESSION_CREATED_AT,
+  expiresAt = SESSION_EXPIRES_AT,
+): CreateVisitorSessionCommand {
+  return {
+    sessionId,
+    companyId: COMPANY_ID,
+    publicationVersion: 1,
+    createdAt,
+    expiresAt,
+    horizon: HORIZON,
+  };
+}
+
+function sessionBatch(
+  expectedRevision: number,
+  sessionId = "visitor-db-session",
+): VisitorSessionBatchCommand {
+  return {
+    sessionId,
+    expectedRevision,
+    occurredAt: "2026-07-17T20:15:00+03:00",
+    operations: [{
+      type: "set_horizon",
+      value: { startYear: 2027, endYear: 2040 },
+    }],
+  };
+}
+
+let pool: PGliteSqlPool;
+let migrations: readonly SqlMigration[];
+let publications: PostgresPublishingRepository;
+let sessions: PostgresSessionWorkspaceRepository;
+
+beforeAll(async () => {
+  pool = new PGliteSqlPool();
+  migrations = await loadPostgresMigrations();
+  await runPostgresMigrations(pool, migrations);
+});
+
+beforeEach(async () => {
+  await pool.query("DELETE FROM tm_visitor_sessions");
+  await pool.query("DELETE FROM tm_company_access_grants");
+  await pool.query("DELETE FROM tm_publications");
+  await pool.query("DELETE FROM tm_admin_snapshots");
+  publications = new PostgresPublishingRepository(pool);
+  sessions = new PostgresSessionWorkspaceRepository(pool);
+});
+
+afterAll(async () => {
+  await pool.close();
+});
+
+describe("V2.6 PostgreSQL migrations", () => {
+  it("does not split semicolons inside PostgreSQL quoted blocks", () => {
+    const sql = `
+      CREATE FUNCTION demo() RETURNS void AS $$
+      BEGIN
+        PERFORM 'a;b';
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TABLE "semi;colon" (id integer);
+    `;
+    expect(splitPostgresStatements(sql)).toHaveLength(2);
+  });
+
+  it("creates the persistence tables on an actual PostgreSQL engine", async () => {
+    const result = await pool.query<{ table_name: string }>(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name LIKE 'tm_%'
+       ORDER BY table_name`,
+    );
+    expect(result.rows.map((row) => row.table_name)).toEqual([
+      "tm_admin_snapshots",
+      "tm_company_access_grants",
+      "tm_publications",
+      "tm_schema_migrations",
+      "tm_visitor_session_access",
+      "tm_visitor_sessions",
+    ]);
+  });
+
+  it("is idempotent and records migration checksums", async () => {
+    const rerun = await runPostgresMigrations(pool, migrations);
+    expect(rerun).toEqual({ appliedVersions: [], skippedVersions: [1, 2, 3] });
+    const rows = await pool.query<{ version: number; checksum: string }>(
+      "SELECT version, checksum FROM tm_schema_migrations ORDER BY version",
+    );
+    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(rows.rows.every((row) => row.checksum.length === 64)).toBe(true);
+  });
+
+  it("rejects edited SQL for an already applied migration", async () => {
+    const changed = migrations.map((migration) =>
+      migration.version === 1
+        ? { ...migration, sql: `${migration.sql}\n-- unauthorized drift` }
+        : migration
+    );
+    await expect(runPostgresMigrations(pool, changed))
+      .rejects.toMatchObject({ code: "DATABASE_MIGRATION_CONFLICT" });
+  });
+
+  it("rolls back a failing later migration", async () => {
+    const broken: readonly SqlMigration[] = [
+      ...migrations,
+      { version: 4, name: "broken", sql: "CREATE TABLE broken (" },
+    ];
+    await expect(runPostgresMigrations(pool, broken)).rejects.toBeDefined();
+    const rows = await pool.query<{ version: number }>(
+      "SELECT version FROM tm_schema_migrations ORDER BY version",
+    );
+    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("V2.6 PostgreSQL admin and publication repository", () => {
+  it("initializes, reloads and defensively copies an admin snapshot", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    const loaded = await publications.load(COMPANY_ID);
+    expect(loaded).toEqual(adminBaselineSnapshot);
+    (loaded!.assets as unknown as { name: string }[])[0]!.name = "mutated";
+    expect((await publications.load(COMPANY_ID))!.assets[0]!.name)
+      .not.toBe("mutated");
+  });
+
+  it("prevents duplicate company initialization", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await expect(publications.initializeAdminData(adminBaselineSnapshot))
+      .rejects.toMatchObject({ code: "ADMIN_DATA_ALREADY_EXISTS" });
+  });
+
+  it("persists an admin batch and rejects a stale competing revision", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    const original = await publications.load(COMPANY_ID);
+    const first = await commitAdminBatch(publications, adminBatch(0, "First name"));
+    expect(first.revision).toBe(1);
+    const staleNext = applyAdminBatch(original!, adminBatch(0, "Stale name"));
+    await expect(publications.save(COMPANY_ID, 0, staleNext))
+      .rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
+    expect((await publications.load(COMPANY_ID))!.housingCompany.name)
+      .toBe("First name");
+  });
+
+  it("persists publication history and survives repository recreation", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    await commitAdminBatch(publications, adminBatch(0, "Published V2 name"));
+    await publishAdminRevision(
+      publications,
+      publishCommand(1, 1, "2026-07-17T21:00:00+03:00"),
+    );
+
+    const restarted = new PostgresPublishingRepository(pool);
+    expect((await restarted.loadCurrent(COMPANY_ID))!.publicationVersion).toBe(2);
+    expect((await restarted.listVersions(COMPANY_ID))
+      .map((item) => item.publicationVersion)).toEqual([1, 2]);
+    expect((await restarted.loadVersion(COMPANY_ID, 1))!.housingCompany.name)
+      .toBe(adminBaselineSnapshot.housingCompany.name);
+  });
+
+  it("checks admin and publication revisions inside the publication transaction", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await commitAdminBatch(publications, adminBatch(0, "Newer workspace"));
+    await expect(publishAdminRevision(publications, publishCommand(0, 0)))
+      .rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
+    expect(await publications.loadCurrent(COMPANY_ID)).toBeUndefined();
+
+    await publishAdminRevision(publications, publishCommand(1, 0));
+    await expect(publishAdminRevision(publications, publishCommand(1, 0)))
+      .rejects.toMatchObject({ code: "PUBLISHED_VERSION_CONFLICT" });
+    expect((await publications.listVersions(COMPANY_ID))).toHaveLength(1);
+  });
+
+  it("detects column/payload corruption instead of returning plausible data", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await pool.query(
+      "UPDATE tm_admin_snapshots SET revision = 9 WHERE company_id = $1",
+      [COMPANY_ID],
+    );
+    await expect(publications.load(COMPANY_ID))
+      .rejects.toMatchObject({ code: "DATABASE_INTEGRITY_ERROR" });
+  });
+});
+
+describe("V2.5 PostgreSQL visitor-session repository", () => {
+  beforeEach(async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+  });
+
+  it("persists a visitor session and its optimistic revision", async () => {
+    const created = await createVisitorSession(
+      publications,
+      sessions,
+      sessionCommand(),
+    );
+    expect(created.sessionRevision).toBe(0);
+    const changed = await applyVisitorSessionChanges(
+      publications,
+      sessions,
+      sessionBatch(0),
+    );
+    expect(changed.sessionRevision).toBe(1);
+    expect(changed.horizon).toEqual({ startYear: 2027, endYear: 2040 });
+
+    const restarted = new PostgresSessionWorkspaceRepository(pool);
+    const reloaded = await loadVisitorScenario(
+      publications,
+      restarted,
+      "visitor-db-session",
+      "2026-07-17T20:30:00+03:00",
+    );
+    expect(reloaded.sessionRevision).toBe(1);
+  });
+
+  it("rejects duplicate sessions and stale browser revisions", async () => {
+    await createVisitorSession(publications, sessions, sessionCommand());
+    await expect(createVisitorSession(publications, sessions, sessionCommand()))
+      .rejects.toMatchObject({ code: "SESSION_ALREADY_EXISTS" });
+    await applyVisitorSessionChanges(publications, sessions, sessionBatch(0));
+    await expect(applyVisitorSessionChanges(publications, sessions, sessionBatch(0)))
+      .rejects.toMatchObject({ code: "SESSION_REVISION_CONFLICT" });
+  });
+
+  it("enforces publication foreign keys even when called below the service layer", async () => {
+    const workspace = await sessions.load("missing");
+    expect(workspace).toBeUndefined();
+    const invalid = {
+      ...(await (async () => {
+        const created = await createVisitorSession(
+          publications,
+          sessions,
+          sessionCommand("temporary-valid"),
+        );
+        return created;
+      })()),
+    };
+    await sessions.delete("temporary-valid");
+
+    const raw = {
+      sessionId: "orphan",
+      companyId: COMPANY_ID,
+      publicationVersion: 999,
+      publicationFingerprint: invalid.publicationFingerprint,
+      revision: 0,
+      createdAt: SESSION_CREATED_AT,
+      updatedAt: SESSION_CREATED_AT,
+      expiresAt: SESSION_EXPIRES_AT,
+      baseHorizon: HORIZON,
+      horizon: HORIZON,
+      eventOverrides: [],
+      customEvents: [],
+      liquidityOverrides: {},
+    } as const;
+    await expect(sessions.create(raw))
+      .rejects.toMatchObject({ code: "PUBLISHED_DATA_NOT_FOUND" });
+  });
+
+  it("deletes only expired sessions through the TTL maintenance hook", async () => {
+    await createVisitorSession(
+      publications,
+      sessions,
+      sessionCommand(
+        "expired",
+        "2026-07-17T19:10:00+03:00",
+        "2026-07-17T19:30:00+03:00",
+      ),
+    );
+    await createVisitorSession(
+      publications,
+      sessions,
+      sessionCommand("active"),
+    );
+    expect(await sessions.deleteExpired("2026-07-17T20:00:00+03:00")).toBe(1);
+    expect(await sessions.load("expired")).toBeUndefined();
+    expect(await sessions.load("active")).toBeDefined();
+  });
+});

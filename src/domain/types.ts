@@ -1,0 +1,779 @@
+/**
+ * Taloyhtiö Manager V2.8a domain types.
+ *
+ * Every building-component event is an explicit, independent record. The
+ * engine does not infer lifecycle cycles, reset dates, supersession, or
+ * dependencies between events.
+ */
+
+export const PROJECTION_PRICE_LEVEL_YEAR = 2026 as const;
+
+export const SCENARIOS = ["optimistic", "base", "stress"] as const;
+export type Scenario = (typeof SCENARIOS)[number];
+
+export const ASSET_CATEGORIES = [
+  "hvac",
+  "envelope",
+  "structures",
+  "yard",
+  "safety",
+  "other",
+] as const;
+export type AssetCategory = (typeof ASSET_CATEGORIES)[number];
+
+export const EVENT_TYPES = [
+  "inspection",
+  "maintenance",
+  "repair",
+  "replacement",
+  "renewal",
+  "cleaning",
+  "study",
+  "other",
+] as const;
+export type EventType = (typeof EVENT_TYPES)[number];
+
+export const EVENT_STATUSES = [
+  "suggested",
+  "approved",
+  "actual",
+  "cancelled",
+] as const;
+export type EventStatus = (typeof EVENT_STATUSES)[number];
+
+export const EVENT_ORIGINS = [
+  "initial_excel",
+  "manual",
+  "document_update",
+] as const;
+export type EventOrigin = (typeof EVENT_ORIGINS)[number];
+
+export const COST_EVIDENCE_STATUSES = [
+  "actual",
+  "quote",
+  "estimate",
+  "estimate_from_actual",
+  "data_gap",
+] as const;
+export type CostEvidenceStatus = (typeof COST_EVIDENCE_STATUSES)[number];
+
+export interface Horizon {
+  readonly startYear: number;
+  readonly endYear: number;
+}
+
+export interface OperatingBufferSettings {
+  readonly bufferMonths?: number;
+  readonly userOverride?: number;
+}
+
+export interface HousingCompany {
+  readonly id: string;
+  readonly name: string;
+  readonly apartmentCount: number;
+  readonly chargeableAreaM2?: number;
+  readonly operatingBuffer?: OperatingBufferSettings;
+}
+
+export interface FinancialYear {
+  readonly year: number;
+  readonly budgetIncome?: number;
+  readonly actualIncome?: number;
+  readonly budgetCosts?: number;
+  readonly actualCosts?: number;
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
+/** Manually entered liquidity inputs captured at one named date. */
+export interface LiquidityBaselineRecord {
+  readonly id: string;
+  readonly asOfDate: string;
+  readonly currentCash: number;
+  readonly trailing12mOperatingCosts: number;
+  readonly currentAnnualRepairCollection: number;
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
+/** A building component is descriptive metadata, not an event generator. */
+export interface Asset {
+  readonly id: string;
+  readonly name: string;
+  readonly category: AssetCategory;
+  readonly sourceIds: readonly string[];
+  readonly active: boolean;
+}
+
+export interface Observation {
+  readonly id: string;
+  readonly assetId: string;
+  readonly observedAt: string;
+  readonly description: string;
+  readonly sourceIds: readonly string[];
+}
+
+export interface CostEvidence {
+  readonly id: string;
+  readonly assetId?: string;
+  readonly eventId?: string;
+  readonly status: CostEvidenceStatus;
+  readonly amount?: number;
+  readonly unit: string;
+  readonly quantity?: number;
+  readonly priceLevelYear: number;
+  readonly vatIncluded?: boolean | null;
+  readonly observedAt?: string | null;
+  readonly validUntil?: string | null;
+  readonly sourceUrl?: string;
+  readonly sourceId?: string;
+  readonly notes?: string;
+}
+
+export interface PriceLevelConfirmation {
+  readonly costEvidenceId: string;
+  readonly targetYear: typeof PROJECTION_PRICE_LEVEL_YEAR;
+  readonly confirmedAt: string;
+  readonly confirmedBy: string;
+}
+
+/**
+ * One exact scenario row entered manually or imported from a reviewed source. Several rows may share the same scenario and event.
+ */
+export interface EventScheduleEntry {
+  readonly id: string;
+  readonly scenario: Scenario;
+  readonly year: number;
+  readonly amount?: number;
+  readonly quantity?: number;
+  readonly costEvidenceId: string;
+  readonly explanation?: string;
+}
+
+export interface ActualEventEntry {
+  readonly year: number;
+  readonly occurredAt?: string;
+  readonly amount?: number;
+  readonly quantity?: number;
+  readonly costEvidenceId: string;
+}
+
+interface BuildingEventBase {
+  readonly id: string;
+  readonly assetId: string;
+  readonly title: string;
+  readonly type: EventType;
+  readonly origin: EventOrigin;
+  readonly sourceIds: readonly string[];
+  readonly observationIds?: readonly string[];
+  readonly notes?: string;
+}
+
+export interface FutureBuildingEvent extends BuildingEventBase {
+  readonly status: "suggested" | "approved";
+  /** Exact rows only. No dates or costs are generated from lifecycle rules. */
+  readonly schedule: readonly EventScheduleEntry[];
+}
+
+export interface ActualBuildingEvent extends BuildingEventBase {
+  readonly status: "actual";
+  readonly actual: ActualEventEntry;
+}
+
+export interface CancelledBuildingEvent extends BuildingEventBase {
+  readonly status: "cancelled";
+  readonly schedule?: readonly EventScheduleEntry[];
+}
+
+export type BuildingEvent =
+  | FutureBuildingEvent
+  | ActualBuildingEvent
+  | CancelledBuildingEvent;
+
+export interface ProjectedCostEvent {
+  readonly id: string;
+  readonly eventId: string;
+  readonly scheduleEntryId: string;
+  readonly assetId: string;
+  readonly title: string;
+  readonly type: EventType;
+  readonly origin: EventOrigin;
+  readonly scenario: Scenario;
+  readonly year: number;
+  readonly amount: number;
+  readonly quantity?: number;
+  readonly costEvidenceId: string;
+  readonly observationIds?: readonly string[];
+  readonly explanation: string;
+}
+
+export interface HorizonEventSummary {
+  readonly events: readonly ProjectedCostEvent[];
+  readonly eventCount: number;
+  readonly quantity: number;
+  readonly amount: number;
+}
+
+export type HorizonSummaryByScenario = Readonly<
+  Record<Scenario, HorizonEventSummary>
+>;
+
+export type HorizonPosition = "before" | "within" | "after";
+
+export interface EventDataGap {
+  readonly eventId: string;
+  readonly scheduleEntryId: string;
+  readonly assetId: string;
+  readonly title: string;
+  readonly scenario: Scenario;
+  readonly year: number;
+  readonly quantity?: number;
+  readonly costEvidenceId: string;
+  readonly horizonPosition: HorizonPosition;
+  readonly reason: string;
+}
+
+export interface EventPortfolioResult {
+  readonly events: readonly ProjectedCostEvent[];
+  readonly beforeHorizon: HorizonSummaryByScenario;
+  readonly afterHorizon: HorizonSummaryByScenario;
+  /** Approved rows with a named DATA GAP; never converted to zero euros. */
+  readonly dataGaps: readonly EventDataGap[];
+  readonly history: readonly ActualBuildingEvent[];
+  readonly suggestions: readonly FutureBuildingEvent[];
+  readonly cancelled: readonly CancelledBuildingEvent[];
+}
+
+/** One scenario's numeric rows and named DATA GAPs for one horizon year. */
+export interface YearProjection {
+  readonly year: number;
+  readonly eventCount: number;
+  readonly quantity: number;
+  readonly amount: number;
+  readonly events: readonly ProjectedCostEvent[];
+  readonly dataGaps: readonly EventDataGap[];
+}
+
+export interface ScenarioDataGapSummary {
+  readonly beforeHorizon: readonly EventDataGap[];
+  readonly withinHorizon: readonly EventDataGap[];
+  readonly afterHorizon: readonly EventDataGap[];
+}
+
+export interface ScenarioProjection {
+  readonly scenario: Scenario;
+  readonly years: readonly YearProjection[];
+  readonly horizonEventCount: number;
+  readonly horizonQuantity: number;
+  readonly horizonAmount: number;
+  readonly beforeHorizonEventCount: number;
+  readonly beforeHorizonQuantity: number;
+  readonly beforeHorizonAmount: number;
+  readonly afterHorizonEventCount: number;
+  readonly afterHorizonQuantity: number;
+  readonly afterHorizonAmount: number;
+  readonly dataGaps: ScenarioDataGapSummary;
+}
+
+export interface ProjectionResult {
+  readonly scenarios: Readonly<Record<Scenario, ScenarioProjection>>;
+  /** All named gaps, including before/within/after horizon positions. */
+  readonly dataGaps: readonly EventDataGap[];
+  readonly history: readonly ActualBuildingEvent[];
+  readonly suggestions: readonly FutureBuildingEvent[];
+  readonly cancelled: readonly CancelledBuildingEvent[];
+}
+
+
+export const EVENT_CHANGE_TYPES = ["add", "update", "cancel"] as const;
+export type EventChangeType = (typeof EVENT_CHANGE_TYPES)[number];
+
+export const EVENT_CHANGE_PROPOSAL_STATUSES = [
+  "pending",
+  "accepted",
+  "rejected",
+] as const;
+export type EventChangeProposalStatus =
+  (typeof EVENT_CHANGE_PROPOSAL_STATUSES)[number];
+
+export type EventProposalDecisionValue = "accept" | "reject";
+
+/**
+ * One reviewed change proposal. Updates and cancellations carry the target
+ * fingerprint captured when the proposal was created, so stale proposals
+ * cannot overwrite a later edit.
+ */
+export interface EventChangeProposal {
+  readonly id: string;
+  readonly changeType: EventChangeType;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+  readonly createdAt: string;
+  readonly status: EventChangeProposalStatus;
+  readonly targetEventId?: string;
+  readonly expectedTargetFingerprint?: string;
+  readonly proposedEvent?: FutureBuildingEvent;
+  readonly decidedAt?: string;
+  readonly decidedBy?: string;
+}
+
+export interface EventChangeCandidate {
+  readonly id: string;
+  readonly changeType: EventChangeType;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+  readonly createdAt: string;
+  readonly targetEventId?: string;
+  readonly proposedEvent?: FutureBuildingEvent;
+}
+
+export interface EventProposalDiffResult {
+  readonly proposals: readonly EventChangeProposal[];
+  readonly unchangedCandidateIds: readonly string[];
+}
+
+export interface EventProposalDecision {
+  readonly proposalId: string;
+  readonly decision: EventProposalDecisionValue;
+  readonly decidedAt: string;
+  readonly decidedBy: string;
+}
+
+export interface EventChangeAuditEntry {
+  readonly id: string;
+  readonly proposalId: string;
+  readonly decision: EventProposalDecisionValue;
+  readonly changeType: EventChangeType;
+  readonly decidedAt: string;
+  readonly decidedBy: string;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+  readonly targetEventId?: string;
+  readonly beforeEvent?: BuildingEvent;
+  readonly afterEvent?: BuildingEvent;
+}
+
+export interface EventReviewState {
+  readonly events: readonly BuildingEvent[];
+  readonly proposals: readonly EventChangeProposal[];
+  readonly auditTrail: readonly EventChangeAuditEntry[];
+}
+
+export interface ReviewFlag {
+  readonly id: string;
+  readonly type:
+    | "population_failure_rate"
+    | "project_reschedule"
+    | "cost_refresh"
+    | "manual_review";
+  readonly status: "open" | "acknowledged" | "resolved";
+  readonly assetId?: string;
+  readonly eventId?: string;
+  readonly message: string;
+  readonly createdAt: string;
+}
+
+
+
+export const ADMIN_ENTITY_TYPES = [
+  "housing_company",
+  "financial_year",
+  "liquidity_baseline",
+  "asset",
+  "observation",
+  "cost_evidence",
+  "price_level_confirmation",
+  "building_event",
+] as const;
+export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
+
+export type AdminOperationType = "create" | "update";
+
+export type AdminEntitySnapshot =
+  | HousingCompany
+  | FinancialYear
+  | LiquidityBaselineRecord
+  | Asset
+  | Observation
+  | CostEvidence
+  | PriceLevelConfirmation
+  | BuildingEvent;
+
+export interface AdminAuditEntry {
+  readonly id: string;
+  readonly revision: number;
+  readonly entityType: AdminEntityType;
+  readonly entityKey: string;
+  readonly operation: AdminOperationType;
+  readonly actorId: string;
+  readonly occurredAt: string;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+  readonly before?: AdminEntitySnapshot;
+  readonly after: AdminEntitySnapshot;
+}
+
+export interface AdminDataSnapshot {
+  readonly companyId: string;
+  readonly revision: number;
+  readonly housingCompany: HousingCompany;
+  readonly financialYears: readonly FinancialYear[];
+  readonly liquidityBaselines: readonly LiquidityBaselineRecord[];
+  readonly assets: readonly Asset[];
+  readonly observations: readonly Observation[];
+  readonly costEvidence: readonly CostEvidence[];
+  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
+  readonly events: readonly BuildingEvent[];
+  readonly auditTrail: readonly AdminAuditEntry[];
+  readonly updatedAt: string;
+  readonly updatedBy: string;
+}
+
+interface AdminOperationMetadata {
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+}
+
+export type AdminDataOperation =
+  | ({ readonly type: "save_housing_company"; readonly value: HousingCompany } & AdminOperationMetadata)
+  | ({ readonly type: "save_financial_year"; readonly value: FinancialYear } & AdminOperationMetadata)
+  | ({ readonly type: "save_liquidity_baseline"; readonly value: LiquidityBaselineRecord } & AdminOperationMetadata)
+  | ({ readonly type: "save_asset"; readonly value: Asset } & AdminOperationMetadata)
+  | ({ readonly type: "save_observation"; readonly value: Observation } & AdminOperationMetadata)
+  | ({ readonly type: "save_cost_evidence"; readonly value: CostEvidence } & AdminOperationMetadata)
+  | ({ readonly type: "save_price_level_confirmation"; readonly value: PriceLevelConfirmation } & AdminOperationMetadata)
+  | ({ readonly type: "save_building_event"; readonly value: BuildingEvent } & AdminOperationMetadata);
+
+export interface AdminDataBatchCommand {
+  readonly companyId: string;
+  readonly expectedRevision: number;
+  readonly actorId: string;
+  readonly occurredAt: string;
+  readonly operations: readonly AdminDataOperation[];
+}
+
+/** Approved future events and actual history are the only event states exposed in a publication. */
+export type PublishedBuildingEvent =
+  | (Omit<FutureBuildingEvent, "status"> & { readonly status: "approved" })
+  | ActualBuildingEvent;
+
+/** Immutable public version created from one exact admin workspace revision. */
+export interface PublishedDataSnapshot {
+  readonly companyId: string;
+  readonly publicationVersion: number;
+  readonly sourceAdminRevision: number;
+  readonly contentFingerprint: string;
+  readonly housingCompany: HousingCompany;
+  readonly financialYears: readonly FinancialYear[];
+  readonly liquidityBaselines: readonly LiquidityBaselineRecord[];
+  readonly assets: readonly Asset[];
+  readonly observations: readonly Observation[];
+  readonly costEvidence: readonly CostEvidence[];
+  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
+  readonly events: readonly PublishedBuildingEvent[];
+  readonly publishedAt: string;
+  readonly publishedBy: string;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+}
+
+export interface PublishAdminDataCommand {
+  readonly companyId: string;
+  readonly expectedAdminRevision: number;
+  /** Zero when the company has never been published. */
+  readonly expectedPublishedVersion: number;
+  readonly publishedAt: string;
+  readonly publishedBy: string;
+  readonly sourceIds: readonly string[];
+  readonly explanation: string;
+}
+
+/** Read model returned to a visitor; it never contains drafts, cancellations, or admin audit data. */
+export interface VisitorPublishedView {
+  readonly companyId: string;
+  readonly publicationVersion: number;
+  readonly sourceAdminRevision: number;
+  readonly publishedAt: string;
+  readonly housingCompany: HousingCompany;
+  readonly financialYears: readonly FinancialYear[];
+  readonly latestLiquidityBaseline?: LiquidityBaselineRecord;
+  readonly assets: readonly Asset[];
+  readonly observations: readonly Observation[];
+  readonly costEvidence: readonly CostEvidence[];
+  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
+  readonly approvedEvents: readonly (Omit<FutureBuildingEvent, "status"> & { readonly status: "approved" })[];
+  readonly actualHistory: readonly ActualBuildingEvent[];
+}
+
+export const DEFAULT_OPERATING_BUFFER_MONTHS = 3.5 as const;
+
+export type OperatingBufferBasis = "suggested" | "user_override";
+
+export interface OperatingBufferResult {
+  readonly bufferMonths: number;
+  readonly suggestedOperatingBuffer: number;
+  readonly operatingBufferTarget: number;
+  readonly basis: OperatingBufferBasis;
+}
+
+export interface CashPathYear {
+  readonly year: number;
+  readonly openingCash: number;
+  readonly annualRepairCollection: number;
+  readonly knownRepairCosts: number;
+  readonly closingCash: number;
+  readonly operatingBufferTarget: number;
+  readonly cashAboveBuffer: number;
+  readonly bufferShortfall: number;
+  readonly dataGaps: readonly EventDataGap[];
+}
+
+export interface ScenarioCashPath {
+  readonly scenario: Scenario;
+  readonly years: readonly CashPathYear[];
+  readonly initialCash: number;
+  readonly annualRepairCollection: number;
+  readonly operatingBufferTarget: number;
+  readonly knownRepairCostsTotal: number;
+  readonly collectionTotal: number;
+  readonly finalCash: number;
+  /** Unknown-cost rows before or within the planning horizon. */
+  readonly blockingDataGaps: readonly EventDataGap[];
+}
+
+export interface FundingNeedSignal {
+  readonly scenario: Scenario;
+  readonly ownFundingSufficientForKnownCosts: boolean;
+  readonly forecastComplete: boolean;
+  readonly amountAtFirstNeed: number;
+  readonly maximumBufferShortfall: number;
+  readonly minimumClosingCash: number;
+  readonly blockingDataGaps: readonly EventDataGap[];
+  readonly firstFundingNeedYear?: number;
+}
+
+export interface RequiredCollectionResult {
+  readonly scenario: Scenario;
+  /** Minimum flat annual collection for known numeric costs only. */
+  readonly knownCostRequiredAnnualCollection: number;
+  readonly currentAnnualRepairCollection: number;
+  readonly additionalAnnualCollection: number;
+  readonly currentMonthlyCollection: number;
+  readonly requiredMonthlyCollection: number;
+  readonly additionalMonthlyCollection: number;
+  readonly planningYearCount: number;
+  readonly forecastComplete: boolean;
+  readonly blockingDataGaps: readonly EventDataGap[];
+  readonly currentMonthlyPerM2?: number;
+  readonly requiredMonthlyPerM2?: number;
+  readonly additionalMonthlyPerM2?: number;
+  readonly currentMonthlyPerApartment?: number;
+  readonly requiredMonthlyPerApartment?: number;
+  readonly additionalMonthlyPerApartment?: number;
+}
+
+export interface ScenarioLiquidityForecast {
+  readonly cashPath: ScenarioCashPath;
+  readonly fundingNeed: FundingNeedSignal;
+  readonly requiredCollection: RequiredCollectionResult;
+}
+
+export interface LiquidityForecastResult {
+  readonly operatingBuffer: OperatingBufferResult;
+  readonly scenarios: Readonly<Record<Scenario, ScenarioLiquidityForecast>>;
+}
+
+
+/** Visitor session changes are ephemeral deltas over one immutable publication. */
+export interface SessionEventOverride {
+  readonly id: string;
+  readonly eventId: string;
+  readonly scheduleEntryId: string;
+  readonly excluded?: boolean;
+  readonly year?: number;
+  /** null explicitly changes a numeric row into a named session DATA GAP. */
+  readonly amount?: number | null;
+  /** null explicitly clears an optional quantity. */
+  readonly quantity?: number | null;
+  readonly explanation?: string;
+}
+
+export interface SessionCustomScheduleEntry {
+  readonly id: string;
+  readonly scenario: Scenario;
+  readonly year: number;
+  /** Undefined means a named session DATA GAP, never a silent zero. */
+  readonly amount?: number;
+  readonly quantity?: number;
+  readonly explanation?: string;
+}
+
+export interface SessionCustomEvent {
+  readonly id: string;
+  readonly assetId: string;
+  readonly title: string;
+  readonly type: EventType;
+  readonly schedule: readonly SessionCustomScheduleEntry[];
+  readonly notes?: string;
+}
+
+export interface SessionLiquidityOverrides {
+  readonly currentCash?: number;
+  readonly trailing12mOperatingCosts?: number;
+  readonly bufferMonths?: number;
+  /** null removes a published user override and uses the month-based buffer. */
+  readonly operatingBufferTarget?: number | null;
+  readonly totalChargeableAreaM2?: number;
+  readonly apartmentCount?: number;
+  readonly annualRepairCollectionByScenario?: Partial<
+    Readonly<Record<Scenario, number>>
+  >;
+}
+
+export interface VisitorSessionWorkspace {
+  readonly sessionId: string;
+  readonly companyId: string;
+  readonly publicationVersion: number;
+  readonly publicationFingerprint: string;
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly expiresAt: string;
+  readonly baseHorizon: Horizon;
+  readonly horizon: Horizon;
+  readonly eventOverrides: readonly SessionEventOverride[];
+  readonly customEvents: readonly SessionCustomEvent[];
+  readonly liquidityOverrides: SessionLiquidityOverrides;
+}
+
+export interface CreateVisitorSessionCommand {
+  readonly sessionId: string;
+  readonly companyId: string;
+  readonly publicationVersion: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly horizon: Horizon;
+}
+
+export type VisitorSessionOperation =
+  | { readonly type: "save_event_override"; readonly value: SessionEventOverride }
+  | { readonly type: "remove_event_override"; readonly overrideId: string }
+  | { readonly type: "save_custom_event"; readonly value: SessionCustomEvent }
+  | { readonly type: "remove_custom_event"; readonly customEventId: string }
+  | { readonly type: "set_horizon"; readonly value: Horizon }
+  | { readonly type: "set_liquidity_overrides"; readonly value: SessionLiquidityOverrides }
+  | { readonly type: "reset_workspace" };
+
+export interface VisitorSessionBatchCommand {
+  readonly sessionId: string;
+  readonly expectedRevision: number;
+  readonly occurredAt: string;
+  readonly operations: readonly VisitorSessionOperation[];
+}
+
+export interface EffectiveSessionData {
+  readonly assets: readonly Asset[];
+  readonly events: readonly BuildingEvent[];
+  readonly costEvidence: readonly CostEvidence[];
+  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
+}
+
+export interface EffectiveSessionLiquidityAssumptions {
+  readonly currentCash: number;
+  readonly trailing12mOperatingCosts: number;
+  readonly operatingBufferSettings: OperatingBufferSettings;
+  readonly totalChargeableAreaM2?: number;
+  readonly apartmentCount?: number;
+  readonly annualRepairCollectionByScenario: Readonly<Record<Scenario, number>>;
+}
+
+export type SessionLiquidityModel =
+  | {
+      readonly status: "available";
+      readonly assumptions: EffectiveSessionLiquidityAssumptions;
+      readonly forecast: LiquidityForecastResult;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly missingFields: readonly (
+        | "currentCash"
+        | "trailing12mOperatingCosts"
+        | "currentAnnualRepairCollection"
+      )[];
+    };
+
+export interface VisitorSessionModel {
+  readonly sessionId: string;
+  readonly sessionRevision: number;
+  readonly companyId: string;
+  readonly publicationVersion: number;
+  readonly publicationFingerprint: string;
+  readonly horizon: Horizon;
+  readonly effectiveApprovedEvents: readonly FutureBuildingEvent[];
+  readonly projection: ProjectionResult;
+  readonly liquidity: SessionLiquidityModel;
+  readonly modificationCount: number;
+}
+
+export type ValidationCode =
+  | "INVALID_HORIZON"
+  | "DUPLICATE_ASSET_ID"
+  | "DUPLICATE_EVENT_ID"
+  | "DUPLICATE_SCHEDULE_ENTRY_ID"
+  | "DUPLICATE_COST_EVIDENCE_ID"
+  | "MISSING_ASSET"
+  | "INACTIVE_ASSET"
+  | "MISSING_EVENT_SOURCE"
+  | "INVALID_EVENT_SCHEDULE"
+  | "INVALID_EVENT_YEAR"
+  | "INVALID_EVENT_QUANTITY"
+  | "INVALID_EVENT_AMOUNT"
+  | "MISSING_COST_EVIDENCE"
+  | "COST_EVIDENCE_MISMATCH"
+  | "MISSING_COST_SOURCE"
+  | "UNCONFIRMED_PRICE_LEVEL"
+  | "INVALID_DATA_GAP"
+  | "INVALID_OPERATING_BUFFER"
+  | "INVALID_CASH_INPUT"
+  | "INVALID_COLLECTION_INPUT"
+  | "INVALID_SCENARIO_PROJECTION"
+  | "INVALID_CHARGE_BASIS"
+  | "DUPLICATE_CHANGE_PROPOSAL_ID"
+  | "INVALID_CHANGE_PROPOSAL"
+  | "MISSING_CHANGE_SOURCE"
+  | "MISSING_TARGET_EVENT"
+  | "CHANGE_PROPOSAL_CONFLICT"
+  | "CHANGE_PROPOSAL_ALREADY_DECIDED"
+  | "INVALID_ADMIN_DATA"
+  | "INVALID_ADMIN_OPERATION"
+  | "DUPLICATE_ADMIN_OPERATION"
+  | "ADMIN_DATA_NOT_FOUND"
+  | "ADMIN_DATA_ALREADY_EXISTS"
+  | "ADMIN_REVISION_CONFLICT"
+  | "PUBLISHED_DATA_NOT_FOUND"
+  | "PUBLISHED_VERSION_CONFLICT"
+  | "INVALID_PUBLISHED_DATA"
+  | "NO_PUBLICATION_CHANGES"
+  | "INVALID_SESSION_DATA"
+  | "SESSION_NOT_FOUND"
+  | "SESSION_ALREADY_EXISTS"
+  | "SESSION_REVISION_CONFLICT"
+  | "SESSION_EXPIRED"
+  | "DATABASE_MIGRATION_CONFLICT"
+  | "DATABASE_INTEGRITY_ERROR"
+  | "SESSION_PUBLICATION_MISMATCH"
+  | "UNAUTHENTICATED"
+  | "INVALID_AUTH_CONTEXT"
+  | "ACCESS_DENIED"
+  | "INVALID_ACCESS_GRANT"
+  | "INVALID_SESSION_CREDENTIAL";
+
+export class DomainValidationError extends Error {
+  public readonly code: ValidationCode;
+
+  public constructor(code: ValidationCode, message: string) {
+    super(message);
+    this.name = "DomainValidationError";
+    this.code = code;
+  }
+}

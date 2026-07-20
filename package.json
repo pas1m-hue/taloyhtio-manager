@@ -1,0 +1,38 @@
+{
+  "name": "taloyhtio-manager-engine",
+  "version": "2.8.0-beta.1",
+  "private": true,
+  "type": "module",
+  "description": "Taloyhtio Manager V2.8b - Cloudflare Worker, Hyperdrive and Supabase deployment package",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm test",
+    "test:database": "vitest run src/database/postgresPersistence.test.ts",
+    "test:auth": "vitest run src/auth/authorization.test.ts src/database/postgresAuthPersistence.test.ts",
+    "dev": "npm run build && node dist/http/runtime/devServer.js",
+    "test:http": "vitest run src/http/httpApi.test.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/database && cp -R src/database/migrations dist/database/",
+    "test:production": "vitest run src/config/environment.test.ts src/auth/jwksClient.test.ts src/auth/supabaseJwtAuthentication.test.ts src/http/runtime/productionRuntime.test.ts",
+    "start:production": "node dist/http/runtime/productionServer.js",
+    "migrate:production": "node dist/database/runProductionMigrations.js",
+    "preflight:production": "node dist/config/productionPreflight.js",
+    "dev:worker": "wrangler dev",
+    "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
+    "deploy:worker": "wrangler deploy",
+    "test:cloudflare": "vitest run src/cloudflare/worker.test.ts"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.4",
+    "@types/node": "24.4.0",
+    "@types/pg": "8.20.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "@cloudflare/workers-types": "5.20260718.1",
+    "wrangler": "4.112.0"
+  },
+  "dependencies": {
+    "pg": "8.22.0"
+  }
+}
