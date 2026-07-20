@@ -52,7 +52,7 @@ export default {
         undefined,
         sessionTtlMs(env.VISITOR_SESSION_TTL_SECONDS),
       );
-      const api = createHttpServer({ admin, visitor, logger: true });
+      const api = createHttpServer({ admin, visitor, logger: true, publicDirectory: "/" });
       const payload = await readPayload(request);
       const headers = Object.fromEntries(request.headers.entries());
       const result = await api.inject({
