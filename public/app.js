@@ -3,7 +3,10 @@ const state = {
   visitor: null,
   visitorCredential: readCredential(),
   admin: null,
+  auth: readAuthSession(),
 };
+
+let authRefreshPromise = null;
 
 const $ = (selector) => document.querySelector(selector);
 const companyId = () => $("#company-id").value.trim();
@@ -11,7 +14,6 @@ const horizon = () => ({
   startYear: Number($("#horizon-start").value),
   endYear: Number($("#horizon-end").value),
 });
-const adminToken = () => $("#admin-token").value.trim();
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => {
@@ -31,10 +33,161 @@ $("#visitor-create-session").addEventListener("click", createSession);
 $("#visitor-reset").addEventListener("click", resetSession);
 $("#visitor-liquidity-form").addEventListener("submit", saveLiquidity);
 $("#visitor-custom-event-form").addEventListener("submit", saveCustomEvent);
+$("#admin-auth-form").addEventListener("submit", signInAdmin);
+$("#admin-sign-out").addEventListener("click", signOutAdmin);
 $("#admin-load").addEventListener("click", loadAdmin);
 $("#admin-preview").addEventListener("click", loadAdmin);
 $("#admin-publish").addEventListener("click", publishAdmin);
 $("#admin-batch-form").addEventListener("submit", saveAdminBatch);
+
+
+async function signInAdmin(event) {
+  event.preventDefault();
+  try {
+    const session = await supabaseAuthRequest("/token?grant_type=password", {
+      body: {
+        email: $("#admin-email").value.trim(),
+        password: $("#admin-password").value,
+      },
+    });
+    saveAuthSession(session);
+    $("#admin-password").value = "";
+    renderAuthStatus();
+    toast("Kirjautuminen onnistui.");
+  } catch (error) { showError(error); }
+}
+
+async function signOutAdmin() {
+  const accessToken = state.auth?.access_token;
+  try {
+    if (accessToken) {
+      await supabaseAuthRequest("/logout?scope=local", {
+        accessToken,
+        expectJson: false,
+      });
+    }
+  } catch (error) {
+    console.warn("Supabase logout request failed", error);
+  } finally {
+    clearAuthSession();
+    state.admin = null;
+    $("#admin-summary").innerHTML = "";
+    $("#admin-event-rows").innerHTML = "";
+    $("#admin-scenarios").innerHTML = "";
+    renderAuthStatus();
+    toast("Kirjauduttu ulos.");
+  }
+}
+
+async function getAdminAccessToken() {
+  if (!state.auth?.access_token) throw new Error("Kirjaudu ensin admin-käyttäjänä.");
+  const expiresAtMs = Number(state.auth.expires_at ?? 0) * 1_000;
+  if (expiresAtMs > Date.now() + 60_000) return state.auth.access_token;
+  if (!state.auth.refresh_token) {
+    clearAuthSession();
+    renderAuthStatus();
+    throw new Error("Kirjautumisistunto on vanhentunut. Kirjaudu uudelleen.");
+  }
+  if (!authRefreshPromise) {
+    authRefreshPromise = refreshAdminSession().finally(() => { authRefreshPromise = null; });
+  }
+  await authRefreshPromise;
+  if (!state.auth?.access_token) throw new Error("Kirjautumisistunnon uusiminen epäonnistui.");
+  return state.auth.access_token;
+}
+
+async function refreshAdminSession() {
+  try {
+    const session = await supabaseAuthRequest("/token?grant_type=refresh_token", {
+      body: { refresh_token: state.auth.refresh_token },
+    });
+    saveAuthSession(session);
+    renderAuthStatus();
+  } catch (error) {
+    clearAuthSession();
+    renderAuthStatus();
+    throw error;
+  }
+}
+
+async function supabaseAuthRequest(path, options = {}) {
+  const config = requireAuthConfig();
+  const accessToken = options.accessToken ?? config.publishableKey;
+  const headers = {
+    accept: "application/json",
+    apikey: config.publishableKey,
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (options.body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch(`${config.supabaseUrl}/auth/v1${path}`, {
+    method: "POST",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  if (response.ok) {
+    if (options.expectJson === false || response.status === 204) return undefined;
+    return normalizeAuthSession(await response.json());
+  }
+  const data = await response.json().catch(() => ({}));
+  throw new Error(data.msg ?? data.message ?? data.error_description ?? `Supabase Auth HTTP ${response.status}`);
+}
+
+function requireAuthConfig() {
+  const config = globalThis.TM_AUTH_CONFIG;
+  if (!config || typeof config.supabaseUrl !== "string" || typeof config.publishableKey !== "string") {
+    throw new Error("Supabase Auth -konfiguraatio puuttuu.");
+  }
+  const supabaseUrl = config.supabaseUrl.replace(/\/$/, "");
+  if (!supabaseUrl.startsWith("https://") || config.publishableKey.trim() === "") {
+    throw new Error("Supabase Auth -konfiguraatio on virheellinen.");
+  }
+  return { supabaseUrl, publishableKey: config.publishableKey.trim() };
+}
+
+function normalizeAuthSession(session) {
+  if (!session || typeof session.access_token !== "string" || typeof session.refresh_token !== "string") {
+    throw new Error("Supabase Auth palautti virheellisen session.");
+  }
+  const expiresAt = Number(session.expires_at);
+  const expiresIn = Number(session.expires_in);
+  return {
+    ...session,
+    expires_at: Number.isFinite(expiresAt)
+      ? expiresAt
+      : Math.floor(Date.now() / 1_000) + (Number.isFinite(expiresIn) ? expiresIn : 3_600),
+  };
+}
+
+function saveAuthSession(session) {
+  state.auth = normalizeAuthSession(session);
+  sessionStorage.setItem("tmAdminAuthSession", JSON.stringify(state.auth));
+}
+
+function clearAuthSession() {
+  state.auth = null;
+  sessionStorage.removeItem("tmAdminAuthSession");
+}
+
+function readAuthSession() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem("tmAdminAuthSession"));
+    return value?.access_token ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderAuthStatus() {
+  const status = $("#admin-auth-status");
+  const signedIn = Boolean(state.auth?.access_token);
+  status.textContent = signedIn
+    ? `Kirjautunut: ${state.auth.user?.email ?? "Supabase-käyttäjä"}`
+    : "Ei kirjautunutta käyttäjää.";
+  $("#admin-sign-out").disabled = !signedIn;
+  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish"]) {
+    $(selector).disabled = !signedIn;
+  }
+}
 
 async function checkHealth() {
   try {
@@ -175,7 +328,7 @@ async function saveCustomEvent(event) {
 async function loadAdmin() {
   try {
     state.admin = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/workspace${horizonQuery()}`, {
-      adminToken: adminToken(),
+      adminToken: await getAdminAccessToken(),
     });
     renderAdmin();
     toast(`Admin-revisio ${state.admin.adminRevision} ladattu.`);
@@ -189,7 +342,7 @@ async function saveAdminBatch(event) {
     const operations = JSON.parse($("#admin-operations").value);
     state.admin = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/changes`, {
       method: "POST",
-      adminToken: adminToken(),
+      adminToken: await getAdminAccessToken(),
       body: { expectedRevision: state.admin.adminRevision, horizon: horizon(), operations },
     });
     renderAdmin();
@@ -203,7 +356,7 @@ async function publishAdmin() {
     const form = new FormData($("#admin-publish-form"));
     const item = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/publish`, {
       method: "POST",
-      adminToken: adminToken(),
+      adminToken: await getAdminAccessToken(),
       body: {
         expectedAdminRevision: state.admin.adminRevision,
         expectedPublishedVersion: state.admin.publication.latestPublicationVersion,
@@ -313,6 +466,10 @@ async function api(url, options = {}) {
   if (!response.ok) {
     const error = new Error(data.error?.message ?? `HTTP ${response.status}`);
     error.code = data.error?.code;
+    if (response.status === 401 && options.adminToken) {
+      clearAuthSession();
+      renderAuthStatus();
+    }
     throw error;
   }
   return data;
@@ -351,6 +508,7 @@ function showError(error) {
   toast(`${error.code ? `${error.code}: ` : ""}${error.message}`, true);
 }
 
+renderAuthStatus();
 checkHealth();
 if (state.visitorCredential) loadVisitor().catch(() => {
   state.visitorCredential = null;

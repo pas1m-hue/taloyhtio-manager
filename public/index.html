@@ -110,9 +110,22 @@
           <button id="admin-publish">Julkaise työversio</button>
         </div>
       </div>
-      <label class="token-field">Admin access token (local demo token or production Supabase JWT)
-        <input id="admin-token" type="password" placeholder="Paste access token" autocomplete="off">
-      </label>
+      <form id="admin-auth-form" class="card">
+  <h3>Admin-kirjautuminen</h3>
+  <div class="form-grid compact">
+    <label>Sähköposti
+      <input id="admin-email" type="email" autocomplete="username" required>
+    </label>
+    <label>Salasana
+      <input id="admin-password" type="password" autocomplete="current-password" required>
+    </label>
+  </div>
+  <div class="button-row">
+    <button type="submit">Kirjaudu</button>
+    <button id="admin-sign-out" type="button" class="secondary">Kirjaudu ulos</button>
+  </div>
+  <p id="admin-auth-status" class="muted">Ei kirjautunutta käyttäjää.</p>
+</form>
       <div id="admin-summary" class="card-grid"></div>
 
       <section class="subsection split">
@@ -159,6 +172,7 @@
     <div id="toast" role="status" aria-live="polite"></div>
   </main>
 
+  <script src="/auth-config.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
