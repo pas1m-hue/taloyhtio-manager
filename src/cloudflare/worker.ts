@@ -26,7 +26,7 @@ export default {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
-    if (url.pathname === "/api/v1/auth-debug") return authDebug(request, env);
+    if (url.pathname === "/api/v1/auth-debug-real") return authDebugReal(request, env);
 
     const pool = new NodePostgresPool({
       connectionString: required(env.HYPERDRIVE?.connectionString, "HYPERDRIVE"),
@@ -108,146 +108,107 @@ function sessionTtlMs(value: string | undefined): number {
   return seconds * 1_000;
 }
 
-
-async function authDebug(request: Request, env: CloudflareEnv): Promise<Response> {
+async function authDebugReal(request: Request, env: CloudflareEnv): Promise<Response> {
   const authorization = request.headers.get("authorization") ?? "";
   const bearerPrefix = "Bearer ";
   const token = authorization.startsWith(bearerPrefix)
-    ? authorization.slice(bearerPrefix.length)
+    ? authorization.slice(bearerPrefix.length).trim()
     : "";
   const parts = token.split(".");
+  const asOf = new Date().toISOString();
   const result: Record<string, unknown> = {
     authorizationHeaderPresent: authorization.length > 0,
     bearerTokenPresent: token.length > 0,
-    jwtPartCount: parts.length,
+    credentialLength: token.length,
+    jwtPartCount: token.length === 0 ? 0 : parts.length,
+    asOf,
+    asOfValid: validDate(asOf),
     envIssuerPresent: env.SUPABASE_JWT_ISSUER.length > 0,
-    envAudience: env.SUPABASE_JWT_AUDIENCE,
+    envAudiencePresent: env.SUPABASE_JWT_AUDIENCE.length > 0,
     envJwksUrlPresent: env.SUPABASE_JWKS_URL.length > 0,
   };
 
   try {
-    if (parts.length !== 3) {
-      return debugResponse({ ...result, stage: "token_parts" });
-    }
+    const header = parts.length === 3 ? decodeDebugJson(parts[0] ?? "") : undefined;
+    const kid = isRecord(header) && typeof header.kid === "string" ? header.kid : undefined;
+    const algorithm = isRecord(header) && (header.alg === "ES256" || header.alg === "RS256")
+      ? header.alg
+      : undefined;
+    result.alg = algorithm ?? null;
+    result.kidPresent = typeof kid === "string" && kid.length > 0;
 
-    const [encodedHeader, encodedPayload, encodedSignature] = parts as [string, string, string];
-    const header = parseDebugJson(encodedHeader) as Record<string, unknown>;
-    const claims = parseDebugJson(encodedPayload) as Record<string, unknown>;
-
-    result.alg = header.alg;
-    result.kidPresent = typeof header.kid === "string" && header.kid.length > 0;
-    result.issuerMatches = claims.iss === env.SUPABASE_JWT_ISSUER;
-    result.audienceMatches = claims.aud === env.SUPABASE_JWT_AUDIENCE ||
-      (Array.isArray(claims.aud) && claims.aud.includes(env.SUPABASE_JWT_AUDIENCE));
-    result.roleAuthenticated = claims.role === "authenticated";
-    result.anonymousFalse = claims.is_anonymous !== true;
-    result.sessionIdPresent = typeof claims.session_id === "string" && claims.session_id.length > 0;
-    result.aalAccepted = claims.aal === "aal1" || claims.aal === "aal2";
-
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    result.expValid = typeof claims.exp === "number" && claims.exp > nowSeconds - 30;
-    result.iatValid = typeof claims.iat === "number" && claims.iat <= nowSeconds + 30;
-    result.nbfValid = claims.nbf === undefined ||
-      (typeof claims.nbf === "number" && claims.nbf <= nowSeconds + 30);
-
-    const jwksResponse = await fetch(env.SUPABASE_JWKS_URL, {
-      headers: { accept: "application/json" },
+    const provider = new RemoteJwksProvider({
+      jwksUrl: required(env.SUPABASE_JWKS_URL, "SUPABASE_JWKS_URL"),
     });
-    result.jwksStatus = jwksResponse.status;
 
-    const jwks = await jwksResponse.json() as { keys?: Array<Record<string, unknown>> };
-    const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
-    const jwk = keys.find((key) => key.kid === header.kid && key.alg === header.alg);
-    result.jwksKeyCount = keys.length;
-    result.matchingKid = Boolean(jwk);
-    result.matchingKeyType = jwk?.kty;
-    result.matchingKeyAlgorithm = jwk?.alg;
-
-    if (jwk === undefined || typeof header.alg !== "string") {
-      return debugResponse({ ...result, stage: "jwk_match" });
+    if (kid !== undefined && algorithm !== undefined) {
+      try {
+        const key = await provider.getVerificationKey(kid, algorithm, asOf);
+        result.remoteProviderKeyFound = key !== undefined;
+        result.remoteProviderKeyType = key?.kty ?? null;
+        result.remoteProviderKeyAlgorithm = key?.alg ?? null;
+      } catch (error) {
+        result.remoteProviderKeyFound = false;
+        result.remoteProviderErrorName = error instanceof Error ? error.name : typeof error;
+        result.remoteProviderErrorMessage = error instanceof Error ? error.message : String(error);
+      }
+    } else {
+      result.remoteProviderKeyFound = false;
     }
 
-    const signatureVerified = await verifyDebugSignature(
-      header.alg,
-      jwk,
-      `${encodedHeader}.${encodedPayload}`,
-      encodedSignature,
-    );
-    result.signatureVerified = signatureVerified;
+    try {
+      const authentication = new SupabaseJwtAuthenticationPort({
+        issuer: required(env.SUPABASE_JWT_ISSUER, "SUPABASE_JWT_ISSUER"),
+        audience: required(env.SUPABASE_JWT_AUDIENCE, "SUPABASE_JWT_AUDIENCE"),
+        keyProvider: provider,
+      });
+      const identity = token.length === 0 ? undefined : await authentication.verify(token, asOf);
+      result.authAdapterVerified = identity !== undefined;
+      result.identitySubjectPresent = typeof identity?.subjectId === "string" && identity.subjectId.length > 0;
+      result.identityExpiresAtPresent = typeof identity?.expiresAt === "string" && identity.expiresAt.length > 0;
+      result.identityProvider = identity?.provider ?? null;
+    } catch (error) {
+      result.authAdapterVerified = false;
+      result.authAdapterErrorName = error instanceof Error ? error.name : typeof error;
+      result.authAdapterErrorMessage = error instanceof Error ? error.message : String(error);
+    }
 
-    result.claimsWouldPass = result.issuerMatches === true &&
-      result.audienceMatches === true &&
-      result.roleAuthenticated === true &&
-      result.anonymousFalse === true &&
-      result.sessionIdPresent === true &&
-      result.aalAccepted === true &&
-      result.expValid === true &&
-      result.iatValid === true &&
-      result.nbfValid === true;
-
-    return debugResponse({ ...result, stage: "complete" });
+    return debugJson(result);
   } catch (error) {
-    return debugResponse({
+    return debugJson({
       ...result,
-      stage: "exception",
-      errorName: error instanceof Error ? error.name : typeof error,
-      errorMessage: error instanceof Error ? error.message : "unknown",
+      debugErrorName: error instanceof Error ? error.name : typeof error,
+      debugErrorMessage: error instanceof Error ? error.message : String(error),
     });
   }
 }
 
-function debugResponse(body: Record<string, unknown>): Response {
+function debugJson(body: unknown): Response {
   return Response.json(body, {
+    status: 200,
     headers: { "cache-control": "no-store" },
   });
 }
 
-async function verifyDebugSignature(
-  algorithm: string,
-  jwk: Record<string, unknown>,
-  signingInput: string,
-  encodedSignature: string,
-): Promise<boolean> {
-  const signature = decodeDebugBase64Url(encodedSignature);
-  const input = new TextEncoder().encode(signingInput);
-  if (algorithm === "ES256") {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "ECDSA", namedCurve: "P-256" },
-      false,
-      ["verify"],
-    );
-    return crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" },
-      key,
-      signature,
-      input,
-    );
-  }
-  if (algorithm === "RS256") {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
-      ["verify"],
-    );
-    return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, input);
-  }
-  return false;
-}
-
-function parseDebugJson(encoded: string): unknown {
-  return JSON.parse(new TextDecoder().decode(decodeDebugBase64Url(encoded))) as unknown;
+function decodeDebugJson(encoded: string): unknown {
+  const bytes = decodeDebugBase64Url(encoded);
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
 function decodeDebugBase64Url(value: string): Uint8Array {
-  if (value === "" || value.includes("=") || !/^[A-Za-z0-9_-]+$/.test(value)) {
-    throw new Error("Invalid base64url segment.");
-  }
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
-  const binary = atob(padded);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validDate(value: string): boolean {
+  return value.trim() !== "" && Number.isFinite(Date.parse(value));
 }
