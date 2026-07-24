@@ -20,7 +20,7 @@ export type JwksFetch = (
   url: string,
   init: {
     readonly method: "GET";
-    readonly redirect: "error";
+    readonly redirect: "manual";
     readonly headers: Readonly<Record<string, string>>;
     readonly signal: AbortSignal;
   },
@@ -137,7 +137,7 @@ export class RemoteJwksProvider implements JwksKeyProvider {
     try {
       response = await this.#fetcher(this.#jwksUrl, {
         method: "GET",
-        redirect: "error",
+        redirect: "manual",
         headers: { accept: "application/json" },
         signal: controller.signal,
       });
