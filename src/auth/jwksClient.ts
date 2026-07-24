@@ -131,17 +131,24 @@ export class RemoteJwksProvider implements JwksKeyProvider {
   }
 
   async #load(nowMs: number): Promise<CacheEntry> {
-    const response = await this.#fetcher(this.#jwksUrl, {
-      method: "GET",
-      redirect: "error",
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(this.#requestTimeoutMs),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.#requestTimeoutMs);
+    let response: JwksFetchResponse;
+    try {
+      response = await this.#fetcher(this.#jwksUrl, {
+        method: "GET",
+        redirect: "error",
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) {
       throw new Error(`JWKS endpoint returned HTTP ${response.status}.`);
     }
     const body = await response.text();
-    if (Buffer.byteLength(body, "utf8") > MAX_JWKS_BODY_BYTES) {
+    if (utf8ByteLength(body) > MAX_JWKS_BODY_BYTES) {
       throw new Error("JWKS response exceeds the maximum size.");
     }
     let parsed: unknown;
@@ -213,6 +220,10 @@ async function defaultFetch(
   init: Parameters<JwksFetch>[1],
 ): Promise<JwksFetchResponse> {
   return fetch(url, init);
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {
