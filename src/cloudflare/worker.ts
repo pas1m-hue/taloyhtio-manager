@@ -178,6 +178,47 @@ async function authDebugReal(request: Request, env: CloudflareEnv): Promise<Resp
           connectionTimeoutMillis: 10_000,
         });
         try {
+          const databaseInfo = await pool.query<{
+            current_database: string;
+            current_user: string;
+            current_schema: string;
+            search_path: string;
+          }>(
+            `SELECT current_database() AS current_database,
+                    current_user AS current_user,
+                    current_schema() AS current_schema,
+                    current_setting('search_path') AS search_path`,
+            [],
+          );
+          const databaseInfoRow = databaseInfo.rows[0];
+          result.databaseName = databaseInfoRow?.current_database ?? null;
+          result.databaseUser = databaseInfoRow?.current_user ?? null;
+          result.databaseSchema = databaseInfoRow?.current_schema ?? null;
+          result.databaseSearchPath = databaseInfoRow?.search_path ?? null;
+
+          const grantDiagnostics = await pool.query<{
+            table_regclass: string | null;
+            total_count: string | number;
+            company_count: string | number;
+            exact_count: string | number;
+            active_exact_count: string | number;
+          }>(
+            `SELECT
+               to_regclass('public.tm_company_access_grants')::text AS table_regclass,
+               (SELECT count(*) FROM public.tm_company_access_grants)::text AS total_count,
+               (SELECT count(*) FROM public.tm_company_access_grants WHERE company_id = $1)::text AS company_count,
+               (SELECT count(*) FROM public.tm_company_access_grants WHERE company_id = $1 AND subject_id = $2)::text AS exact_count,
+               (SELECT count(*) FROM public.tm_company_access_grants
+                 WHERE company_id = $1 AND subject_id = $2 AND active = true AND revoked_at IS NULL)::text AS active_exact_count`,
+            [companyId, identity.subjectId],
+          );
+          const diagnosticsRow = grantDiagnostics.rows[0];
+          result.accessTableRegclass = diagnosticsRow?.table_regclass ?? null;
+          result.accessTotalRows = Number(diagnosticsRow?.total_count ?? 0);
+          result.accessCompanyRows = Number(diagnosticsRow?.company_count ?? 0);
+          result.accessExactRows = Number(diagnosticsRow?.exact_count ?? 0);
+          result.accessActiveExactRows = Number(diagnosticsRow?.active_exact_count ?? 0);
+
           const access = new PostgresCompanyAccessRepository(pool);
           const grant = await access.load(companyId, identity.subjectId);
           result.accessGrantFound = grant !== undefined;
