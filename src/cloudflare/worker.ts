@@ -167,6 +167,36 @@ async function authDebugReal(request: Request, env: CloudflareEnv): Promise<Resp
       result.identitySubjectPresent = typeof identity?.subjectId === "string" && identity.subjectId.length > 0;
       result.identityExpiresAtPresent = typeof identity?.expiresAt === "string" && identity.expiresAt.length > 0;
       result.identityProvider = identity?.provider ?? null;
+
+      if (identity !== undefined) {
+        const companyId = new URL(request.url).searchParams.get("companyId") ?? "housing_company_demo";
+        result.accessCompanyId = companyId;
+        const pool = new NodePostgresPool({
+          connectionString: required(env.HYPERDRIVE?.connectionString, "HYPERDRIVE"),
+          max: 1,
+          idleTimeoutMillis: 5_000,
+          connectionTimeoutMillis: 10_000,
+        });
+        try {
+          const access = new PostgresCompanyAccessRepository(pool);
+          const grant = await access.load(companyId, identity.subjectId);
+          result.accessGrantFound = grant !== undefined;
+          result.accessGrantActive = grant?.active === true;
+          result.accessGrantRevoked = grant?.revokedAt !== undefined;
+          result.accessGrantRole = grant?.role ?? null;
+        } catch (error) {
+          result.accessGrantFound = false;
+          result.accessErrorName = error instanceof Error ? error.name : typeof error;
+          result.accessErrorMessage = error instanceof Error ? error.message : String(error);
+        } finally {
+          await pool.end().catch(() => undefined);
+        }
+      } else {
+        result.accessGrantFound = false;
+        result.accessGrantActive = false;
+        result.accessGrantRevoked = null;
+        result.accessGrantRole = null;
+      }
     } catch (error) {
       result.authAdapterVerified = false;
       result.authAdapterErrorName = error instanceof Error ? error.name : typeof error;
