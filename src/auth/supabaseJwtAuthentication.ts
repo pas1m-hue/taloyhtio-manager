@@ -1,9 +1,4 @@
-import {
-  createPublicKey,
-  verify as verifySignature,
-  type JsonWebKey,
-  type KeyObject,
-} from "node:crypto";
+import type { JsonWebKey as NodeJsonWebKey } from "node:crypto";
 import type { AuthenticationPort } from "./authenticationPort.js";
 import type { VerifiedIdentity } from "./authTypes.js";
 import type {
@@ -86,12 +81,12 @@ implements AuthenticationPort<string> {
         header.alg,
         asOf,
       );
-      if (key === undefined || !verifyJwtSignature(
+      if (key === undefined || !(await verifyJwtSignature(
         header.alg,
         key,
         `${encodedHeader}.${encodedPayload}`,
         encodedSignature,
-      )) return undefined;
+      ))) return undefined;
 
       const asOfSeconds = Math.floor(Date.parse(asOf) / 1000);
       if (!validateClaims(
@@ -180,40 +175,64 @@ function validateClaims(
   return true;
 }
 
-function verifyJwtSignature(
+async function verifyJwtSignature(
   algorithm: SupportedSupabaseJwtAlgorithm,
-  jwk: JsonWebKey,
+  jwk: NodeJsonWebKey,
   signingInput: string,
   encodedSignature: string,
-): boolean {
+): Promise<boolean> {
   const signature = decodeBase64Url(encodedSignature);
-  const publicKey: KeyObject = createPublicKey({ key: jwk, format: "jwk" });
-  const input = Buffer.from(signingInput, "ascii");
+  const input = new TextEncoder().encode(signingInput);
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) return false;
+
   if (algorithm === "ES256") {
     if (signature.length !== 64) return false;
-    return verifySignature(
-      "sha256",
-      input,
-      { key: publicKey, dsaEncoding: "ieee-p1363" },
+    const publicKey = await subtle.importKey(
+      "jwk",
+      jwk as unknown as JsonWebKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    return subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
       signature,
+      input,
     );
   }
-  return verifySignature("RSA-SHA256", input, publicKey, signature);
+
+  const publicKey = await subtle.importKey(
+    "jwk",
+    jwk as unknown as JsonWebKey,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  return subtle.verify("RSASSA-PKCS1-v1_5", publicKey, signature, input);
 }
 
 function parseJsonSegment(encoded: string): unknown {
-  const buffer = decodeBase64Url(encoded);
-  if (buffer.length === 0 || buffer.length > 32 * 1024) {
+  const bytes = decodeBase64Url(encoded);
+  if (bytes.length === 0 || bytes.length > 32 * 1024) {
     throw new Error("JWT segment size is invalid.");
   }
-  return JSON.parse(buffer.toString("utf8")) as unknown;
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
-function decodeBase64Url(value: string): Buffer {
+function decodeBase64Url(value: string): Uint8Array {
   if (value === "" || value.includes("=") || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new Error("JWT segment is not canonical base64url.");
   }
-  return Buffer.from(value, "base64url");
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function requiredString(value: Record<string, unknown>, key: string): string {
