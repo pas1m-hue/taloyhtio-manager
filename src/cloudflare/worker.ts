@@ -178,53 +178,107 @@ async function authDebugReal(request: Request, env: CloudflareEnv): Promise<Resp
           connectionTimeoutMillis: 10_000,
         });
         try {
-          const databaseInfo = await pool.query<{
-            current_database: string;
-            current_user: string;
-            current_schema: string;
-            search_path: string;
-          }>(
-            `SELECT current_database() AS current_database,
-                    current_user AS current_user,
-                    current_schema() AS current_schema,
-                    current_setting('search_path') AS search_path`,
-            [],
-          );
-          const databaseInfoRow = databaseInfo.rows[0];
-          result.databaseName = databaseInfoRow?.current_database ?? null;
-          result.databaseUser = databaseInfoRow?.current_user ?? null;
-          result.databaseSchema = databaseInfoRow?.current_schema ?? null;
-          result.databaseSearchPath = databaseInfoRow?.search_path ?? null;
-
-          const grantDiagnostics = await pool.query<{
-            table_regclass: string | null;
-            total_count: string | number;
-            company_count: string | number;
-            exact_count: string | number;
-            active_exact_count: string | number;
-          }>(
-            `SELECT
-               to_regclass('public.tm_company_access_grants')::text AS table_regclass,
-               (SELECT count(*) FROM public.tm_company_access_grants)::text AS total_count,
-               (SELECT count(*) FROM public.tm_company_access_grants WHERE company_id = $1)::text AS company_count,
-               (SELECT count(*) FROM public.tm_company_access_grants WHERE company_id = $1 AND subject_id = $2)::text AS exact_count,
-               (SELECT count(*) FROM public.tm_company_access_grants
-                 WHERE company_id = $1 AND subject_id = $2 AND active = true AND revoked_at IS NULL)::text AS active_exact_count`,
-            [companyId, identity.subjectId],
-          );
-          const diagnosticsRow = grantDiagnostics.rows[0];
-          result.accessTableRegclass = diagnosticsRow?.table_regclass ?? null;
-          result.accessTotalRows = Number(diagnosticsRow?.total_count ?? 0);
-          result.accessCompanyRows = Number(diagnosticsRow?.company_count ?? 0);
-          result.accessExactRows = Number(diagnosticsRow?.exact_count ?? 0);
-          result.accessActiveExactRows = Number(diagnosticsRow?.active_exact_count ?? 0);
-
           const access = new PostgresCompanyAccessRepository(pool);
           const grant = await access.load(companyId, identity.subjectId);
           result.accessGrantFound = grant !== undefined;
           result.accessGrantActive = grant?.active === true;
           result.accessGrantRevoked = grant?.revokedAt !== undefined;
           result.accessGrantRole = grant?.role ?? null;
+
+          try {
+            const metadata = await pool.query<{
+              company_id: string;
+              revision: string | number;
+              updated_at: Date | string;
+              updated_by: string;
+              payload_company_id: string | null;
+              payload_revision: string | null;
+              payload_updated_at: string | null;
+              payload_updated_by: string | null;
+              payload_housing_company: unknown;
+              payload_housing_company_id: string | null;
+              payload_housing_company_name: string | null;
+              payload_apartment_count: string | null;
+              payload_apartment_count_type: string | null;
+              payload_chargeable_area_type: string | null;
+              payload_operating_buffer_type: string | null;
+              assets_count: string | number | null;
+              financial_years_count: string | number | null;
+              liquidity_baselines_count: string | number | null;
+              observations_count: string | number | null;
+              cost_evidence_count: string | number | null;
+              events_count: string | number | null;
+              price_level_confirmations_count: string | number | null;
+              audit_trail_count: string | number | null;
+            }>(
+              `SELECT company_id, revision, updated_at, updated_by,
+                      payload->>'companyId' AS payload_company_id,
+                      payload->>'revision' AS payload_revision,
+                      payload->>'updatedAt' AS payload_updated_at,
+                      payload->>'updatedBy' AS payload_updated_by,
+                      payload->'housingCompany' AS payload_housing_company,
+                      payload->'housingCompany'->>'id' AS payload_housing_company_id,
+                      payload->'housingCompany'->>'name' AS payload_housing_company_name,
+                      payload->'housingCompany'->>'apartmentCount' AS payload_apartment_count,
+                      jsonb_typeof(payload->'housingCompany'->'apartmentCount') AS payload_apartment_count_type,
+                      jsonb_typeof(payload->'housingCompany'->'chargeableAreaM2') AS payload_chargeable_area_type,
+                      jsonb_typeof(payload->'housingCompany'->'operatingBuffer') AS payload_operating_buffer_type,
+                      jsonb_array_length(payload->'assets') AS assets_count,
+                      jsonb_array_length(payload->'financialYears') AS financial_years_count,
+                      jsonb_array_length(payload->'liquidityBaselines') AS liquidity_baselines_count,
+                      jsonb_array_length(payload->'observations') AS observations_count,
+                      jsonb_array_length(payload->'costEvidence') AS cost_evidence_count,
+                      jsonb_array_length(payload->'events') AS events_count,
+                      jsonb_array_length(payload->'priceLevelConfirmations') AS price_level_confirmations_count,
+                      jsonb_array_length(payload->'auditTrail') AS audit_trail_count
+               FROM tm_admin_snapshots
+               WHERE company_id = $1`,
+              [companyId],
+            );
+            const row = metadata.rows[0];
+            result.adminSnapshotRowFound = row !== undefined;
+            if (row !== undefined) {
+              result.adminSnapshotCompanyId = row.company_id;
+              result.adminSnapshotRevision = Number(row.revision);
+              result.adminSnapshotUpdatedAt = new Date(row.updated_at).toISOString();
+              result.adminSnapshotUpdatedBy = row.updated_by;
+              result.adminPayloadCompanyId = row.payload_company_id;
+              result.adminPayloadRevision = row.payload_revision;
+              result.adminPayloadUpdatedAt = row.payload_updated_at;
+              result.adminPayloadUpdatedBy = row.payload_updated_by;
+              result.adminPayloadHousingCompany = row.payload_housing_company;
+              result.adminPayloadHousingCompanyId = row.payload_housing_company_id;
+              result.adminPayloadHousingCompanyName = row.payload_housing_company_name;
+              result.adminPayloadApartmentCount = row.payload_apartment_count;
+              result.adminPayloadApartmentCountType = row.payload_apartment_count_type;
+              result.adminPayloadChargeableAreaType = row.payload_chargeable_area_type;
+              result.adminPayloadOperatingBufferType = row.payload_operating_buffer_type;
+              result.adminAssetsCount = row.assets_count === null ? null : Number(row.assets_count);
+              result.adminFinancialYearsCount = row.financial_years_count === null ? null : Number(row.financial_years_count);
+              result.adminLiquidityBaselinesCount = row.liquidity_baselines_count === null ? null : Number(row.liquidity_baselines_count);
+              result.adminObservationsCount = row.observations_count === null ? null : Number(row.observations_count);
+              result.adminCostEvidenceCount = row.cost_evidence_count === null ? null : Number(row.cost_evidence_count);
+              result.adminEventsCount = row.events_count === null ? null : Number(row.events_count);
+              result.adminPriceLevelConfirmationsCount = row.price_level_confirmations_count === null ? null : Number(row.price_level_confirmations_count);
+              result.adminAuditTrailCount = row.audit_trail_count === null ? null : Number(row.audit_trail_count);
+            }
+          } catch (error) {
+            result.adminMetadataErrorName = error instanceof Error ? error.name : typeof error;
+            result.adminMetadataErrorMessage = error instanceof Error ? error.message : String(error);
+          }
+
+          try {
+            const publications = new PostgresPublishingRepository(pool);
+            const adminSnapshot = await publications.load(companyId);
+            result.adminRepositoryLoadSucceeded = true;
+            result.adminRepositorySnapshotFound = adminSnapshot !== undefined;
+            result.adminRepositoryRevision = adminSnapshot?.revision ?? null;
+          } catch (error) {
+            result.adminRepositoryLoadSucceeded = false;
+            result.adminRepositoryErrorName = error instanceof Error ? error.name : typeof error;
+            result.adminRepositoryErrorMessage = error instanceof Error ? error.message : String(error);
+            result.adminRepositoryErrorCode = isRecord(error) && typeof error.code === "string" ? error.code : null;
+          }
         } catch (error) {
           result.accessGrantFound = false;
           result.accessErrorName = error instanceof Error ? error.name : typeof error;
