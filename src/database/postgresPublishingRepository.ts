@@ -281,7 +281,8 @@ function parseAdminRow(row: AdminRow): AdminDataSnapshot {
   const revision = integer(row.revision, "admin revision");
   if (payload.companyId !== row.company_id || payload.revision !== revision ||
       payload.updatedBy !== row.updated_by ||
-      Date.parse(payload.updatedAt) !== Date.parse(String(row.updated_at))) {
+      instantMillis(payload.updatedAt, "admin payload updatedAt") !==
+        instantMillis(row.updated_at, "admin row updated_at")) {
     throw integrityError(`Admin row ${row.company_id} metadata does not match payload.`);
   }
   validateAdminDataSnapshot(payload);
@@ -306,7 +307,8 @@ function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
       payload.sourceAdminRevision !== sourceAdminRevision ||
       payload.contentFingerprint !== row.content_fingerprint ||
       payload.publishedBy !== row.published_by ||
-      Date.parse(payload.publishedAt) !== Date.parse(String(row.published_at))) {
+      instantMillis(payload.publishedAt, "publication payload publishedAt") !==
+        instantMillis(row.published_at, "publication row published_at")) {
     throw integrityError(
       `Publication row ${row.company_id}/${publicationVersion} metadata does not match payload.`,
     );
@@ -321,6 +323,27 @@ function parsePayload<T>(value: unknown, label: string): T {
   } catch {
     throw integrityError(`Stored ${label} payload is not valid JSON.`);
   }
+}
+
+
+function instantMillis(value: Date | string, label: string): number {
+  if (value instanceof Date) {
+    const millis = value.getTime();
+    if (!Number.isFinite(millis)) {
+      throw integrityError(`Stored ${label} timestamp is invalid.`);
+    }
+    return millis;
+  }
+
+  const text = value.trim();
+  const normalized = text
+    .replace(" ", "T")
+    .replace(/([+-]\d{2})$/, "$1:00");
+  const millis = Date.parse(normalized);
+  if (!Number.isFinite(millis)) {
+    throw integrityError(`Stored ${label} timestamp is invalid.`);
+  }
+  return millis;
 }
 
 function integer(value: unknown, label: string): number {
