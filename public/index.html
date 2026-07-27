@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">Taloyhtiö Manager</p>
-      <h1>Korjaussuunnitelma ja skenaariot</h1>
+      <h1>Taloyhtiön hallintatyötila</h1>
     </div>
     <div id="connection-status" class="status-pill">API tarkistamatta</div>
   </header>
@@ -128,7 +128,75 @@
 </form>
       <div id="admin-summary" class="card-grid"></div>
 
-      <section class="subsection split">
+      <nav class="admin-view-tabs" aria-label="Admin-osiot">
+        <button class="admin-view-tab active" type="button" data-admin-view="overview">Yleiskuva</button>
+        <button class="admin-view-tab" type="button" data-admin-view="company">Taloyhtiö</button>
+        <button class="admin-view-tab" type="button" data-admin-view="assets">Rakennusosat</button>
+        <button class="admin-view-tab" type="button" data-admin-view="observations">Havainnot</button>
+        <button class="admin-view-tab" type="button" data-admin-view="evidence">Kustannusnäyttö</button>
+        <button class="admin-view-tab" type="button" data-admin-view="events">Korjaustapahtumat</button>
+        <button class="admin-view-tab" type="button" data-admin-view="scenarios">Skenaariot</button>
+        <button class="admin-view-tab" type="button" data-admin-view="liquidity">Likviditeetti</button>
+        <button class="admin-view-tab" type="button" data-admin-view="publish">Julkaisu</button>
+        <button class="admin-view-tab" type="button" data-admin-view="developer">Kehittäjäpaneeli</button>
+      </nav>
+
+      <section id="admin-view-overview" class="admin-view-panel active subsection">
+        <h3>Yleiskuva</h3>
+        <div id="admin-overview-cards" class="card-grid"></div>
+        <div id="admin-overview-notes" class="info-grid"></div>
+      </section>
+
+      <section id="admin-view-company" class="admin-view-panel subsection">
+        <h3>Taloyhtiön perustiedot</h3>
+        <div id="admin-company-details" class="detail-grid"></div>
+      </section>
+
+      <section id="admin-view-assets" class="admin-view-panel subsection">
+        <h3>Rakennusosat</h3>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Nimi</th><th>Kategoria</th><th>Aktiivinen</th><th>Lähteet</th></tr></thead><tbody id="admin-assets-rows"></tbody></table></div>
+      </section>
+
+      <section id="admin-view-observations" class="admin-view-panel subsection">
+        <h3>Havainnot</h3>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Rakennusosa</th><th>Havaittu</th><th>Kuvaus</th><th>Lähteet</th></tr></thead><tbody id="admin-observation-rows"></tbody></table></div>
+      </section>
+
+      <section id="admin-view-evidence" class="admin-view-panel subsection">
+        <h3>Kustannusnäyttö</h3>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tila</th><th>Summa</th><th>Yksikkö</th><th>Hintataso</th><th>Kohde</th><th>Lähde</th></tr></thead><tbody id="admin-evidence-rows"></tbody></table></div>
+      </section>
+
+      <section id="admin-view-events" class="admin-view-panel subsection">
+        <h3>Korjaustapahtumat</h3>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Rakennusosa</th><th>Nimi</th><th>Tila</th><th>Tyyppi</th><th>Alkuperä</th><th>Aikataulu</th></tr></thead><tbody id="admin-event-rows"></tbody></table></div>
+      </section>
+
+      <section id="admin-view-scenarios" class="admin-view-panel subsection">
+        <h3>Skenaariot</h3>
+        <div id="admin-scenarios" class="scenario-grid"></div>
+      </section>
+
+      <section id="admin-view-liquidity" class="admin-view-panel subsection">
+        <h3>Likviditeetti</h3>
+        <div id="admin-liquidity-cards" class="card-grid"></div>
+        <div id="admin-liquidity-baselines" class="table-wrap"></div>
+      </section>
+
+      <section id="admin-view-publish" class="admin-view-panel subsection">
+        <h3>Julkaisu</h3>
+        <div id="admin-publication-summary" class="card-grid"></div>
+        <form id="admin-publish-form" class="card narrow-card">
+          <h3>Julkaisun tiedot</h3>
+          <label>Lähdetunniste<input name="sourceId" value="admin_publication"></label>
+          <label>Selitys<textarea name="explanation" rows="5">Julkaistaan adminin tarkistama työversio.</textarea></label>
+          <p class="muted">Julkaisupainike käyttää näitä tietoja ja palvelimen tunnistamaa adminia.</p>
+        </form>
+      </section>
+
+      <section id="admin-view-developer" class="admin-view-panel subsection">
+        <h3>Kehittäjäpaneeli</h3>
+        <p class="muted">Tekninen batch-editori säilytetään toistaiseksi datan nopeaan lisäämiseen ennen lomakenäkymien rakentamista.</p>
         <form id="admin-batch-form" class="card wide-card">
           <h3>Manuaalinen admin-batch</h3>
           <p class="muted">Syötä yksi tai useampi V2.1-operaatio. Palvelin lisää tekijän ja aikaleiman.</p>
@@ -149,23 +217,6 @@
 ]</textarea>
           <button type="submit">Tallenna batch</button>
         </form>
-
-        <form id="admin-publish-form" class="card">
-          <h3>Julkaisun tiedot</h3>
-          <label>Lähdetunniste<input name="sourceId" value="admin_publication"></label>
-          <label>Selitys<textarea name="explanation" rows="5">Julkaistaan adminin tarkistama työversio.</textarea></label>
-          <p class="muted">Julkaisupainike käyttää näitä tietoja ja palvelimen tunnistamaa adminia.</p>
-        </form>
-      </section>
-
-      <section class="subsection">
-        <h3>Adminin tapahtumat</h3>
-        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Rakennusosa</th><th>Nimi</th><th>Tila</th><th>Alkuperä</th></tr></thead><tbody id="admin-event-rows"></tbody></table></div>
-      </section>
-
-      <section class="subsection">
-        <h3>Laskenta</h3>
-        <div id="admin-scenarios" class="scenario-grid"></div>
       </section>
     </section>
 

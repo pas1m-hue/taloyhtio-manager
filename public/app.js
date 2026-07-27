@@ -27,6 +27,17 @@ for (const tab of document.querySelectorAll(".tab")) {
   });
 }
 
+for (const tab of document.querySelectorAll(".admin-view-tab")) {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".admin-view-tab").forEach((item) => {
+      item.classList.toggle("active", item === tab);
+    });
+    document.querySelectorAll(".admin-view-panel").forEach((panel) => {
+      panel.classList.toggle("active", panel.id === `admin-view-${tab.dataset.adminView}`);
+    });
+  });
+}
+
 $("#health-button").addEventListener("click", checkHealth);
 $("#visitor-load-overview").addEventListener("click", loadPublished);
 $("#visitor-create-session").addEventListener("click", createSession);
@@ -417,18 +428,146 @@ function fillLiquidityForm(model) {
 
 function renderAdmin() {
   const model = state.admin;
+  const data = adminSnapshot(model);
+  const company = data?.housingCompany ?? null;
+  const publication = model.publication ?? {};
+
   $("#admin-summary").innerHTML = cards([
     ["Työrevisio", model.adminRevision],
-    ["Julkaisu", model.publication.latestPublicationVersion],
-    ["Rakennusosat", model.counts.assets],
-    ["Hyväksytyt tapahtumat", model.counts.approvedEvents],
-    ["DATA GAPit horisontissa", model.counts.dataGapsWithinHorizon],
-    ["Julkaistavia muutoksia", model.publication.publishableChanges ? "Kyllä" : "Ei"],
+    ["Julkaisu", publication.latestPublicationVersion ?? 0],
+    ["Rakennusosat", countOf(data?.assets, model.counts?.assets)],
+    ["Hyväksytyt tapahtumat", model.counts?.approvedEvents ?? approvedEventCount(data?.events)],
+    ["DATA GAPit horisontissa", model.counts?.dataGapsWithinHorizon ?? dataGapCount(model)],
+    ["Julkaistavia muutoksia", publication.publishableChanges ? "Kyllä" : "Ei"],
   ]);
-  $("#admin-event-rows").innerHTML = model.events.map((event) => `
-    <tr><td>${escapeHtml(event.id)}</td><td>${escapeHtml(event.assetId)}</td><td>${escapeHtml(event.title)}</td><td>${escapeHtml(event.status)}</td><td>${escapeHtml(event.origin)}</td></tr>
-  `).join("") || `<tr><td colspan="5" class="muted">Ei tapahtumia.</td></tr>`;
+
+  $("#admin-overview-cards").innerHTML = cards([
+    ["Taloyhtiö", company?.name ?? companyId()],
+    ["Huoneistoja", company?.apartmentCount ?? "—"],
+    ["Pinta-ala m²", company?.chargeableAreaM2 ?? "—"],
+    ["Tilikaudet", countOf(data?.financialYears)],
+    ["Likviditeettirivit", countOf(data?.liquidityBaselines)],
+    ["Kustannusnäyttö", countOf(data?.costEvidence)],
+  ]);
+  $("#admin-overview-notes").innerHTML = renderOverviewNotes(model, data);
+  $("#admin-company-details").innerHTML = renderCompanyDetails(company, data);
+  $("#admin-assets-rows").innerHTML = renderAssetsRows(data?.assets);
+  $("#admin-observation-rows").innerHTML = renderObservationRows(data?.observations);
+  $("#admin-evidence-rows").innerHTML = renderEvidenceRows(data?.costEvidence);
+  $("#admin-event-rows").innerHTML = renderAdminEventRows(data?.events ?? model.events);
   renderScenarioCards($("#admin-scenarios"), model.calculations.projection, model.calculations.liquidity);
+  renderAdminLiquidity(model, data);
+  renderAdminPublication(model);
+}
+
+function adminSnapshot(model) {
+  return model?.data ?? model?.adminData ?? model?.snapshot ?? model?.workspace ?? model?.adminSnapshot ?? null;
+}
+
+function countOf(value, fallback = "—") {
+  return Array.isArray(value) ? value.length : fallback;
+}
+
+function approvedEventCount(events) {
+  return Array.isArray(events) ? events.filter((event) => event.status === "approved").length : "—";
+}
+
+function dataGapCount(model) {
+  const scenarios = model?.calculations?.projection?.scenarios;
+  if (!scenarios) return "—";
+  return ["optimistic", "base", "stress"].reduce((sum, scenario) =>
+    sum + (scenarios[scenario]?.dataGaps?.withinHorizon?.length ?? 0), 0);
+}
+
+function renderOverviewNotes(model, data) {
+  const missingData = data === null;
+  return [
+    infoCard("Tila", missingData ? "API-vastaus ei sisällä raakaa admin snapshotia. Yhteenveto ja laskenta renderöidään read modelista." : "Admin snapshot ladattu käyttöliittymään."),
+    infoCard("Seuraava UI-vaihe", "Nämä osiot ovat nyt näkyvissä read-only -runkona. Seuraavaksi niihin lisätään muokkauslomakkeet."),
+    infoCard("Julkaisu", model.publication?.publishableChanges ? "Työversiossa on julkaistavia muutoksia." : "Ei julkaistavia muutoksia tai työversio vastaa viimeisintä julkaisua."),
+  ].join("");
+}
+
+function renderCompanyDetails(company, data) {
+  if (!company) return emptyBlock("Taloyhtiön raakadata ei sisälly API-vastaukseen.");
+  return [
+    detailItem("ID", company.id),
+    detailItem("Nimi", company.name),
+    detailItem("Huoneistot", company.apartmentCount),
+    detailItem("Vastikepinta-ala", company.chargeableAreaM2 === undefined ? "—" : `${company.chargeableAreaM2} m²`),
+    detailItem("Puskurikuukaudet", company.operatingBuffer?.bufferMonths ?? "—"),
+    detailItem("Puskurin käsiasetus", company.operatingBuffer?.userOverride === undefined ? "—" : money(company.operatingBuffer.userOverride)),
+    detailItem("Revisio", data?.revision ?? "—"),
+    detailItem("Päivitetty", data?.updatedAt ?? "—"),
+    detailItem("Päivittäjä", data?.updatedBy ?? "—"),
+  ].join("");
+}
+
+function renderAssetsRows(assets) {
+  if (!Array.isArray(assets) || assets.length === 0) return emptyRow(5, "Ei rakennusosia.");
+  return assets.map((asset) => `<tr><td>${escapeHtml(String(asset.id))}</td><td>${escapeHtml(String(asset.name))}</td><td>${escapeHtml(String(asset.category))}</td><td>${asset.active ? "Kyllä" : "Ei"}</td><td>${escapeHtml((asset.sourceIds ?? []).join(", "))}</td></tr>`).join("");
+}
+
+function renderObservationRows(observations) {
+  if (!Array.isArray(observations) || observations.length === 0) return emptyRow(5, "Ei havaintoja.");
+  return observations.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.assetId))}</td><td>${escapeHtml(String(item.observedAt))}</td><td>${escapeHtml(String(item.description))}</td><td>${escapeHtml((item.sourceIds ?? []).join(", "))}</td></tr>`).join("");
+}
+
+function renderEvidenceRows(items) {
+  if (!Array.isArray(items) || items.length === 0) return emptyRow(7, "Ei kustannusnäyttöä.");
+  return items.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.status))}</td><td>${item.amount === undefined ? "DATA GAP" : money(item.amount)}</td><td>${escapeHtml(String(item.unit))}</td><td>${escapeHtml(String(item.priceLevelYear))}</td><td>${escapeHtml(item.assetId ?? item.eventId ?? "—")}</td><td>${escapeHtml(item.sourceId ?? item.sourceUrl ?? "—")}</td></tr>`).join("");
+}
+
+function renderAdminEventRows(events) {
+  if (!Array.isArray(events) || events.length === 0) return emptyRow(7, "Ei tapahtumia.");
+  return events.map((event) => {
+    const schedule = Array.isArray(event.schedule)
+      ? event.schedule.map((entry) => `${entry.scenario} ${entry.year}${entry.amount === undefined ? " · DATA GAP" : ` · ${money(entry.amount)}`}`).join("<br>")
+      : event.actual ? `actual ${event.actual.year}${event.actual.amount === undefined ? "" : ` · ${money(event.actual.amount)}`}` : "—";
+    return `<tr><td>${escapeHtml(String(event.id))}</td><td>${escapeHtml(String(event.assetId))}</td><td>${escapeHtml(String(event.title))}</td><td>${escapeHtml(String(event.status))}</td><td>${escapeHtml(String(event.type ?? "—"))}</td><td>${escapeHtml(String(event.origin ?? "—"))}</td><td>${schedule}</td></tr>`;
+  }).join("");
+}
+
+function renderAdminLiquidity(model, data) {
+  const liquidity = model.calculations?.liquidity;
+  if (liquidity?.status === "available") {
+    $("#admin-liquidity-cards").innerHTML = cards([
+      ["Puskurikuukaudet", liquidity.forecast.operatingBuffer.bufferMonths],
+      ["Suositeltu puskuri", money(liquidity.forecast.operatingBuffer.suggestedOperatingBuffer)],
+      ["Puskuritavoite", money(liquidity.forecast.operatingBuffer.operatingBufferTarget)],
+      ["Peruste", liquidity.forecast.operatingBuffer.basis],
+    ]);
+  } else {
+    $("#admin-liquidity-cards").innerHTML = cards([["Likviditeetti", "Lähtötiedot puuttuvat"]]);
+  }
+  const rows = Array.isArray(data?.liquidityBaselines) && data.liquidityBaselines.length > 0
+    ? data.liquidityBaselines.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.asOfDate))}</td><td>${money(item.currentCash)}</td><td>${money(item.trailing12mOperatingCosts)}</td><td>${money(item.currentAnnualRepairCollection)}</td><td>${escapeHtml((item.sourceIds ?? []).join(", "))}</td></tr>`).join("")
+    : emptyRow(6, "Ei likviditeetin lähtötietoja.");
+  $("#admin-liquidity-baselines").innerHTML = `<table><thead><tr><th>ID</th><th>Päivä</th><th>Kassa</th><th>12 kk hoitokulut</th><th>Korjauskeräys/v</th><th>Lähteet</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderAdminPublication(model) {
+  $("#admin-publication-summary").innerHTML = cards([
+    ["Viimeisin julkaisu", model.publication?.latestPublicationVersion ?? 0],
+    ["Julkaistavia muutoksia", model.publication?.publishableChanges ? "Kyllä" : "Ei"],
+    ["Admin-revisio", model.adminRevision],
+  ]);
+}
+
+function detailItem(label, value) {
+  return `<article class="detail-item"><span>${escapeHtml(String(label))}</span><strong>${escapeHtml(String(value))}</strong></article>`;
+}
+
+function infoCard(title, body) {
+  return `<article class="card"><h4>${escapeHtml(String(title))}</h4><p>${escapeHtml(String(body))}</p></article>`;
+}
+
+function emptyBlock(message) {
+  return `<article class="card muted">${escapeHtml(message)}</article>`;
+}
+
+function emptyRow(colspan, message) {
+  return `<tr><td colspan="${colspan}" class="muted">${escapeHtml(message)}</td></tr>`;
 }
 
 function renderScenarioCards(target, projection, liquidity) {
