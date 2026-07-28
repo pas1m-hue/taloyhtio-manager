@@ -7,200 +7,290 @@
   <title>Taloyhtiö Manager</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body data-app-mode="admin">
+  <a class="skip-link" href="#main-content">Siirry sisältöön</a>
+
   <header class="topbar">
-    <div>
-      <p class="eyebrow">Taloyhtiö Manager</p>
-      <h1>Taloyhtiön hallintatyötila</h1>
+    <div class="topbar-brand">
+      <button id="sidebar-toggle" class="icon-button" type="button" aria-label="Avaa valikko" aria-expanded="false" aria-controls="sidebar">☰</button>
+      <div>
+        <p class="eyebrow">Taloyhtiö Manager</p>
+        <strong class="topbar-title">Hallintatyötila</strong>
+      </div>
     </div>
-    <div id="connection-status" class="status-pill">API tarkistamatta</div>
+
+    <div class="topbar-controls">
+      <label class="topbar-field">Taloyhtiö
+        <input id="company-id" value="housing_company_demo" autocomplete="off">
+      </label>
+      <label class="topbar-field" id="topbar-fiscal-year-field" hidden>Talousvuosi
+        <select id="topbar-fiscal-year"></select>
+      </label>
+      <label class="topbar-field">Horisontti
+        <span class="horizon-pair">
+          <input id="horizon-start" type="number" value="2026" min="1900" max="2400" aria-label="Horisontin alkuvuosi">
+          <span aria-hidden="true">–</span>
+          <input id="horizon-end" type="number" value="2057" min="1900" max="2400" aria-label="Horisontin loppuvuosi">
+        </span>
+      </label>
+    </div>
+
+    <div class="topbar-meta">
+      <div class="mode-switch" role="tablist" aria-label="Sovellustila">
+        <button class="mode-tab active" type="button" data-mode="admin" role="tab" aria-selected="true">Admin</button>
+        <button class="mode-tab" type="button" data-mode="visitor" role="tab" aria-selected="false">Visitor</button>
+      </div>
+      <div id="topbar-status" class="status-pill" role="status" aria-live="polite">API tarkistamatta</div>
+      <div id="topbar-user" class="topbar-user muted">Ei kirjautunutta käyttäjää.</div>
+    </div>
   </header>
 
-  <main>
-    <section class="config-panel" aria-labelledby="connection-heading">
-      <h2 id="connection-heading">Yhteiset asetukset</h2>
-      <div class="form-grid compact">
-        <label>Taloyhtiön tunniste
-          <input id="company-id" value="housing_company_demo" autocomplete="off">
-        </label>
-        <label>Horisontin alku
-          <input id="horizon-start" type="number" value="2026" min="1900" max="2400">
-        </label>
-        <label>Horisontin loppu
-          <input id="horizon-end" type="number" value="2057" min="1900" max="2400">
-        </label>
-        <button id="health-button" class="secondary">Tarkista API</button>
-      </div>
-    </section>
-
-    <nav class="tabs" aria-label="Päänäkymä">
-      <button class="tab active" data-tab="visitor" aria-selected="true">Visitor-skenaario</button>
-      <button class="tab" data-tab="admin" aria-selected="false">Admin</button>
+  <div class="app-shell">
+    <nav id="sidebar" class="sidebar" aria-label="Päänavigaatio">
+      <ul class="nav-groups">
+        <li>
+          <a class="nav-link" href="#/overview" data-view="overview">Yleiskuva</a>
+        </li>
+        <li class="nav-group">
+          <p class="nav-group-title">Talous</p>
+          <ul>
+            <li><a class="nav-link" href="#/finance-summary" data-view="finance-summary">Yhteenveto</a></li>
+            <li><a class="nav-link" href="#/finance-income" data-view="finance-income">Tulot</a></li>
+            <li><a class="nav-link" href="#/finance-costs-group" data-view="finance-costs-group">Kulut ryhmittäin</a></li>
+            <li><a class="nav-link" href="#/finance-costs-account" data-view="finance-costs-account">Kulut tileittäin</a></li>
+            <li><a class="nav-link" href="#/finance-budget" data-view="finance-budget">Budjetti vs. toteuma</a></li>
+            <li><a class="nav-link" href="#/finance-position" data-view="finance-position">Taloudellinen asema</a></li>
+          </ul>
+        </li>
+        <li class="nav-group">
+          <p class="nav-group-title">Kunnossapito</p>
+          <ul>
+            <li><a class="nav-link" href="#/assets" data-view="assets">Rakennusosat</a></li>
+            <li><a class="nav-link" href="#/observations" data-view="observations">Havainnot</a></li>
+            <li><a class="nav-link" href="#/events" data-view="events">Korjaustapahtumat</a></li>
+            <li><a class="nav-link" href="#/cost-evidence" data-view="cost-evidence">Kustannusnäyttö</a></li>
+          </ul>
+        </li>
+        <li class="nav-group">
+          <p class="nav-group-title">Skenaariot ja likviditeetti</p>
+          <ul>
+            <li><a class="nav-link" href="#/scenarios" data-view="scenarios">Skenaariot</a></li>
+            <li><a class="nav-link" href="#/cashpath" data-view="cashpath">Kassapolku</a></li>
+            <li><a class="nav-link" href="#/required-collection" data-view="required-collection">Vastiketarve</a></li>
+          </ul>
+        </li>
+        <li class="nav-group">
+          <p class="nav-group-title">Julkaisu</p>
+          <ul>
+            <li><a class="nav-link" href="#/publish" data-view="publish">Julkaisuvalmius</a></li>
+          </ul>
+        </li>
+        <li class="nav-group">
+          <p class="nav-group-title">Asetukset</p>
+          <ul>
+            <li><a class="nav-link" href="#/developer" data-view="developer">Kehittäjäpaneeli</a></li>
+          </ul>
+        </li>
+      </ul>
     </nav>
+    <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
 
-    <section id="visitor-panel" class="tab-panel active" aria-labelledby="visitor-heading">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Sessio, ei pysyvää tallennusta</p>
-          <h2 id="visitor-heading">Visitor-skenaario</h2>
-        </div>
-        <div class="button-row">
-          <button id="visitor-load-overview" class="secondary">Lataa julkaistu näkymä</button>
-          <button id="visitor-create-session">Aloita uusi sessio</button>
-          <button id="visitor-reset" class="danger">Palauta lähtötila</button>
-        </div>
-      </div>
-      <p class="notice">Visitorin muutokset säilyvät vain kyseisessä sessiossa eivätkä muuta adminin tietokantaa tai julkaistua versiota.</p>
-      <div id="visitor-session-status" class="muted">Ei aktiivista sessiota.</div>
-      <div id="visitor-summary" class="card-grid"></div>
+    <main id="main-content" class="workspace">
+      <!-- ADMIN MODE -->
+      <div id="admin-mode" class="app-mode">
+        <section id="admin-auth-gate" class="auth-gate" aria-labelledby="auth-gate-heading">
+          <form id="admin-auth-form" class="card auth-card">
+            <h2 id="auth-gate-heading">Admin-kirjautuminen</h2>
+            <p class="muted">Kirjaudu Supabase-tunnuksilla ladataksesi taloyhtiön työtilan.</p>
+            <div class="form-grid compact">
+              <label for="admin-email">Sähköposti
+                <input id="admin-email" type="email" autocomplete="username" required>
+              </label>
+              <label for="admin-password">Salasana
+                <input id="admin-password" type="password" autocomplete="current-password" required>
+              </label>
+            </div>
+            <div class="button-row">
+              <button type="submit">Kirjaudu</button>
+              <button id="admin-sign-out" type="button" class="secondary" disabled>Kirjaudu ulos</button>
+            </div>
+            <p id="admin-auth-status" class="muted" role="status" aria-live="polite">Ei kirjautunutta käyttäjää.</p>
+          </form>
+        </section>
 
-      <section class="subsection">
-        <h3>Rakennusosatapahtumat</h3>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Tapahtuma</th><th>Skenaario</th><th>Vuosi</th><th>Summa €</th><th>Määrä</th><th>Ohita</th><th></th></tr></thead>
-            <tbody id="visitor-event-rows"><tr><td colspan="7" class="muted">Luo sessio nähdäksesi muokattavat tapahtumat.</td></tr></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="subsection split">
-        <form id="visitor-liquidity-form" class="card">
-          <h3>Likviditeetin oletukset</h3>
-          <div class="form-grid">
-            <label>Kassa €<input name="currentCash" type="number" step="0.01"></label>
-            <label>12 kk hoitokulut €<input name="trailing12mOperatingCosts" type="number" step="0.01"></label>
-            <label>Puskurikuukaudet<input name="bufferMonths" type="number" step="0.1" min="0.1"></label>
-            <label>Optimistic keräys €/v<input name="optimistic" type="number" step="0.01" min="0"></label>
-            <label>Base keräys €/v<input name="base" type="number" step="0.01" min="0"></label>
-            <label>Stress keräys €/v<input name="stress" type="number" step="0.01" min="0"></label>
+        <div id="admin-workspace" class="admin-workspace" hidden>
+          <div class="workspace-actions">
+            <div class="button-row">
+              <button id="admin-load" disabled>Lataa työtila</button>
+              <button id="admin-preview" class="secondary" disabled>Päivitä laskenta</button>
+            </div>
+            <p id="admin-revision-line" class="muted"></p>
           </div>
-          <button type="submit">Päivitä oletukset</button>
-        </form>
 
-        <form id="visitor-custom-event-form" class="card">
-          <h3>Väliaikainen tapahtuma</h3>
-          <div class="form-grid">
-            <label>Rakennusosa<select name="assetId" id="custom-asset"></select></label>
-            <label>Nimi<input name="title" required></label>
-            <label>Tyyppi<select name="type"><option>maintenance</option><option>repair</option><option>replacement</option><option>renewal</option><option>inspection</option><option>study</option><option>other</option></select></label>
-            <label>Skenaario<select name="scenario"><option>optimistic</option><option selected>base</option><option>stress</option></select></label>
-            <label>Vuosi<input name="year" type="number" required></label>
-            <label>Summa €<input name="amount" type="number" step="0.01"></label>
-          </div>
-          <button type="submit">Lisää sessioon</button>
-        </form>
-      </section>
+          <!-- Yleiskuva -->
+          <section class="view" data-view="overview" aria-labelledby="overview-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="overview-title">Yleiskuva</h2>
+                <p class="view-lead muted">Tilannekuva taloudesta, korjauksista ja julkaisuvalmiudesta valitulta horisontilta.</p>
+              </div>
+            </header>
+            <div id="overview-kpis" class="card-grid"></div>
+            <div id="overview-fiscal" class="subsection"></div>
+            <div id="overview-notes" class="info-grid"></div>
+          </section>
 
-      <section class="subsection">
-        <h3>Skenaariolaskenta</h3>
-        <div id="visitor-scenarios" class="scenario-grid"></div>
-      </section>
-    </section>
+          <!-- Taloyhtiö (perustiedot-lomake) -->
+          <section class="view" data-view="company" aria-labelledby="company-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="company-title">Taloyhtiön perustiedot</h2>
+                <p class="view-lead muted">Muutokset tallennetaan save_housing_company-operaationa optimistisella lukituksella.</p>
+              </div>
+            </header>
+            <form id="company-form" class="card form-card" novalidate></form>
+          </section>
 
-    <section id="admin-panel" class="tab-panel" aria-labelledby="admin-heading">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Pysyvä työskentelytila</p>
-          <h2 id="admin-heading">Admin</h2>
-        </div>
-        <div class="button-row">
-          <button id="admin-load">Lataa työtila</button>
-          <button id="admin-preview" class="secondary">Päivitä laskenta</button>
-          <button id="admin-publish">Julkaise työversio</button>
-        </div>
-      </div>
-      <form id="admin-auth-form" class="card">
-  <h3>Admin-kirjautuminen</h3>
-  <div class="form-grid compact">
-    <label>Sähköposti
-      <input id="admin-email" type="email" autocomplete="username" required>
-    </label>
-    <label>Salasana
-      <input id="admin-password" type="password" autocomplete="current-password" required>
-    </label>
-  </div>
-  <div class="button-row">
-    <button type="submit">Kirjaudu</button>
-    <button id="admin-sign-out" type="button" class="secondary">Kirjaudu ulos</button>
-  </div>
-  <p id="admin-auth-status" class="muted">Ei kirjautunutta käyttäjää.</p>
-</form>
-      <div id="admin-summary" class="card-grid"></div>
+          <!-- Rakennusosat -->
+          <section class="view" data-view="assets" aria-labelledby="assets-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="assets-title">Rakennusosat</h2>
+                <p class="view-lead muted">Kuvaileva rekisteri. Ei automaattista elinkaarigenerointia.</p>
+              </div>
+              <div class="button-row">
+                <button id="assets-new" type="button" class="secondary" disabled>Lisää rakennusosa</button>
+              </div>
+            </header>
+            <div class="assets-filters">
+              <label>Kategoria
+                <select id="assets-filter-category">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Tila
+                <select id="assets-filter-active">
+                  <option value="">Kaikki</option>
+                  <option value="active">Aktiiviset</option>
+                  <option value="inactive">Ei-aktiiviset</option>
+                </select>
+              </label>
+              <label>Haku
+                <input id="assets-filter-search" type="search" placeholder="Nimi tai tunniste" autocomplete="off">
+              </label>
+            </div>
+            <div id="assets-list" class="assets-list"></div>
+          </section>
 
-      <nav class="admin-view-tabs" aria-label="Admin-osiot">
-        <button class="admin-view-tab active" type="button" data-admin-view="overview">Yleiskuva</button>
-        <button class="admin-view-tab" type="button" data-admin-view="company">Taloyhtiö</button>
-        <button class="admin-view-tab" type="button" data-admin-view="assets">Rakennusosat</button>
-        <button class="admin-view-tab" type="button" data-admin-view="observations">Havainnot</button>
-        <button class="admin-view-tab" type="button" data-admin-view="evidence">Kustannusnäyttö</button>
-        <button class="admin-view-tab" type="button" data-admin-view="events">Korjaustapahtumat</button>
-        <button class="admin-view-tab" type="button" data-admin-view="scenarios">Skenaariot</button>
-        <button class="admin-view-tab" type="button" data-admin-view="liquidity">Likviditeetti</button>
-        <button class="admin-view-tab" type="button" data-admin-view="publish">Julkaisu</button>
-        <button class="admin-view-tab" type="button" data-admin-view="developer">Kehittäjäpaneeli</button>
-      </nav>
+          <!-- Kunnossapito: placeholderit (näkymä ei vielä toteutettu tässä vaiheessa) -->
+          <section class="view" data-view="observations" aria-labelledby="observations-title" hidden>
+            <header class="view-head"><h2 id="observations-title">Havainnot</h2></header>
+            <div id="observations-body"></div>
+          </section>
+          <section class="view" data-view="events" aria-labelledby="events-title" hidden>
+            <header class="view-head"><h2 id="events-title">Korjaustapahtumat</h2></header>
+            <div id="events-body"></div>
+          </section>
+          <section class="view" data-view="cost-evidence" aria-labelledby="cost-evidence-title" hidden>
+            <header class="view-head"><h2 id="cost-evidence-title">Kustannusnäyttö</h2></header>
+            <div id="cost-evidence-body"></div>
+          </section>
 
-      <section id="admin-view-overview" class="admin-view-panel active subsection">
-        <h3>Yleiskuva</h3>
-        <div id="admin-overview-cards" class="card-grid"></div>
-        <div id="admin-overview-notes" class="info-grid"></div>
-      </section>
+          <!-- Talous: placeholderit (tilikohtainen tietomalli ei vielä käytössä) -->
+          <section class="view" data-view="finance-summary" aria-labelledby="finance-summary-title" hidden>
+            <header class="view-head"><h2 id="finance-summary-title">Talous · Yhteenveto</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
+          <section class="view" data-view="finance-income" aria-labelledby="finance-income-title" hidden>
+            <header class="view-head"><h2 id="finance-income-title">Talous · Tulot</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
+          <section class="view" data-view="finance-costs-group" aria-labelledby="finance-costs-group-title" hidden>
+            <header class="view-head"><h2 id="finance-costs-group-title">Talous · Kulut ryhmittäin</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
+          <section class="view" data-view="finance-costs-account" aria-labelledby="finance-costs-account-title" hidden>
+            <header class="view-head"><h2 id="finance-costs-account-title">Talous · Kulut tileittäin</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
+          <section class="view" data-view="finance-budget" aria-labelledby="finance-budget-title" hidden>
+            <header class="view-head"><h2 id="finance-budget-title">Talous · Budjetti vs. toteuma</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
+          <section class="view" data-view="finance-position" aria-labelledby="finance-position-title" hidden>
+            <header class="view-head"><h2 id="finance-position-title">Talous · Taloudellinen asema</h2></header>
+            <div class="finance-placeholder" data-finance></div>
+          </section>
 
-      <section id="admin-view-company" class="admin-view-panel subsection">
-        <h3>Taloyhtiön perustiedot</h3>
-        <div id="admin-company-details" class="detail-grid"></div>
-      </section>
+          <!-- Skenaariot ja likviditeetti (oikea read-only) -->
+          <section class="view" data-view="scenarios" aria-labelledby="scenarios-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="scenarios-title">Skenaariot</h2>
+                <p class="view-lead muted">Tunnetut kustannukset skenaarioittain valitulta horisontilta. DATA GAPit näkyvät nimettyinä.</p>
+              </div>
+            </header>
+            <div id="scenarios-body"></div>
+          </section>
+          <section class="view" data-view="cashpath" aria-labelledby="cashpath-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="cashpath-title">Kassapolku</h2>
+                <p class="view-lead muted">Vuosittainen kassan kehitys ja puskuritavoite skenaarioittain.</p>
+              </div>
+            </header>
+            <div id="cashpath-body"></div>
+          </section>
+          <section class="view" data-view="required-collection" aria-labelledby="required-collection-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="required-collection-title">Vastiketarve</h2>
+                <p class="view-lead muted">Tunnetuille kustannuksille vaadittu korjauskeräys verrattuna nykyiseen.</p>
+              </div>
+            </header>
+            <div id="required-collection-body"></div>
+          </section>
 
-      <section id="admin-view-assets" class="admin-view-panel subsection">
-        <h3>Rakennusosat</h3>
-        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Nimi</th><th>Kategoria</th><th>Aktiivinen</th><th>Lähteet</th></tr></thead><tbody id="admin-assets-rows"></tbody></table></div>
-      </section>
+          <!-- Julkaisu -->
+          <section class="view" data-view="publish" aria-labelledby="publish-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="publish-title">Julkaisuvalmius</h2>
+                <p class="view-lead muted">Julkaisu on muuttumaton versio yhdestä admin-revisiosta.</p>
+              </div>
+              <div class="button-row">
+                <button id="admin-publish" disabled>Julkaise työversio</button>
+              </div>
+            </header>
+            <div id="publish-summary" class="card-grid"></div>
+            <form id="admin-publish-form" class="card form-card narrow-card">
+              <h3>Julkaisun tiedot</h3>
+              <label for="publish-source">Lähdetunniste
+                <input id="publish-source" name="sourceId" value="admin_publication">
+              </label>
+              <label for="publish-explanation">Selitys
+                <textarea id="publish-explanation" name="explanation" rows="4">Julkaistaan adminin tarkistama työversio.</textarea>
+              </label>
+              <p class="muted">Julkaisupainike käyttää näitä tietoja ja palvelimen tunnistamaa adminia.</p>
+            </form>
+          </section>
 
-      <section id="admin-view-observations" class="admin-view-panel subsection">
-        <h3>Havainnot</h3>
-        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Rakennusosa</th><th>Havaittu</th><th>Kuvaus</th><th>Lähteet</th></tr></thead><tbody id="admin-observation-rows"></tbody></table></div>
-      </section>
-
-      <section id="admin-view-evidence" class="admin-view-panel subsection">
-        <h3>Kustannusnäyttö</h3>
-        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tila</th><th>Summa</th><th>Yksikkö</th><th>Hintataso</th><th>Kohde</th><th>Lähde</th></tr></thead><tbody id="admin-evidence-rows"></tbody></table></div>
-      </section>
-
-      <section id="admin-view-events" class="admin-view-panel subsection">
-        <h3>Korjaustapahtumat</h3>
-        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Rakennusosa</th><th>Nimi</th><th>Tila</th><th>Tyyppi</th><th>Alkuperä</th><th>Aikataulu</th></tr></thead><tbody id="admin-event-rows"></tbody></table></div>
-      </section>
-
-      <section id="admin-view-scenarios" class="admin-view-panel subsection">
-        <h3>Skenaariot</h3>
-        <div id="admin-scenarios" class="scenario-grid"></div>
-      </section>
-
-      <section id="admin-view-liquidity" class="admin-view-panel subsection">
-        <h3>Likviditeetti</h3>
-        <div id="admin-liquidity-cards" class="card-grid"></div>
-        <div id="admin-liquidity-baselines" class="table-wrap"></div>
-      </section>
-
-      <section id="admin-view-publish" class="admin-view-panel subsection">
-        <h3>Julkaisu</h3>
-        <div id="admin-publication-summary" class="card-grid"></div>
-        <form id="admin-publish-form" class="card narrow-card">
-          <h3>Julkaisun tiedot</h3>
-          <label>Lähdetunniste<input name="sourceId" value="admin_publication"></label>
-          <label>Selitys<textarea name="explanation" rows="5">Julkaistaan adminin tarkistama työversio.</textarea></label>
-          <p class="muted">Julkaisupainike käyttää näitä tietoja ja palvelimen tunnistamaa adminia.</p>
-        </form>
-      </section>
-
-      <section id="admin-view-developer" class="admin-view-panel subsection">
-        <h3>Kehittäjäpaneeli</h3>
-        <p class="muted">Tekninen batch-editori säilytetään toistaiseksi datan nopeaan lisäämiseen ennen lomakenäkymien rakentamista.</p>
-        <form id="admin-batch-form" class="card wide-card">
-          <h3>Manuaalinen admin-batch</h3>
-          <p class="muted">Syötä yksi tai useampi V2.1-operaatio. Palvelin lisää tekijän ja aikaleiman.</p>
-          <textarea id="admin-operations" rows="18" spellcheck="false">[
+          <!-- Kehittäjäpaneeli -->
+          <section class="view" data-view="developer" aria-labelledby="developer-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="developer-title">Kehittäjäpaneeli</h2>
+                <p class="view-lead muted">Tekniset työkalut. Ei normaalin käytön ensisijainen käyttöliittymä.</p>
+              </div>
+              <div class="button-row">
+                <button id="health-button" type="button" class="secondary">Tarkista API</button>
+              </div>
+            </header>
+            <form id="admin-batch-form" class="card form-card wide-card">
+              <h3>Manuaalinen admin-batch</h3>
+              <p class="muted">Syötä yksi tai useampi V2.1-operaatio. Palvelin lisää tekijän ja aikaleiman.</p>
+              <label class="sr-only" for="admin-operations">Admin-operaatiot JSON</label>
+              <textarea id="admin-operations" rows="16" spellcheck="false">[
   {
     "type": "save_liquidity_baseline",
     "value": {
@@ -215,13 +305,86 @@
     "explanation": "Adminin käsin syöttämä päivitys."
   }
 ]</textarea>
-          <button type="submit">Tallenna batch</button>
-        </form>
-      </section>
-    </section>
+              <button type="submit" disabled>Tallenna batch</button>
+            </form>
+          </section>
+        </div>
+      </div>
 
-    <div id="toast" role="status" aria-live="polite"></div>
-  </main>
+      <!-- VISITOR MODE (säilytetty kokonaisuudessaan) -->
+      <div id="visitor-mode" class="app-mode" hidden>
+        <section id="visitor-panel" aria-labelledby="visitor-heading">
+          <div class="view-head">
+            <div>
+              <p class="eyebrow">Sessio, ei pysyvää tallennusta</p>
+              <h2 id="visitor-heading">Visitor-skenaario</h2>
+            </div>
+            <div class="button-row">
+              <button id="visitor-load-overview" class="secondary">Lataa julkaistu näkymä</button>
+              <button id="visitor-create-session">Aloita uusi sessio</button>
+              <button id="visitor-reset" class="danger">Palauta lähtötila</button>
+            </div>
+          </div>
+          <p class="notice">Visitorin muutokset säilyvät vain kyseisessä sessiossa eivätkä muuta adminin tietokantaa tai julkaistua versiota.</p>
+          <div id="visitor-session-status" class="muted">Ei aktiivista sessiota.</div>
+          <div id="visitor-summary" class="card-grid"></div>
+
+          <section class="subsection">
+            <h3>Rakennusosatapahtumat</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Tapahtuma</th><th>Skenaario</th><th>Vuosi</th><th>Summa €</th><th>Määrä</th><th>Ohita</th><th></th></tr></thead>
+                <tbody id="visitor-event-rows"><tr><td colspan="7" class="muted">Luo sessio nähdäksesi muokattavat tapahtumat.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="subsection split">
+            <form id="visitor-liquidity-form" class="card">
+              <h3>Likviditeetin oletukset</h3>
+              <div class="form-grid">
+                <label>Kassa €<input name="currentCash" type="number" step="0.01"></label>
+                <label>12 kk hoitokulut €<input name="trailing12mOperatingCosts" type="number" step="0.01"></label>
+                <label>Puskurikuukaudet<input name="bufferMonths" type="number" step="0.1" min="0.1"></label>
+                <label>Optimistic keräys €/v<input name="optimistic" type="number" step="0.01" min="0"></label>
+                <label>Base keräys €/v<input name="base" type="number" step="0.01" min="0"></label>
+                <label>Stress keräys €/v<input name="stress" type="number" step="0.01" min="0"></label>
+              </div>
+              <button type="submit">Päivitä oletukset</button>
+            </form>
+
+            <form id="visitor-custom-event-form" class="card">
+              <h3>Väliaikainen tapahtuma</h3>
+              <div class="form-grid">
+                <label>Rakennusosa<select name="assetId" id="custom-asset"></select></label>
+                <label>Nimi<input name="title" required></label>
+                <label>Tyyppi<select name="type"><option>maintenance</option><option>repair</option><option>replacement</option><option>renewal</option><option>inspection</option><option>study</option><option>other</option></select></label>
+                <label>Skenaario<select name="scenario"><option>optimistic</option><option selected>base</option><option>stress</option></select></label>
+                <label>Vuosi<input name="year" type="number" required></label>
+                <label>Summa €<input name="amount" type="number" step="0.01"></label>
+              </div>
+              <button type="submit">Lisää sessioon</button>
+            </form>
+          </section>
+
+          <section class="subsection">
+            <h3>Skenaariolaskenta</h3>
+            <div id="visitor-scenarios" class="scenario-grid"></div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-panel-title" hidden>
+      <div class="detail-panel-head">
+        <h2 id="detail-panel-title">Tiedot</h2>
+        <button id="detail-panel-close" class="icon-button" type="button" aria-label="Sulje paneeli">✕</button>
+      </div>
+      <div id="detail-panel-body" class="detail-panel-body"></div>
+    </aside>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
 
   <script src="/auth-config.js"></script>
   <script type="module" src="/app.js"></script>
