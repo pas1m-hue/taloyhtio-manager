@@ -39,6 +39,8 @@ export interface AdminDashboardReadModel {
   readonly financialYears: AdminDataSnapshot["financialYears"];
   readonly latestLiquidityBaseline?: AdminDataSnapshot["liquidityBaselines"][number];
   readonly assets: AdminDataSnapshot["assets"];
+  readonly observations: AdminDataSnapshot["observations"];
+  readonly costEvidence: AdminDataSnapshot["costEvidence"];
   readonly events: AdminDataSnapshot["events"];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly publication: AdminPublicationStatus;
@@ -81,6 +83,8 @@ export function buildAdminDashboardReadModel(
     financialYears: admin.financialYears,
     ...(latestBaseline === undefined ? {} : { latestLiquidityBaseline: latestBaseline }),
     assets: admin.assets,
+    observations: admin.observations,
+    costEvidence: admin.costEvidence,
     events: admin.events,
     auditTrail: admin.auditTrail,
     publication,
