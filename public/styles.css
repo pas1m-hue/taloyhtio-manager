@@ -108,6 +108,15 @@ body:has(#detail-panel:not([hidden])) .app-shell {
 
 .sidebar-scrim { display: none; }
 
+/* Visitor mode has no admin sidebar or detail panel. */
+body[data-app-mode="visitor"] .sidebar { display: none; }
+body[data-app-mode="visitor"] .app-shell,
+body[data-app-mode="visitor"]:has(#detail-panel:not([hidden])) .app-shell { grid-template-columns: minmax(0, 1fr); }
+
+.badge-row { display: inline-flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
+fieldset { border: 1px solid var(--line); border-radius: .55rem; padding: .8rem; margin: 0; }
+legend { padding: 0 .4rem; }
+
 .workspace { padding: 1.25rem clamp(.8rem, 2.5vw, 2rem) 4rem; min-width: 0; }
 .app-mode[hidden] { display: none; }
 

@@ -1,56 +1,174 @@
+import {
+  ASSET_CATEGORIES,
+  buildAssetListViewModel,
+  buildSaveAssetOperation,
+  buildSaveHousingCompanyOperation,
+  canSubmitAdminOperation,
+  countActiveAssets,
+  deriveDataGapAssets,
+  interpretRevisionConflict,
+  selectFinancialYearViewModel,
+} from "./adminOperationPayloads.js";
+
+const KNOWN_VIEWS = new Set([
+  "overview", "company", "assets", "observations", "events", "cost-evidence",
+  "finance-summary", "finance-income", "finance-costs-group",
+  "finance-costs-account", "finance-budget", "finance-position",
+  "scenarios", "cashpath", "required-collection", "publish", "developer",
+]);
+
+const CATEGORY_LABELS = {
+  hvac: "LVI", envelope: "Vaippa", structures: "Rakenteet",
+  yard: "Piha", safety: "Turvallisuus", other: "Muu",
+};
+
+const SCENARIOS = ["optimistic", "base", "stress"];
+
 const state = {
+  mode: "admin",
+  view: "overview",
+  admin: null,
+  selectedAssetId: null,
+  selectedFiscalYear: null,
+  assetEditor: null,
+  cashpathScenario: "base",
   published: null,
   visitor: null,
   visitorCredential: readCredential(),
-  admin: null,
   auth: readAuthSession(),
+  staleWorkspace: false,
 };
 
 let authRefreshPromise = null;
 
 const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 const companyId = () => $("#company-id").value.trim();
 const horizon = () => ({
   startYear: Number($("#horizon-start").value),
   endYear: Number($("#horizon-end").value),
 });
 
-for (const tab of document.querySelectorAll(".tab")) {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((item) => {
-      item.classList.toggle("active", item === tab);
-      item.setAttribute("aria-selected", String(item === tab));
+/* ---------------------------------------------------------------- boot */
+
+function boot() {
+  wireStaticControls();
+  wireNavigation();
+  wireModeSwitch();
+  renderAuthStatus();
+  applyRoute();
+  checkHealth();
+  if (state.visitorCredential) {
+    loadVisitor().catch(() => {
+      state.visitorCredential = null;
+      sessionStorage.removeItem("tmVisitorCredential");
     });
-    document.querySelectorAll(".tab-panel").forEach((panel) => {
-      panel.classList.toggle("active", panel.id === `${tab.dataset.tab}-panel`);
-    });
-  });
+  }
 }
 
-for (const tab of document.querySelectorAll(".admin-view-tab")) {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".admin-view-tab").forEach((item) => {
-      item.classList.toggle("active", item === tab);
-    });
-    document.querySelectorAll(".admin-view-panel").forEach((panel) => {
-      panel.classList.toggle("active", panel.id === `admin-view-${tab.dataset.adminView}`);
-    });
+function wireStaticControls() {
+  $("#health-button").addEventListener("click", checkHealth);
+  $("#admin-auth-form").addEventListener("submit", signInAdmin);
+  $("#admin-sign-out").addEventListener("click", signOutAdmin);
+  $("#admin-load").addEventListener("click", () => loadAdmin());
+  $("#admin-preview").addEventListener("click", () => loadAdmin());
+  $("#admin-publish").addEventListener("click", publishAdmin);
+  $("#admin-batch-form").addEventListener("submit", saveAdminBatch);
+  $("#assets-new").addEventListener("click", () => openAssetEditor("new"));
+  $("#assets-filter-category").addEventListener("change", renderAssets);
+  $("#assets-filter-active").addEventListener("change", renderAssets);
+  $("#assets-filter-search").addEventListener("input", renderAssets);
+  $("#topbar-fiscal-year").addEventListener("change", (event) => {
+    state.selectedFiscalYear = Number(event.target.value);
+    renderOverview();
   });
+  $("#detail-panel-close").addEventListener("click", closeDetailPanel);
+
+  // Visitor
+  $("#visitor-load-overview").addEventListener("click", loadPublished);
+  $("#visitor-create-session").addEventListener("click", createSession);
+  $("#visitor-reset").addEventListener("click", resetSession);
+  $("#visitor-liquidity-form").addEventListener("submit", saveLiquidity);
+  $("#visitor-custom-event-form").addEventListener("submit", saveCustomEvent);
+
+  // Sidebar drawer (mobile)
+  $("#sidebar-toggle").addEventListener("click", () => toggleSidebar());
+  $("#sidebar-scrim").addEventListener("click", () => toggleSidebar(false));
+
+  // Populate asset category filter once.
+  const filter = $("#assets-filter-category");
+  for (const category of ASSET_CATEGORIES) {
+    const option = document.createElement("option");
+    option.value = category;
+    option.textContent = CATEGORY_LABELS[category] ?? category;
+    filter.append(option);
+  }
 }
 
-$("#health-button").addEventListener("click", checkHealth);
-$("#visitor-load-overview").addEventListener("click", loadPublished);
-$("#visitor-create-session").addEventListener("click", createSession);
-$("#visitor-reset").addEventListener("click", resetSession);
-$("#visitor-liquidity-form").addEventListener("submit", saveLiquidity);
-$("#visitor-custom-event-form").addEventListener("submit", saveCustomEvent);
-$("#admin-auth-form").addEventListener("submit", signInAdmin);
-$("#admin-sign-out").addEventListener("click", signOutAdmin);
-$("#admin-load").addEventListener("click", loadAdmin);
-$("#admin-preview").addEventListener("click", loadAdmin);
-$("#admin-publish").addEventListener("click", publishAdmin);
-$("#admin-batch-form").addEventListener("submit", saveAdminBatch);
+/* ---------------------------------------------------------------- routing */
 
+function wireNavigation() {
+  window.addEventListener("hashchange", applyRoute);
+  for (const link of $$(".nav-link")) {
+    link.addEventListener("click", () => toggleSidebar(false));
+  }
+}
+
+function applyRoute() {
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  const view = KNOWN_VIEWS.has(raw) ? raw : "overview";
+  state.view = view;
+  for (const section of $$("#admin-workspace .view")) {
+    section.hidden = section.dataset.view !== view;
+  }
+  for (const link of $$(".nav-link")) {
+    link.classList.toggle("active", link.dataset.view === view);
+  }
+  if (view !== "assets") closeDetailPanel();
+  else if (state.selectedAssetId) openDetailPanel();
+}
+
+function navigate(view) {
+  window.location.hash = `#/${view}`;
+}
+
+function wireModeSwitch() {
+  for (const tab of $$(".mode-tab")) {
+    tab.addEventListener("click", () => setMode(tab.dataset.mode));
+  }
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  document.body.dataset.appMode = mode;
+  $("#admin-mode").hidden = mode !== "admin";
+  $("#visitor-mode").hidden = mode !== "visitor";
+  $("#sidebar").hidden = mode !== "admin";
+  if (mode !== "admin") closeDetailPanel();
+  for (const tab of $$(".mode-tab")) {
+    const active = tab.dataset.mode === mode;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+}
+
+function toggleSidebar(force) {
+  const open = force ?? document.body.dataset.sidebarOpen !== "true";
+  document.body.dataset.sidebarOpen = String(open);
+  $("#sidebar-scrim").hidden = !open;
+  $("#sidebar-toggle").setAttribute("aria-expanded", String(open));
+}
+
+/* ---------------------------------------------------------------- status */
+
+function setStatus(text, kind = "") {
+  const pill = $("#topbar-status");
+  pill.textContent = text;
+  pill.classList.toggle("is-busy", kind === "busy");
+  pill.classList.toggle("is-error", kind === "error");
+}
+
+/* ---------------------------------------------------------------- auth */
 
 async function signInAdmin(event) {
   event.preventDefault();
@@ -73,8 +191,7 @@ async function signOutAdmin() {
   try {
     if (accessToken) {
       await supabaseAuthRequest("/logout?scope=local", {
-        accessToken,
-        expectJson: false,
+        accessToken, expectJson: false,
       });
     }
   } catch (error) {
@@ -82,9 +199,8 @@ async function signOutAdmin() {
   } finally {
     clearAuthSession();
     state.admin = null;
-    $("#admin-summary").innerHTML = "";
-    $("#admin-event-rows").innerHTML = "";
-    $("#admin-scenarios").innerHTML = "";
+    state.selectedAssetId = null;
+    closeDetailPanel();
     renderAuthStatus();
     toast("Kirjauduttu ulos.");
   }
@@ -183,30 +299,643 @@ function readAuthSession() {
   try {
     const value = JSON.parse(sessionStorage.getItem("tmAdminAuthSession"));
     return value?.access_token ? value : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function renderAuthStatus() {
-  const status = $("#admin-auth-status");
-  const signedIn = Boolean(state.auth?.access_token);
-  status.textContent = signedIn
+  const signedIn = canSubmitAdminOperation(state.auth);
+  $("#topbar-user").textContent = signedIn
     ? `Kirjautunut: ${state.auth.user?.email ?? "Supabase-käyttäjä"}`
     : "Ei kirjautunutta käyttäjää.";
+  $("#admin-auth-gate").hidden = signedIn;
+  $("#admin-workspace").hidden = !signedIn;
   $("#admin-sign-out").disabled = !signedIn;
-  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish"]) {
+  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new"]) {
     $(selector).disabled = !signedIn;
+  }
+  $("#admin-batch-form button[type=submit]").disabled = !signedIn;
+  ensureWorkspaceSignOut(signedIn);
+  if (signedIn) renderWorkspace();
+}
+
+function ensureWorkspaceSignOut(signedIn) {
+  let button = $("#workspace-sign-out");
+  if (!signedIn) { button?.remove(); return; }
+  if (!button) {
+    button = document.createElement("button");
+    button.id = "workspace-sign-out";
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Kirjaudu ulos";
+    button.addEventListener("click", signOutAdmin);
+    $(".workspace-actions .button-row").append(button);
   }
 }
 
-async function checkHealth() {
+/* ---------------------------------------------------------------- admin load */
+
+async function loadAdmin() {
   try {
-    const data = await api("/api/v1/health");
-    $("#connection-status").textContent = `${data.status} · ${data.apiVersion}`;
-    toast("API-yhteys toimii.");
+    setStatus("Ladataan työtilaa…", "busy");
+    const model = await api(
+      `/api/v1/admin/companies/${encodeURIComponent(companyId())}/workspace${horizonQuery()}`,
+      { adminToken: await getAdminAccessToken() },
+    );
+    state.admin = model;
+    state.staleWorkspace = false;
+    if (state.selectedAssetId && !model.assets.some((a) => a.id === state.selectedAssetId)) {
+      state.selectedAssetId = null;
+      closeDetailPanel();
+    }
+    renderWorkspace();
+    setStatus(`Revisio ${model.adminRevision} ladattu`);
+    toast(`Admin-revisio ${model.adminRevision} ladattu.`);
+  } catch (error) {
+    setStatus("Lataus epäonnistui", "error");
+    showError(error);
+  }
+}
+
+async function sendAdminOperations(operations, { successMessage } = {}) {
+  if (!canSubmitAdminOperation(state.auth)) {
+    toast("Kirjaudu ensin admin-käyttäjänä.", true);
+    return { ok: false };
+  }
+  if (!state.admin) await loadAdmin();
+  if (!state.admin) return { ok: false };
+  try {
+    setStatus("Tallennetaan…", "busy");
+    const model = await api(
+      `/api/v1/admin/companies/${encodeURIComponent(companyId())}/changes`,
+      {
+        method: "POST",
+        adminToken: await getAdminAccessToken(),
+        body: { expectedRevision: state.admin.adminRevision, horizon: horizon(), operations },
+      },
+    );
+    state.admin = model;
+    state.staleWorkspace = false;
+    renderWorkspace();
+    setStatus(`Tallennettu · revisio ${model.adminRevision}`);
+    if (successMessage) toast(successMessage);
+    return { ok: true };
+  } catch (error) {
+    const conflict = interpretRevisionConflict(error);
+    if (conflict.isConflict) {
+      state.staleWorkspace = true;
+      setStatus("Tiedot muuttuivat — lataa uudelleen", "error");
+      renderWorkspace();
+      toast(conflict.message, true);
+    } else {
+      setStatus("Tallennus epäonnistui", "error");
+      showError(error);
+    }
+    return { ok: false, conflict: conflict.isConflict };
+  }
+}
+
+/* ---------------------------------------------------------------- render */
+
+function renderWorkspace() {
+  if (!canSubmitAdminOperation(state.auth)) return;
+  const revisionLine = $("#admin-revision-line");
+  if (!state.admin) {
+    revisionLine.textContent = "Ei ladattua työtilaa. Aloita painamalla ”Lataa työtila”.";
+    renderLoadPrompts();
+    return;
+  }
+  revisionLine.innerHTML = state.staleWorkspace
+    ? `<span class="warning">Työtila on vanhentunut. Lataa uudelleen ennen muutoksia.</span>`
+    : `Työrevisio ${state.admin.adminRevision} · päivitetty ${escapeHtml(String(state.admin.updatedAt))}`;
+  renderOverview();
+  renderFiscalSelector();
+  renderCompanyForm();
+  renderAssets();
+  renderMaintenancePlaceholders();
+  renderFinancePlaceholders();
+  renderScenarios();
+  renderCashpath();
+  renderRequiredCollection();
+  renderPublish();
+}
+
+function renderLoadPrompts() {
+  const prompt = stateBlock({
+    kind: "empty",
+    title: "Työtilaa ei ole vielä ladattu",
+    body: "Lataa taloyhtiön työtila nähdäksesi yleiskuvan, rakennusosat ja laskennan.",
+  });
+  $("#overview-kpis").innerHTML = "";
+  $("#overview-fiscal").innerHTML = "";
+  $("#overview-notes").innerHTML = prompt;
+  for (const id of ["#assets-list", "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary"]) {
+    $(id).innerHTML = prompt;
+  }
+  $("#company-form").innerHTML = prompt;
+}
+
+/* -------- Overview (decision 3.6) -------- */
+
+function renderOverview() {
+  const model = state.admin;
+  if (!model) return;
+  const publication = model.publication ?? {};
+  const dataGaps = deriveDataGapAssets(model.costEvidence);
+  const projectionBase = model.calculations?.projection?.scenarios?.base;
+
+  const kpis = [
+    ["Työrevisio", model.adminRevision],
+    ["Julkaisuversio", publication.latestPublicationVersion ?? 0],
+    ["Aktiiviset rakennusosat", countActiveAssets(model.assets)],
+    ["Kirjatut havainnot", model.observations.length],
+    ["DATA GAP -rakennusosat", dataGaps.count],
+    ["Hyväksytyt tapahtumat", model.counts?.approvedEvents ?? 0],
+    ["Tunnetut kustannukset (perusura)", projectionBase ? money(projectionBase.horizonAmount) : "—"],
+    ["Julkaisua odottavat muutokset", publication.publishableChanges ? "Kyllä" : "Ei"],
+  ];
+
+  const liquidity = model.calculations?.liquidity;
+  if (liquidity?.status === "available" && model.latestLiquidityBaseline) {
+    kpis.push(["Kassa (lähtötaso)", money(model.latestLiquidityBaseline.currentCash)]);
+    kpis.push(["Puskuritavoite", money(liquidity.forecast.operatingBuffer.operatingBufferTarget)]);
+  }
+  $("#overview-kpis").innerHTML = kpis.map(kpiCard).join("");
+
+  renderOverviewFiscal();
+  renderOverviewNotes();
+}
+
+function renderOverviewFiscal() {
+  const model = state.admin;
+  const vm = selectFinancialYearViewModel(model.financialYears, state.selectedFiscalYear ?? undefined);
+  const host = $("#overview-fiscal");
+  if (!vm.hasData) {
+    host.innerHTML = `<h3>Talousvuosi</h3>` + stateBlock({
+      kind: "empty",
+      title: "Ei talousvuosidataa",
+      body: "Tälle taloyhtiölle ei ole vielä tallennettu talousvuosia. Vuosittaiset budjetti- ja toteumaluvut näkyvät tässä, kun ne on syötetty.",
+    });
+    return;
+  }
+  const f = vm.figures ?? {};
+  const cards = [
+    ["Budjetoidut tulot", f.budgetIncome],
+    ["Toteutuneet tulot", f.actualIncome],
+    ["Budjetoidut kulut", f.budgetCosts],
+    ["Toteutuneet kulut", f.actualCosts],
+  ].map(([label, value]) => kpiCard([label, value === undefined ? "—" : money(value)]));
+  host.innerHTML = `<h3>Talousvuosi ${vm.selectedYear}</h3><div class="card-grid">${cards.join("")}</div>`;
+}
+
+function renderOverviewNotes() {
+  const model = state.admin;
+  const publication = model.publication ?? {};
+  const notes = [];
+
+  const liquidity = model.calculations?.liquidity;
+  if (liquidity?.status === "available") {
+    const needs = SCENARIOS.map((scenario) => {
+      const signal = liquidity.forecast.scenarios[scenario]?.fundingNeed;
+      const year = signal?.firstFundingNeedYear;
+      return `<li><strong>${scenario}:</strong> ${year ? `ensimmäinen puskurivaje ${year}` : "ei puskurivajetta tunnetuilla kustannuksilla"}</li>`;
+    }).join("");
+    notes.push(infoCard("Puskurivaje skenaarioittain", `<ul>${needs}</ul>`));
+  } else {
+    notes.push(infoCard(
+      "Likviditeetti",
+      "Kassaa ja puskuritavoitetta ei näytetä, koska likviditeetin lähtötiedot puuttuvat. Lisää lähtötiedot Kehittäjäpaneelin kautta (save_liquidity_baseline).",
+    ));
+  }
+
+  notes.push(infoCard(
+    "Julkaisu",
+    publication.publishableChanges
+      ? `Työversiossa on julkaistavia muutoksia (${publication.unpublishedAuditEntryCount ?? 0} julkaisematonta audit-merkintää).`
+      : "Ei julkaistavia muutoksia; työversio vastaa viimeisintä julkaisua.",
+  ));
+  $("#overview-notes").innerHTML = notes.join("");
+}
+
+/* -------- Fiscal year selector (decision 3.2) -------- */
+
+function renderFiscalSelector() {
+  const model = state.admin;
+  const vm = selectFinancialYearViewModel(model.financialYears, state.selectedFiscalYear ?? undefined);
+  const field = $("#topbar-fiscal-year-field");
+  const select = $("#topbar-fiscal-year");
+  if (!vm.hasData) {
+    field.hidden = true;
+    select.innerHTML = "";
+    state.selectedFiscalYear = null;
+    return;
+  }
+  field.hidden = false;
+  state.selectedFiscalYear = vm.selectedYear;
+  select.innerHTML = vm.availableYears
+    .map((year) => `<option value="${year}"${year === vm.selectedYear ? " selected" : ""}>${year}</option>`)
+    .join("");
+}
+
+/* -------- Company form -------- */
+
+function renderCompanyForm() {
+  const company = state.admin.housingCompany;
+  const buffer = company.operatingBuffer ?? {};
+  $("#company-form").innerHTML = `
+    <div class="form-grid">
+      ${textField("company-name", "Nimi", company.name, { required: true })}
+      ${numberField("company-apartments", "Huoneistomäärä", company.apartmentCount, { required: true, min: 1, step: 1 })}
+      ${numberField("company-area", "Laskutettava pinta-ala (m²)", company.chargeableAreaM2 ?? "", { min: 0, step: "0.01" })}
+      ${numberField("company-buffer-months", "Käyttöpuskuri (kk)", buffer.bufferMonths ?? "", { min: 0, step: "0.1" })}
+      ${numberField("company-buffer-override", "Puskurin override (€)", buffer.userOverride ?? "", { min: 0, step: "0.01" })}
+    </div>
+    <fieldset class="form-grid">
+      <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+      ${textField("company-source-ids", "Lähdetunnisteet (pilkuin eroteltu)", "", { required: true })}
+      ${textField("company-explanation", "Muutoksen selitys", "", { required: true })}
+    </fieldset>
+    <p id="company-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+    <div class="button-row"><button type="submit">Tallenna perustiedot</button></div>
+  `;
+  $("#company-form").onsubmit = submitCompanyForm;
+}
+
+async function submitCompanyForm(event) {
+  event.preventDefault();
+  clearFieldErrors("#company-form");
+  const raw = {
+    id: companyId(),
+    name: fieldValue("company-name"),
+    apartmentCount: fieldValue("company-apartments"),
+    chargeableAreaM2: fieldValue("company-area"),
+    bufferMonths: fieldValue("company-buffer-months"),
+    userOverride: fieldValue("company-buffer-override"),
+    sourceIds: fieldValue("company-source-ids"),
+    explanation: fieldValue("company-explanation"),
+  };
+  const result = buildSaveHousingCompanyOperation(raw);
+  if (!result.ok) {
+    applyFieldErrors("#company-form", {
+      name: "company-name", apartmentCount: "company-apartments",
+      chargeableAreaM2: "company-area", bufferMonths: "company-buffer-months",
+      userOverride: "company-buffer-override", sourceIds: "company-source-ids",
+      explanation: "company-explanation",
+    }, result.errors);
+    setFeedback("#company-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: "Taloyhtiön perustiedot tallennettu.",
+  });
+  if (sent.ok) setFeedback("#company-feedback", "Tallennettu.", "ok");
+  else if (sent.conflict) setFeedback("#company-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+}
+
+/* -------- Assets -------- */
+
+function filteredAssets() {
+  const model = state.admin;
+  const category = $("#assets-filter-category").value;
+  const activeFilter = $("#assets-filter-active").value;
+  const search = $("#assets-filter-search").value.trim().toLowerCase();
+  return model.assets.filter((asset) => {
+    if (category && asset.category !== category) return false;
+    if (activeFilter === "active" && !asset.active) return false;
+    if (activeFilter === "inactive" && asset.active) return false;
+    if (search && !`${asset.id} ${asset.name}`.toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+function renderAssets() {
+  if (!state.admin) return;
+  const gapAssets = new Set(deriveDataGapAssets(state.admin.costEvidence).assetIds);
+  const vm = buildAssetListViewModel(filteredAssets());
+  const host = $("#assets-list");
+  if (vm.isEmpty) {
+    const anyAssets = state.admin.assets.length > 0;
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: anyAssets ? "Ei osumia suodattimilla" : "Ei vielä rakennusosia",
+      body: anyAssets ? "Muuta kategoria-, tila- tai hakusuodatinta." : vm.emptyMessage,
+    });
+    return;
+  }
+  host.innerHTML = vm.rows.map((row) => {
+    const selected = row.id === state.selectedAssetId ? " is-selected" : "";
+    const gap = gapAssets.has(row.id) ? `<span class="badge gap">DATA GAP</span>` : "";
+    const badge = row.active
+      ? `<span class="badge active">Aktiivinen</span>`
+      : `<span class="badge inactive">Ei aktiivinen</span>`;
+    return `<button type="button" class="asset-card${selected}" data-asset-id="${escapeHtml(row.id)}">
+      <span>
+        <span class="asset-name">${escapeHtml(row.name)}</span><br>
+        <span class="asset-meta">${escapeHtml(CATEGORY_LABELS[row.category] ?? row.category)} · ${escapeHtml(row.id)}</span>
+      </span>
+      <span class="badge-row">${badge} ${gap}</span>
+    </button>`;
+  }).join("");
+  for (const card of $$("#assets-list .asset-card")) {
+    card.addEventListener("click", () => selectAsset(card.dataset.assetId));
+  }
+}
+
+function selectAsset(assetId) {
+  state.selectedAssetId = assetId;
+  renderAssets();
+  renderAssetDetail();
+  openDetailPanel();
+}
+
+function renderAssetDetail() {
+  const model = state.admin;
+  const asset = model.assets.find((item) => item.id === state.selectedAssetId);
+  if (!asset) { closeDetailPanel(); return; }
+  const observations = model.observations.filter((o) => o.assetId === asset.id);
+  const events = model.events.filter((e) => e.assetId === asset.id);
+  const evidence = model.costEvidence.filter((c) => c.assetId === asset.id);
+
+  $("#detail-panel-title").textContent = asset.name;
+  $("#detail-panel-body").innerHTML = `
+    <div class="detail-group">
+      <div class="detail-item"><span>Tunniste</span><strong>${escapeHtml(asset.id)}</strong></div>
+      <div class="detail-item"><span>Kategoria</span><strong>${escapeHtml(CATEGORY_LABELS[asset.category] ?? asset.category)}</strong></div>
+      <div class="detail-item"><span>Aktiivinen</span><strong>${asset.active ? "Kyllä" : "Ei"}</strong></div>
+      <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((asset.sourceIds ?? []).join(", ") || "—")}</strong></div>
+    </div>
+    <div class="button-row"><button type="button" class="secondary" id="detail-edit-asset">Muokkaa</button></div>
+    ${detailGroup("Havainnot", observations.map((o) =>
+      `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei havaintoja.")}
+    ${detailGroup("Tapahtumat", events.map((e) =>
+      `<li><strong>${escapeHtml(e.title)}</strong> · ${escapeHtml(e.status)} · ${escapeHtml(e.type)}</li>`), "Ei tapahtumia.")}
+    ${detailGroup("Kustannusnäyttö", evidence.map((c) => {
+      const gap = c.status === "data_gap";
+      const amount = gap ? `<span class="warning">DATA GAP</span>` : money(c.amount ?? 0);
+      return `<li>${escapeHtml(c.status)} · ${amount} · ${escapeHtml(c.unit)}</li>`;
+    }), "Ei kustannusnäyttöä.")}
+  `;
+  $("#detail-edit-asset").addEventListener("click", () => openAssetEditor("edit", asset.id));
+}
+
+function openDetailPanel() { $("#detail-panel").hidden = false; }
+function closeDetailPanel() {
+  $("#detail-panel").hidden = true;
+  state.selectedAssetId = null;
+  for (const card of $$("#assets-list .asset-card.is-selected")) card.classList.remove("is-selected");
+}
+
+function openAssetEditor(mode, assetId) {
+  const model = state.admin;
+  const asset = mode === "edit" ? model.assets.find((a) => a.id === assetId) : null;
+  const entitySources = asset ? (asset.sourceIds ?? []).join(", ") : "";
+  const host = ensureAssetEditorHost();
+  host.hidden = false;
+  host.innerHTML = `
+    <form id="asset-form" class="card form-card" novalidate>
+      <h3>${mode === "edit" ? "Muokkaa rakennusosaa" : "Uusi rakennusosa"}</h3>
+      <div class="form-grid">
+        ${textField("asset-id", "Tunniste", asset?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${textField("asset-name", "Nimi", asset?.name ?? "", { required: true })}
+        ${selectField("asset-category", "Kategoria", ASSET_CATEGORIES.map((c) => [c, CATEGORY_LABELS[c] ?? c]), asset?.category ?? "")}
+        ${checkboxField("asset-active", "Aktiivinen", asset ? asset.active : true)}
+        ${textField("asset-source-ids", "Rakennusosan lähdetunnisteet", entitySources, { required: true })}
+      </div>
+      <fieldset class="form-grid">
+        <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään rakennusosan lähteistä, muokattavissa)</legend>
+        ${textField("asset-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
+        ${textField("asset-explanation", "Muutoksen selitys", "", { required: true })}
+      </fieldset>
+      <p id="asset-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Tallenna rakennusosa</button>
+        <button type="button" class="secondary" id="asset-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  $("#asset-form").onsubmit = (event) => submitAssetForm(event, mode);
+  $("#asset-cancel").addEventListener("click", closeAssetEditor);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function ensureAssetEditorHost() {
+  let host = $("#asset-editor");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "asset-editor";
+    host.className = "subsection";
+    const view = document.querySelector('.view[data-view="assets"]');
+    view.insertBefore(host, $("#assets-list"));
+  }
+  return host;
+}
+
+function closeAssetEditor() {
+  const host = $("#asset-editor");
+  if (host) { host.hidden = true; host.innerHTML = ""; }
+}
+
+async function submitAssetForm(event, mode) {
+  event.preventDefault();
+  clearFieldErrors("#asset-form");
+  const raw = {
+    id: fieldValue("asset-id"),
+    name: fieldValue("asset-name"),
+    category: fieldValue("asset-category"),
+    active: $("#asset-active").checked,
+    sourceIds: fieldValue("asset-source-ids"),
+    operationSourceIds: fieldValue("asset-op-source-ids"),
+    explanation: fieldValue("asset-explanation"),
+  };
+  const result = buildSaveAssetOperation(raw);
+  if (!result.ok) {
+    applyFieldErrors("#asset-form", {
+      id: "asset-id", name: "asset-name", category: "asset-category",
+      active: "asset-active", sourceIds: "asset-source-ids",
+      operationSourceIds: "asset-op-source-ids", explanation: "asset-explanation",
+    }, result.errors);
+    setFeedback("#asset-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: mode === "edit" ? "Rakennusosa päivitetty." : "Rakennusosa lisätty.",
+  });
+  if (sent.ok) {
+    state.selectedAssetId = result.operation.value.id;
+    closeAssetEditor();
+    renderAssets();
+    renderAssetDetail();
+    openDetailPanel();
+  } else if (sent.conflict) {
+    setFeedback("#asset-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/* -------- Maintenance & finance placeholders (decision 5) -------- */
+
+function renderMaintenancePlaceholders() {
+  const body = (title) => stateBlock({
+    kind: "not-built",
+    title,
+    body: "Tämä näkymä toteutetaan vaiheessa 2. Tiedot ovat toistaiseksi nähtävissä rakennusosan detaljipaneelissa Rakennusosat-näkymässä.",
+  });
+  $("#observations-body").innerHTML = body("Havaintonäkymä tulossa");
+  $("#events-body").innerHTML = body("Korjaustapahtumanäkymä tulossa");
+  $("#cost-evidence-body").innerHTML = body("Kustannusnäyttö tulossa");
+}
+
+function renderFinancePlaceholders() {
+  for (const host of $$("[data-finance]")) {
+    host.innerHTML = stateBlock({
+      kind: "not-modelled",
+      title: "Tietomalli ei vielä tue tätä näkymää",
+      body: "Tilikohtainen talousmalli (FinancialAccount/FinancialEntry) toteutetaan vaiheessa 3. Yleiskuvan talousvuosivalitsin näyttää vuositason budjetti- ja toteumaluvut jo nyt.",
+    });
+  }
+}
+
+/* -------- Scenarios / cashpath / required collection (decision 3.3) -------- */
+
+function renderScenarios() {
+  const projection = state.admin.calculations?.projection;
+  const host = $("#scenarios-body");
+  if (!projection) { host.innerHTML = stateBlock({ kind: "empty", title: "Ei laskentaa", body: "Skenaariolaskentaa ei ole saatavilla." }); return; }
+  host.innerHTML = `<div class="scenario-grid">${SCENARIOS.map((scenario) => {
+    const p = projection.scenarios[scenario];
+    return `<article class="card scenario-card">
+      <h4>${scenario}</h4>
+      <div class="metric">${money(p.horizonAmount)}</div>
+      <div class="metric-label">tunnetut kustannukset horisontissa</div>
+      <ul>
+        <li>${p.horizonEventCount} tapahtumariviä</li>
+        <li>${p.dataGaps.withinHorizon.length} DATA GAPia horisontissa</li>
+        <li>${p.dataGaps.beforeHorizon.length + p.dataGaps.afterHorizon.length} DATA GAPia horisontin ulkopuolella</li>
+      </ul>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function renderCashpath() {
+  const liquidity = state.admin.calculations?.liquidity;
+  const host = $("#cashpath-body");
+  if (liquidity?.status !== "available") { host.innerHTML = liquidityUnavailableBlock(liquidity); return; }
+  const scenario = state.cashpathScenario;
+  const cashPath = liquidity.forecast.scenarios[scenario].cashPath;
+  const tabs = SCENARIOS.map((s) =>
+    `<button type="button" class="mode-tab${s === scenario ? " active" : ""}" data-cashpath="${s}">${s}</button>`).join("");
+  const rows = cashPath.years.map((year) => `<tr>
+    <td>${year.year}</td>
+    <td class="num">${money(year.openingCash)}</td>
+    <td class="num">${money(year.annualRepairCollection)}</td>
+    <td class="num">${money(year.knownRepairCosts)}</td>
+    <td class="num">${money(year.closingCash)}</td>
+    <td class="num">${money(year.operatingBufferTarget)}</td>
+    <td class="num">${year.bufferShortfall > 0 ? `<span class="warning">${money(year.bufferShortfall)}</span>` : money(0)}</td>
+    <td class="num">${year.dataGaps.length}</td>
+  </tr>`).join("");
+  host.innerHTML = `
+    <div class="mode-switch" style="margin-bottom:1rem">${tabs}</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Vuosi</th><th class="num">Avaava kassa</th><th class="num">Vuosikeräys</th><th class="num">Tunnetut kulut</th><th class="num">Päättävä kassa</th><th class="num">Puskuritavoite</th><th class="num">Puskurivaje</th><th class="num">DATA GAP</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  for (const button of $$("#cashpath-body [data-cashpath]")) {
+    button.addEventListener("click", () => { state.cashpathScenario = button.dataset.cashpath; renderCashpath(); });
+  }
+}
+
+function renderRequiredCollection() {
+  const liquidity = state.admin.calculations?.liquidity;
+  const host = $("#required-collection-body");
+  if (liquidity?.status !== "available") { host.innerHTML = liquidityUnavailableBlock(liquidity); return; }
+  host.innerHTML = `<div class="scenario-grid">${SCENARIOS.map((scenario) => {
+    const rc = liquidity.forecast.scenarios[scenario].requiredCollection;
+    const fn = liquidity.forecast.scenarios[scenario].fundingNeed;
+    const perApartment = rc.additionalMonthlyPerApartment;
+    const perM2 = rc.additionalMonthlyPerM2;
+    return `<article class="card scenario-card">
+      <h4>${scenario}</h4>
+      <div class="metric">${money(rc.knownCostRequiredAnnualCollection)}</div>
+      <div class="metric-label">vaadittu vuosikeräys tunnetuille kustannuksille</div>
+      <ul>
+        <li>Nykyinen keräys ${money(rc.currentAnnualRepairCollection)}/v</li>
+        <li>Lisätarve ${money(rc.additionalAnnualCollection)}/v</li>
+        <li>Lisätarve ${money(rc.additionalMonthlyCollection)}/kk</li>
+        ${perApartment === undefined ? "" : `<li>${money(perApartment)}/asunto/kk</li>`}
+        ${perM2 === undefined ? "" : `<li>${money(perM2)}/m²/kk</li>`}
+        <li>${fn.firstFundingNeedYear ? `Ensimmäinen rahoitustarve ${fn.firstFundingNeedYear}` : "Ei rahoitustarvetta tunnetuilla kustannuksilla"}</li>
+        <li>${rc.forecastComplete ? "<span class=\"ok\">Ennuste täydellinen</span>" : "<span class=\"warning\">Ennuste puutteellinen (DATA GAP)</span>"}</li>
+      </ul>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function liquidityUnavailableBlock(liquidity) {
+  const missing = liquidity?.missingFields ?? ["liquidityBaseline"];
+  return stateBlock({
+    kind: "unavailable",
+    title: "Likviditeettilaskentaa ei voi tehdä",
+    body: "Kassapolku ja vastiketarve vaativat likviditeetin lähtötiedot. Puuttuvat kentät:",
+    items: missing.map((field) => LIQUIDITY_FIELD_LABELS[field] ?? field),
+  });
+}
+
+const LIQUIDITY_FIELD_LABELS = {
+  liquidityBaseline: "Likviditeetin lähtötietue (save_liquidity_baseline)",
+  currentCash: "Nykyinen kassa",
+  trailing12mOperatingCosts: "12 kk hoitokulut",
+  currentAnnualRepairCollection: "Nykyinen vuosittainen korjauskeräys",
+};
+
+/* -------- Publish -------- */
+
+function renderPublish() {
+  const model = state.admin;
+  const publication = model.publication ?? {};
+  $("#publish-summary").innerHTML = [
+    ["Viimeisin julkaisu", publication.latestPublicationVersion ?? 0],
+    ["Julkaistavia muutoksia", publication.publishableChanges ? "Kyllä" : "Ei"],
+    ["Julkaisemattomia merkintöjä", publication.unpublishedAuditEntryCount ?? 0],
+    ["Admin-revisio", model.adminRevision],
+  ].map(kpiCard).join("");
+}
+
+async function publishAdmin() {
+  try {
+    if (!state.admin) await loadAdmin();
+    const form = new FormData($("#admin-publish-form"));
+    setStatus("Julkaistaan…", "busy");
+    const item = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/publish`, {
+      method: "POST",
+      adminToken: await getAdminAccessToken(),
+      body: {
+        expectedAdminRevision: state.admin.adminRevision,
+        expectedPublishedVersion: state.admin.publication.latestPublicationVersion,
+        sourceIds: [String(form.get("sourceId"))],
+        explanation: String(form.get("explanation")),
+      },
+    });
+    setStatus(`Julkaisu ${item.publicationVersion} luotu`);
+    toast(`Julkaisuversio ${item.publicationVersion} luotu.`);
+    await loadAdmin();
+  } catch (error) {
+    setStatus("Julkaisu epäonnistui", "error");
+    showError(error);
+  }
+}
+
+/* -------- Developer batch -------- */
+
+async function saveAdminBatch(event) {
+  event.preventDefault();
+  try {
+    let operations;
+    try { operations = JSON.parse($("#admin-operations").value); }
+    catch { toast("Virheellinen JSON.", true); return; }
+    await sendAdminOperations(operations, { successMessage: "Admin-batch tallennettu." });
   } catch (error) { showError(error); }
 }
+
+/* ---------------------------------------------------------------- visitor (preserved) */
 
 async function loadPublished() {
   try {
@@ -221,10 +950,7 @@ async function createSession() {
     if (!state.published) await loadPublished();
     const handle = await api(`/api/v1/public/companies/${encodeURIComponent(companyId())}/sessions`, {
       method: "POST",
-      body: {
-        publicationVersion: state.published.publicationVersion,
-        horizon: horizon(),
-      },
+      body: { publicationVersion: state.published.publicationVersion, horizon: horizon() },
     });
     state.visitorCredential = handle.credential;
     sessionStorage.setItem("tmVisitorCredential", JSON.stringify(handle.credential));
@@ -336,66 +1062,19 @@ async function saveCustomEvent(event) {
   } catch (error) { showError(error); }
 }
 
-async function loadAdmin() {
-  try {
-    state.admin = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/workspace${horizonQuery()}`, {
-      adminToken: await getAdminAccessToken(),
-    });
-    renderAdmin();
-    toast(`Admin-revisio ${state.admin.adminRevision} ladattu.`);
-  } catch (error) { showError(error); }
-}
-
-async function saveAdminBatch(event) {
-  event.preventDefault();
-  try {
-    if (!state.admin) await loadAdmin();
-    const operations = JSON.parse($("#admin-operations").value);
-    state.admin = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/changes`, {
-      method: "POST",
-      adminToken: await getAdminAccessToken(),
-      body: { expectedRevision: state.admin.adminRevision, horizon: horizon(), operations },
-    });
-    renderAdmin();
-    toast("Admin-batch tallennettu pysyvään työtilaan.");
-  } catch (error) { showError(error); }
-}
-
-async function publishAdmin() {
-  try {
-    if (!state.admin) await loadAdmin();
-    const form = new FormData($("#admin-publish-form"));
-    const item = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/publish`, {
-      method: "POST",
-      adminToken: await getAdminAccessToken(),
-      body: {
-        expectedAdminRevision: state.admin.adminRevision,
-        expectedPublishedVersion: state.admin.publication.latestPublicationVersion,
-        sourceIds: [String(form.get("sourceId"))],
-        explanation: String(form.get("explanation")),
-      },
-    });
-    toast(`Julkaisuversio ${item.publicationVersion} luotu.`);
-    await loadAdmin();
-  } catch (error) { showError(error); }
-}
-
 function renderPublishedSummary(model) {
-  $("#visitor-summary").innerHTML = cards([
+  $("#visitor-summary").innerHTML = [
     ["Julkaisu", model.publicationVersion],
     ["Rakennusosat", model.data.assets.length],
     ["Suunnitellut tapahtumat", model.data.approvedEvents.length],
     ["Toteutunut historia", model.data.actualHistory.length],
-  ]);
+  ].map(kpiCard).join("");
 }
 
 function renderVisitor() {
   const model = state.visitor;
   $("#visitor-session-status").textContent = `Sessio ${model.sessionId} · revisio ${model.sessionRevision} · julkaisu ${model.publicationVersion} · muutoksia ${model.changes.modificationCount}`;
-  renderPublishedSummary({
-    publicationVersion: model.publicationVersion,
-    data: model.publishedData,
-  });
+  renderPublishedSummary({ publicationVersion: model.publicationVersion, data: model.publishedData });
   $("#custom-asset").innerHTML = model.publishedData.assets.map((asset) => `<option value="${escapeHtml(asset.id)}">${escapeHtml(asset.name)}</option>`).join("");
   $("#visitor-event-rows").innerHTML = model.effectiveApprovedEvents.flatMap((event) =>
     event.schedule.map((entry) => `
@@ -409,169 +1088,13 @@ function renderVisitor() {
         <td><button class="row-save secondary">Tallenna</button></td>
       </tr>`)
   ).join("") || `<tr><td colspan="7" class="muted">Ei tapahtumia.</td></tr>`;
-  document.querySelectorAll(".row-save").forEach((button) => button.addEventListener("click", () => saveEventRow(button)));
-  renderScenarioCards($("#visitor-scenarios"), model.projection, model.liquidity);
+  for (const button of $$("#visitor-event-rows .row-save")) button.addEventListener("click", () => saveEventRow(button));
+  renderVisitorScenarios(model.projection, model.liquidity);
   fillLiquidityForm(model);
 }
 
-function fillLiquidityForm(model) {
-  if (model.liquidity.status !== "available") return;
-  const form = $("#visitor-liquidity-form");
-  const a = model.liquidity.assumptions;
-  form.elements.currentCash.value = a.currentCash;
-  form.elements.trailing12mOperatingCosts.value = a.trailing12mOperatingCosts;
-  form.elements.bufferMonths.value = a.operatingBufferSettings.bufferMonths ?? "";
-  for (const scenario of ["optimistic", "base", "stress"]) {
-    form.elements[scenario].value = a.annualRepairCollectionByScenario[scenario];
-  }
-}
-
-function renderAdmin() {
-  const model = state.admin;
-  const data = adminSnapshot(model);
-  const company = data?.housingCompany ?? null;
-  const publication = model.publication ?? {};
-
-  $("#admin-summary").innerHTML = cards([
-    ["Työrevisio", model.adminRevision],
-    ["Julkaisu", publication.latestPublicationVersion ?? 0],
-    ["Rakennusosat", countOf(data?.assets, model.counts?.assets)],
-    ["Hyväksytyt tapahtumat", model.counts?.approvedEvents ?? approvedEventCount(data?.events)],
-    ["DATA GAPit horisontissa", model.counts?.dataGapsWithinHorizon ?? dataGapCount(model)],
-    ["Julkaistavia muutoksia", publication.publishableChanges ? "Kyllä" : "Ei"],
-  ]);
-
-  $("#admin-overview-cards").innerHTML = cards([
-    ["Taloyhtiö", company?.name ?? companyId()],
-    ["Huoneistoja", company?.apartmentCount ?? "—"],
-    ["Pinta-ala m²", company?.chargeableAreaM2 ?? "—"],
-    ["Tilikaudet", countOf(data?.financialYears)],
-    ["Likviditeettirivit", countOf(data?.liquidityBaselines)],
-    ["Kustannusnäyttö", countOf(data?.costEvidence)],
-  ]);
-  $("#admin-overview-notes").innerHTML = renderOverviewNotes(model, data);
-  $("#admin-company-details").innerHTML = renderCompanyDetails(company, data);
-  $("#admin-assets-rows").innerHTML = renderAssetsRows(data?.assets);
-  $("#admin-observation-rows").innerHTML = renderObservationRows(data?.observations);
-  $("#admin-evidence-rows").innerHTML = renderEvidenceRows(data?.costEvidence);
-  $("#admin-event-rows").innerHTML = renderAdminEventRows(data?.events ?? model.events);
-  renderScenarioCards($("#admin-scenarios"), model.calculations.projection, model.calculations.liquidity);
-  renderAdminLiquidity(model, data);
-  renderAdminPublication(model);
-}
-
-function adminSnapshot(model) {
-  return model?.data ?? model?.adminData ?? model?.snapshot ?? model?.workspace ?? model?.adminSnapshot ?? null;
-}
-
-function countOf(value, fallback = "—") {
-  return Array.isArray(value) ? value.length : fallback;
-}
-
-function approvedEventCount(events) {
-  return Array.isArray(events) ? events.filter((event) => event.status === "approved").length : "—";
-}
-
-function dataGapCount(model) {
-  const scenarios = model?.calculations?.projection?.scenarios;
-  if (!scenarios) return "—";
-  return ["optimistic", "base", "stress"].reduce((sum, scenario) =>
-    sum + (scenarios[scenario]?.dataGaps?.withinHorizon?.length ?? 0), 0);
-}
-
-function renderOverviewNotes(model, data) {
-  const missingData = data === null;
-  return [
-    infoCard("Tila", missingData ? "API-vastaus ei sisällä raakaa admin snapshotia. Yhteenveto ja laskenta renderöidään read modelista." : "Admin snapshot ladattu käyttöliittymään."),
-    infoCard("Seuraava UI-vaihe", "Nämä osiot ovat nyt näkyvissä read-only -runkona. Seuraavaksi niihin lisätään muokkauslomakkeet."),
-    infoCard("Julkaisu", model.publication?.publishableChanges ? "Työversiossa on julkaistavia muutoksia." : "Ei julkaistavia muutoksia tai työversio vastaa viimeisintä julkaisua."),
-  ].join("");
-}
-
-function renderCompanyDetails(company, data) {
-  if (!company) return emptyBlock("Taloyhtiön raakadata ei sisälly API-vastaukseen.");
-  return [
-    detailItem("ID", company.id),
-    detailItem("Nimi", company.name),
-    detailItem("Huoneistot", company.apartmentCount),
-    detailItem("Vastikepinta-ala", company.chargeableAreaM2 === undefined ? "—" : `${company.chargeableAreaM2} m²`),
-    detailItem("Puskurikuukaudet", company.operatingBuffer?.bufferMonths ?? "—"),
-    detailItem("Puskurin käsiasetus", company.operatingBuffer?.userOverride === undefined ? "—" : money(company.operatingBuffer.userOverride)),
-    detailItem("Revisio", data?.revision ?? "—"),
-    detailItem("Päivitetty", data?.updatedAt ?? "—"),
-    detailItem("Päivittäjä", data?.updatedBy ?? "—"),
-  ].join("");
-}
-
-function renderAssetsRows(assets) {
-  if (!Array.isArray(assets) || assets.length === 0) return emptyRow(5, "Ei rakennusosia.");
-  return assets.map((asset) => `<tr><td>${escapeHtml(String(asset.id))}</td><td>${escapeHtml(String(asset.name))}</td><td>${escapeHtml(String(asset.category))}</td><td>${asset.active ? "Kyllä" : "Ei"}</td><td>${escapeHtml((asset.sourceIds ?? []).join(", "))}</td></tr>`).join("");
-}
-
-function renderObservationRows(observations) {
-  if (!Array.isArray(observations) || observations.length === 0) return emptyRow(5, "Ei havaintoja.");
-  return observations.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.assetId))}</td><td>${escapeHtml(String(item.observedAt))}</td><td>${escapeHtml(String(item.description))}</td><td>${escapeHtml((item.sourceIds ?? []).join(", "))}</td></tr>`).join("");
-}
-
-function renderEvidenceRows(items) {
-  if (!Array.isArray(items) || items.length === 0) return emptyRow(7, "Ei kustannusnäyttöä.");
-  return items.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.status))}</td><td>${item.amount === undefined ? "DATA GAP" : money(item.amount)}</td><td>${escapeHtml(String(item.unit))}</td><td>${escapeHtml(String(item.priceLevelYear))}</td><td>${escapeHtml(item.assetId ?? item.eventId ?? "—")}</td><td>${escapeHtml(item.sourceId ?? item.sourceUrl ?? "—")}</td></tr>`).join("");
-}
-
-function renderAdminEventRows(events) {
-  if (!Array.isArray(events) || events.length === 0) return emptyRow(7, "Ei tapahtumia.");
-  return events.map((event) => {
-    const schedule = Array.isArray(event.schedule)
-      ? event.schedule.map((entry) => `${entry.scenario} ${entry.year}${entry.amount === undefined ? " · DATA GAP" : ` · ${money(entry.amount)}`}`).join("<br>")
-      : event.actual ? `actual ${event.actual.year}${event.actual.amount === undefined ? "" : ` · ${money(event.actual.amount)}`}` : "—";
-    return `<tr><td>${escapeHtml(String(event.id))}</td><td>${escapeHtml(String(event.assetId))}</td><td>${escapeHtml(String(event.title))}</td><td>${escapeHtml(String(event.status))}</td><td>${escapeHtml(String(event.type ?? "—"))}</td><td>${escapeHtml(String(event.origin ?? "—"))}</td><td>${schedule}</td></tr>`;
-  }).join("");
-}
-
-function renderAdminLiquidity(model, data) {
-  const liquidity = model.calculations?.liquidity;
-  if (liquidity?.status === "available") {
-    $("#admin-liquidity-cards").innerHTML = cards([
-      ["Puskurikuukaudet", liquidity.forecast.operatingBuffer.bufferMonths],
-      ["Suositeltu puskuri", money(liquidity.forecast.operatingBuffer.suggestedOperatingBuffer)],
-      ["Puskuritavoite", money(liquidity.forecast.operatingBuffer.operatingBufferTarget)],
-      ["Peruste", liquidity.forecast.operatingBuffer.basis],
-    ]);
-  } else {
-    $("#admin-liquidity-cards").innerHTML = cards([["Likviditeetti", "Lähtötiedot puuttuvat"]]);
-  }
-  const rows = Array.isArray(data?.liquidityBaselines) && data.liquidityBaselines.length > 0
-    ? data.liquidityBaselines.map((item) => `<tr><td>${escapeHtml(String(item.id))}</td><td>${escapeHtml(String(item.asOfDate))}</td><td>${money(item.currentCash)}</td><td>${money(item.trailing12mOperatingCosts)}</td><td>${money(item.currentAnnualRepairCollection)}</td><td>${escapeHtml((item.sourceIds ?? []).join(", "))}</td></tr>`).join("")
-    : emptyRow(6, "Ei likviditeetin lähtötietoja.");
-  $("#admin-liquidity-baselines").innerHTML = `<table><thead><tr><th>ID</th><th>Päivä</th><th>Kassa</th><th>12 kk hoitokulut</th><th>Korjauskeräys/v</th><th>Lähteet</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function renderAdminPublication(model) {
-  $("#admin-publication-summary").innerHTML = cards([
-    ["Viimeisin julkaisu", model.publication?.latestPublicationVersion ?? 0],
-    ["Julkaistavia muutoksia", model.publication?.publishableChanges ? "Kyllä" : "Ei"],
-    ["Admin-revisio", model.adminRevision],
-  ]);
-}
-
-function detailItem(label, value) {
-  return `<article class="detail-item"><span>${escapeHtml(String(label))}</span><strong>${escapeHtml(String(value))}</strong></article>`;
-}
-
-function infoCard(title, body) {
-  return `<article class="card"><h4>${escapeHtml(String(title))}</h4><p>${escapeHtml(String(body))}</p></article>`;
-}
-
-function emptyBlock(message) {
-  return `<article class="card muted">${escapeHtml(message)}</article>`;
-}
-
-function emptyRow(colspan, message) {
-  return `<tr><td colspan="${colspan}" class="muted">${escapeHtml(message)}</td></tr>`;
-}
-
-function renderScenarioCards(target, projection, liquidity) {
-  target.innerHTML = ["optimistic", "base", "stress"].map((scenario) => {
+function renderVisitorScenarios(projection, liquidity) {
+  $("#visitor-scenarios").innerHTML = SCENARIOS.map((scenario) => {
     const p = projection.scenarios[scenario];
     const liq = liquidity.status === "available" ? liquidity.forecast.scenarios[scenario] : null;
     return `<article class="card scenario-card">
@@ -587,12 +1110,32 @@ function renderScenarioCards(target, projection, liquidity) {
   }).join("");
 }
 
-function cards(items) {
-  return items.map(([label, value]) => `<article class="card"><div class="metric-label">${escapeHtml(String(label))}</div><div class="metric">${escapeHtml(String(value))}</div></article>`).join("");
+function fillLiquidityForm(model) {
+  if (model.liquidity.status !== "available") return;
+  const form = $("#visitor-liquidity-form");
+  const a = model.liquidity.assumptions;
+  form.elements.currentCash.value = a.currentCash;
+  form.elements.trailing12mOperatingCosts.value = a.trailing12mOperatingCosts;
+  form.elements.bufferMonths.value = a.operatingBufferSettings.bufferMonths ?? "";
+  for (const scenario of SCENARIOS) {
+    form.elements[scenario].value = a.annualRepairCollectionByScenario[scenario];
+  }
+}
+
+/* ---------------------------------------------------------------- shared api + view helpers */
+
+async function checkHealth() {
+  try {
+    const data = await api("/api/v1/health");
+    setStatus(`API ${data.status} · ${data.apiVersion}`);
+  } catch (error) {
+    setStatus("API ei vastaa", "error");
+    console.warn(error);
+  }
 }
 
 async function api(url, options = {}) {
-  const headers = { "accept": "application/json" };
+  const headers = { accept: "application/json" };
   if (options.body !== undefined) headers["content-type"] = "application/json";
   if (options.adminToken) headers.authorization = `Bearer ${options.adminToken}`;
   if (options.visitorToken) headers["x-tm-session-token"] = options.visitorToken;
@@ -607,6 +1150,7 @@ async function api(url, options = {}) {
     error.code = data.error?.code;
     if (response.status === 401 && options.adminToken) {
       clearAuthSession();
+      state.admin = null;
       renderAuthStatus();
     }
     throw error;
@@ -618,6 +1162,99 @@ function horizonQuery() {
   const value = horizon();
   return `?startYear=${encodeURIComponent(value.startYear)}&endYear=${encodeURIComponent(value.endYear)}`;
 }
+
+/* -------- field helpers -------- */
+
+function textField(id, label, value, opts = {}) {
+  const attrs = [
+    opts.required ? "required" : "",
+    opts.readonly ? "readonly" : "",
+  ].filter(Boolean).join(" ");
+  return `<label for="${id}">${escapeHtml(label)}
+    <input id="${id}" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error" autocomplete="off">
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function numberField(id, label, value, opts = {}) {
+  const attrs = [
+    opts.required ? "required" : "",
+    opts.min !== undefined ? `min="${opts.min}"` : "",
+    opts.step !== undefined ? `step="${opts.step}"` : "",
+  ].filter(Boolean).join(" ");
+  return `<label for="${id}">${escapeHtml(label)}
+    <input id="${id}" type="number" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error">
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function selectField(id, label, options, selected) {
+  const opts = options.map(([value, text]) =>
+    `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(text)}</option>`).join("");
+  return `<label for="${id}">${escapeHtml(label)}
+    <select id="${id}" aria-describedby="${id}-error">${opts}</select>
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function checkboxField(id, label, checked) {
+  return `<label class="checkbox-field" for="${id}">
+    <input id="${id}" type="checkbox"${checked ? " checked" : ""}> ${escapeHtml(label)}
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function fieldValue(id) { return $(`#${id}`).value; }
+
+function clearFieldErrors(formSelector) {
+  for (const span of $$(`${formSelector} .field-error`)) span.textContent = "";
+  for (const input of $$(`${formSelector} [aria-invalid]`)) input.removeAttribute("aria-invalid");
+}
+
+function applyFieldErrors(formSelector, fieldMap, errors) {
+  for (const [key, message] of Object.entries(errors)) {
+    const id = fieldMap[key];
+    if (!id) continue;
+    const errorSpan = $(`#${id}-error`);
+    const input = $(`#${id}`);
+    if (errorSpan) errorSpan.textContent = message;
+    if (input) input.setAttribute("aria-invalid", "true");
+  }
+}
+
+function setFeedback(selector, message, kind) {
+  const el = $(selector);
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("is-error", kind === "error");
+  el.classList.toggle("is-ok", kind === "ok");
+}
+
+/* -------- render primitives -------- */
+
+function kpiCard([label, value]) {
+  const muted = value === "—" ? " is-muted" : "";
+  return `<article class="card"><div class="metric-label">${escapeHtml(String(label))}</div><div class="metric${muted}">${escapeHtml(String(value))}</div></article>`;
+}
+
+function infoCard(title, bodyHtml) {
+  return `<article class="card"><h4>${escapeHtml(String(title))}</h4><div class="muted">${bodyHtml}</div></article>`;
+}
+
+function detailGroup(title, items, emptyText) {
+  const body = items.length > 0
+    ? `<ul class="detail-list">${items.join("")}</ul>`
+    : `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return `<div class="detail-group"><h4>${escapeHtml(title)}</h4>${body}</div>`;
+}
+
+function stateBlock({ kind, title, body, items }) {
+  const list = items && items.length > 0
+    ? `<ul>${items.map((item) => `<li>${escapeHtml(String(item))}</li>`).join("")}</ul>`
+    : "";
+  return `<div class="state-block is-${kind}"><h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>${list}</div>`;
+}
+
 function optionalNumber(value) {
   const text = String(value ?? "").trim();
   return text === "" ? undefined : Number(text);
@@ -629,7 +1266,7 @@ function money(value) {
   return new Intl.NumberFormat("fi-FI", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(value);
 }
 function escapeHtml(value) {
-  return value.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
+  return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 }
 function readCredential() {
   try { return JSON.parse(sessionStorage.getItem("tmVisitorCredential")); } catch { return null; }
@@ -647,9 +1284,4 @@ function showError(error) {
   toast(`${error.code ? `${error.code}: ` : ""}${error.message}`, true);
 }
 
-renderAuthStatus();
-checkHealth();
-if (state.visitorCredential) loadVisitor().catch(() => {
-  state.visitorCredential = null;
-  sessionStorage.removeItem("tmVisitorCredential");
-});
+boot();
