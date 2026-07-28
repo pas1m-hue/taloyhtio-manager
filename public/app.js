@@ -55,6 +55,8 @@ function boot() {
   wireStaticControls();
   wireNavigation();
   wireModeSwitch();
+  renderMaintenancePlaceholders();
+  renderFinancePlaceholders();
   renderAuthStatus();
   applyRoute();
   checkHealth();
