@@ -3,6 +3,7 @@ import type {
   CostEvidence,
   Horizon,
   Observation,
+  PriceLevelConfirmation,
 } from "../domain/types.js";
 import { createAdminDataSnapshot } from "../admin/applyAdminBatch.js";
 import { buildAdminDashboardReadModel } from "./adminDashboard.js";
@@ -26,6 +27,13 @@ const dataGapEvidence: CostEvidence = {
   sourceId: "inspection_2026",
 };
 
+const priceLevelConfirmation: PriceLevelConfirmation = {
+  costEvidenceId: "gap_roof",
+  targetYear: 2026,
+  confirmedAt: "2026-03-02",
+  confirmedBy: "admin:test",
+};
+
 function snapshotWithMaintenanceData() {
   return createAdminDataSnapshot({
     housingCompany: {
@@ -44,6 +52,7 @@ function snapshotWithMaintenanceData() {
     ],
     observations: [observation],
     costEvidence: [dataGapEvidence],
+    priceLevelConfirmations: [priceLevelConfirmation],
     updatedAt: "2026-07-17T15:00:00+03:00",
     updatedBy: "admin:test",
   });
@@ -57,6 +66,7 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
 
     expect(model.observations).toEqual([observation]);
     expect(model.costEvidence).toEqual([dataGapEvidence]);
+    expect(model.priceLevelConfirmations).toEqual([priceLevelConfirmation]);
   });
 
   it("returns deep clones, not references into the snapshot", () => {
@@ -66,8 +76,10 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
 
     expect(model.observations).not.toBe(admin.observations);
     expect(model.costEvidence).not.toBe(admin.costEvidence);
+    expect(model.priceLevelConfirmations).not.toBe(admin.priceLevelConfirmations);
     expect(model.observations[0]).not.toBe(admin.observations[0]);
     expect(model.costEvidence[0]).not.toBe(admin.costEvidence[0]);
+    expect(model.priceLevelConfirmations[0]).not.toBe(admin.priceLevelConfirmations[0]);
   });
 
   it("keeps empty maintenance collections as empty arrays", () => {
@@ -85,5 +97,6 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
 
     expect(model.observations).toEqual([]);
     expect(model.costEvidence).toEqual([]);
+    expect(model.priceLevelConfirmations).toEqual([]);
   });
 });
