@@ -185,18 +185,71 @@
             <div id="assets-list" class="assets-list"></div>
           </section>
 
-          <!-- Kunnossapito: placeholderit (näkymä ei vielä toteutettu tässä vaiheessa) -->
+          <!-- Havainnot -->
           <section class="view" data-view="observations" aria-labelledby="observations-title" hidden>
-            <header class="view-head"><h2 id="observations-title">Havainnot</h2></header>
-            <div id="observations-body"></div>
+            <header class="view-head">
+              <div>
+                <h2 id="observations-title">Havainnot</h2>
+                <p class="view-lead muted">Havainto kuuluu aina rakennusosaan. Korjaustapahtuman luonti havainnosta toteutetaan vaiheessa 2B.</p>
+              </div>
+              <div class="button-row">
+                <button id="observations-new" type="button" class="secondary" disabled>Lisää havainto</button>
+              </div>
+            </header>
+            <div id="observations-kpis" class="card-grid"></div>
+            <div class="assets-filters">
+              <label>Rakennusosa
+                <select id="observations-filter-asset">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Alkaen
+                <input id="observations-filter-from" type="date">
+              </label>
+              <label>Päättyen
+                <input id="observations-filter-to" type="date">
+              </label>
+              <label>Haku
+                <input id="observations-filter-search" type="search" placeholder="Kuvaus tai tunniste" autocomplete="off">
+              </label>
+            </div>
+            <div id="observations-list"></div>
           </section>
+
+          <!-- Korjaustapahtumat: placeholder (näkymä vaiheessa 2B) -->
           <section class="view" data-view="events" aria-labelledby="events-title" hidden>
             <header class="view-head"><h2 id="events-title">Korjaustapahtumat</h2></header>
             <div id="events-body"></div>
           </section>
+
+          <!-- Kustannusnäyttö -->
           <section class="view" data-view="cost-evidence" aria-labelledby="cost-evidence-title" hidden>
-            <header class="view-head"><h2 id="cost-evidence-title">Kustannusnäyttö</h2></header>
-            <div id="cost-evidence-body"></div>
+            <header class="view-head">
+              <div>
+                <h2 id="cost-evidence-title">Kustannusnäyttö</h2>
+                <p class="view-lead muted">Tuntematon kustannus on nimetty DATA GAP, ei koskaan nolla.</p>
+              </div>
+              <div class="button-row">
+                <button id="cost-evidence-new" type="button" class="secondary" disabled>Lisää kustannusnäyttö</button>
+              </div>
+            </header>
+            <div id="cost-evidence-kpis" class="card-grid"></div>
+            <div class="assets-filters">
+              <label>Tila
+                <select id="cost-evidence-filter-status">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Rakennusosa
+                <select id="cost-evidence-filter-asset">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label class="checkbox-field">
+                <input id="cost-evidence-filter-gap-only" type="checkbox"> Vain DATA GAP
+              </label>
+            </div>
+            <div id="cost-evidence-list"></div>
           </section>
 
           <!-- Talous: placeholderit (tilikohtainen tietomalli ei vielä käytössä) -->
