@@ -8,3 +8,4 @@ dist-worker/
 !.env.production.example
 *.log
 .DS_Store
+.claude/
