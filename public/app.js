@@ -1,12 +1,21 @@
 import {
   ASSET_CATEGORIES,
   buildAssetListViewModel,
+  buildCostEvidenceListViewModel,
+  buildObservationListViewModel,
   buildSaveAssetOperation,
+  buildSaveCostEvidenceOperation,
   buildSaveHousingCompanyOperation,
+  buildSaveObservationOperation,
+  buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
+  COST_EVIDENCE_STATUSES,
   countActiveAssets,
+  countObservationsWithoutEvent,
   deriveDataGapAssets,
   interpretRevisionConflict,
+  isCostEvidenceExpired,
+  PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
 } from "./adminOperationPayloads.js";
 
@@ -17,9 +26,21 @@ const KNOWN_VIEWS = new Set([
   "scenarios", "cashpath", "required-collection", "publish", "developer",
 ]);
 
+// Views that own the right-hand detail panel; navigating to any other view
+// closes it (decision: generalized from vaihe 1's assets-only behaviour).
+const DETAIL_PANEL_VIEWS = new Set(["assets", "observations", "cost-evidence"]);
+
 const CATEGORY_LABELS = {
   hvac: "LVI", envelope: "Vaippa", structures: "Rakenteet",
   yard: "Piha", safety: "Turvallisuus", other: "Muu",
+};
+
+const COST_EVIDENCE_STATUS_LABELS = {
+  actual: "Toteuma",
+  quote: "Tarjous",
+  estimate: "Arvio",
+  estimate_from_actual: "Arvio toteuman pohjalta",
+  data_gap: "DATA GAP",
 };
 
 const SCENARIOS = ["optimistic", "base", "stress"];
@@ -28,9 +49,9 @@ const state = {
   mode: "admin",
   view: "overview",
   admin: null,
-  selectedAssetId: null,
+  /** Detail-panel selection: null or { view: "assets"|"observations"|"cost-evidence", id }. */
+  selection: null,
   selectedFiscalYear: null,
-  assetEditor: null,
   cashpathScenario: "base",
   published: null,
   visitor: null,
@@ -38,6 +59,16 @@ const state = {
   auth: readAuthSession(),
   staleWorkspace: false,
 };
+
+function selectionId(view) {
+  return state.selection && state.selection.view === view ? state.selection.id : null;
+}
+
+function selectionStillExists(selection, model) {
+  const lists = { assets: model.assets, observations: model.observations, "cost-evidence": model.costEvidence };
+  const list = lists[selection.view];
+  return Boolean(list) && list.some((item) => item.id === selection.id);
+}
 
 let authRefreshPromise = null;
 
@@ -55,7 +86,7 @@ function boot() {
   wireStaticControls();
   wireNavigation();
   wireModeSwitch();
-  renderMaintenancePlaceholders();
+  renderEventsPlaceholder();
   renderFinancePlaceholders();
   renderAuthStatus();
   applyRoute();
@@ -80,6 +111,15 @@ function wireStaticControls() {
   $("#assets-filter-category").addEventListener("change", renderAssets);
   $("#assets-filter-active").addEventListener("change", renderAssets);
   $("#assets-filter-search").addEventListener("input", renderAssets);
+  $("#observations-new").addEventListener("click", () => openObservationEditor("new"));
+  $("#observations-filter-asset").addEventListener("change", renderObservations);
+  $("#observations-filter-from").addEventListener("change", renderObservations);
+  $("#observations-filter-to").addEventListener("change", renderObservations);
+  $("#observations-filter-search").addEventListener("input", renderObservations);
+  $("#cost-evidence-new").addEventListener("click", () => openCostEvidenceEditor("new"));
+  $("#cost-evidence-filter-status").addEventListener("change", renderCostEvidence);
+  $("#cost-evidence-filter-asset").addEventListener("change", renderCostEvidence);
+  $("#cost-evidence-filter-gap-only").addEventListener("change", renderCostEvidence);
   $("#topbar-fiscal-year").addEventListener("change", (event) => {
     state.selectedFiscalYear = Number(event.target.value);
     renderOverview();
@@ -105,6 +145,15 @@ function wireStaticControls() {
     option.textContent = CATEGORY_LABELS[category] ?? category;
     filter.append(option);
   }
+
+  // Populate cost-evidence status filter once.
+  const statusFilter = $("#cost-evidence-filter-status");
+  for (const status of COST_EVIDENCE_STATUSES) {
+    const option = document.createElement("option");
+    option.value = status;
+    option.textContent = COST_EVIDENCE_STATUS_LABELS[status] ?? status;
+    statusFilter.append(option);
+  }
 }
 
 /* ---------------------------------------------------------------- routing */
@@ -126,8 +175,8 @@ function applyRoute() {
   for (const link of $$(".nav-link")) {
     link.classList.toggle("active", link.dataset.view === view);
   }
-  if (view !== "assets") closeDetailPanel();
-  else if (state.selectedAssetId) openDetailPanel();
+  if (!DETAIL_PANEL_VIEWS.has(view)) closeDetailPanel();
+  else if (state.selection && state.selection.view === view) openDetailPanel();
 }
 
 function navigate(view) {
@@ -201,7 +250,6 @@ async function signOutAdmin() {
   } finally {
     clearAuthSession();
     state.admin = null;
-    state.selectedAssetId = null;
     closeDetailPanel();
     renderAuthStatus();
     toast("Kirjauduttu ulos.");
@@ -312,7 +360,7 @@ function renderAuthStatus() {
   $("#admin-auth-gate").hidden = signedIn;
   $("#admin-workspace").hidden = !signedIn;
   $("#admin-sign-out").disabled = !signedIn;
-  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new"]) {
+  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new", "#observations-new", "#cost-evidence-new"]) {
     $(selector).disabled = !signedIn;
   }
   $("#admin-batch-form button[type=submit]").disabled = !signedIn;
@@ -345,8 +393,7 @@ async function loadAdmin() {
     );
     state.admin = model;
     state.staleWorkspace = false;
-    if (state.selectedAssetId && !model.assets.some((a) => a.id === state.selectedAssetId)) {
-      state.selectedAssetId = null;
+    if (state.selection && !selectionStillExists(state.selection, model)) {
       closeDetailPanel();
     }
     renderWorkspace();
@@ -413,7 +460,9 @@ function renderWorkspace() {
   renderFiscalSelector();
   renderCompanyForm();
   renderAssets();
-  renderMaintenancePlaceholders();
+  renderObservations();
+  renderCostEvidence();
+  renderEventsPlaceholder();
   renderFinancePlaceholders();
   renderScenarios();
   renderCashpath();
@@ -430,7 +479,12 @@ function renderLoadPrompts() {
   $("#overview-kpis").innerHTML = "";
   $("#overview-fiscal").innerHTML = "";
   $("#overview-notes").innerHTML = prompt;
-  for (const id of ["#assets-list", "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary"]) {
+  $("#observations-kpis").innerHTML = "";
+  $("#cost-evidence-kpis").innerHTML = "";
+  for (const id of [
+    "#assets-list", "#observations-list", "#cost-evidence-list",
+    "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary",
+  ]) {
     $(id).innerHTML = prompt;
   }
   $("#company-form").innerHTML = prompt;
@@ -623,8 +677,9 @@ function renderAssets() {
     });
     return;
   }
+  const selectedAssetId = selectionId("assets");
   host.innerHTML = vm.rows.map((row) => {
-    const selected = row.id === state.selectedAssetId ? " is-selected" : "";
+    const selected = row.id === selectedAssetId ? " is-selected" : "";
     const gap = gapAssets.has(row.id) ? `<span class="badge gap">DATA GAP</span>` : "";
     const badge = row.active
       ? `<span class="badge active">Aktiivinen</span>`
@@ -643,15 +698,23 @@ function renderAssets() {
 }
 
 function selectAsset(assetId) {
-  state.selectedAssetId = assetId;
+  state.selection = { view: "assets", id: assetId };
   renderAssets();
-  renderAssetDetail();
+  renderDetailPanel();
   openDetailPanel();
+}
+
+/** Dispatches to the detail renderer for whichever entity is selected. */
+function renderDetailPanel() {
+  if (!state.selection) return;
+  if (state.selection.view === "assets") renderAssetDetail();
+  else if (state.selection.view === "observations") renderObservationDetail();
+  else if (state.selection.view === "cost-evidence") renderCostEvidenceDetail();
 }
 
 function renderAssetDetail() {
   const model = state.admin;
-  const asset = model.assets.find((item) => item.id === state.selectedAssetId);
+  const asset = model.assets.find((item) => item.id === selectionId("assets"));
   if (!asset) { closeDetailPanel(); return; }
   const observations = model.observations.filter((o) => o.assetId === asset.id);
   const events = model.events.filter((e) => e.assetId === asset.id);
@@ -682,8 +745,21 @@ function renderAssetDetail() {
 function openDetailPanel() { $("#detail-panel").hidden = false; }
 function closeDetailPanel() {
   $("#detail-panel").hidden = true;
-  state.selectedAssetId = null;
-  for (const card of $$("#assets-list .asset-card.is-selected")) card.classList.remove("is-selected");
+  state.selection = null;
+  for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected")) {
+    el.classList.remove("is-selected");
+  }
+}
+
+// Mirrors sourceField into opField as the user types, unless the user has typed into opField directly.
+function wireSourceIdsPrefill(sourceFieldId, opFieldId) {
+  const sourceField = $(`#${sourceFieldId}`);
+  const opField = $(`#${opFieldId}`);
+  let opFieldTouched = false;
+  opField.addEventListener("input", () => { opFieldTouched = true; });
+  sourceField.addEventListener("input", () => {
+    if (!opFieldTouched) opField.value = sourceField.value;
+  });
 }
 
 function openAssetEditor(mode, assetId) {
@@ -716,6 +792,7 @@ function openAssetEditor(mode, assetId) {
   `;
   $("#asset-form").onsubmit = (event) => submitAssetForm(event, mode);
   $("#asset-cancel").addEventListener("click", closeAssetEditor);
+  wireSourceIdsPrefill("asset-source-ids", "asset-op-source-ids");
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -762,27 +839,560 @@ async function submitAssetForm(event, mode) {
     successMessage: mode === "edit" ? "Rakennusosa päivitetty." : "Rakennusosa lisätty.",
   });
   if (sent.ok) {
-    state.selectedAssetId = result.operation.value.id;
+    state.selection = { view: "assets", id: result.operation.value.id };
     closeAssetEditor();
     renderAssets();
-    renderAssetDetail();
+    renderDetailPanel();
     openDetailPanel();
   } else if (sent.conflict) {
     setFeedback("#asset-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
   }
 }
 
-/* -------- Maintenance & finance placeholders (decision 5) -------- */
+/* -------- Havainnot -------- */
 
-function renderMaintenancePlaceholders() {
-  const body = (title) => stateBlock({
-    kind: "not-built",
-    title,
-    body: "Tämä näkymä toteutetaan vaiheessa 2. Tiedot ovat toistaiseksi nähtävissä rakennusosan detaljipaneelissa Rakennusosat-näkymässä.",
+function filteredObservations() {
+  const model = state.admin;
+  const assetFilter = $("#observations-filter-asset").value;
+  const from = $("#observations-filter-from").value;
+  const to = $("#observations-filter-to").value;
+  const search = $("#observations-filter-search").value.trim().toLowerCase();
+  return model.observations.filter((observation) => {
+    if (assetFilter && observation.assetId !== assetFilter) return false;
+    if (from && observation.observedAt < from) return false;
+    if (to && observation.observedAt > to) return false;
+    if (search && !`${observation.id} ${observation.description}`.toLowerCase().includes(search)) return false;
+    return true;
   });
-  $("#observations-body").innerHTML = body("Havaintonäkymä tulossa");
-  $("#events-body").innerHTML = body("Korjaustapahtumanäkymä tulossa");
-  $("#cost-evidence-body").innerHTML = body("Kustannusnäyttö tulossa");
+}
+
+function populateAssetSelect(select, assets, { includeEmpty } = {}) {
+  const current = select.value;
+  const options = assets
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "fi"))
+    .map((asset) => `<option value="${escapeHtml(asset.id)}">${escapeHtml(asset.name)}</option>`);
+  select.innerHTML = (includeEmpty ? `<option value="">Kaikki</option>` : "") + options.join("");
+  select.value = current;
+}
+
+function renderObservations() {
+  if (!state.admin) return;
+  const model = state.admin;
+  populateAssetSelect($("#observations-filter-asset"), model.assets, { includeEmpty: true });
+
+  const withoutEvent = countObservationsWithoutEvent(model.observations, model.events);
+  $("#observations-kpis").innerHTML = [
+    ["Havaintoja yhteensä", model.observations.length],
+    ["Ilman tapahtumaa", withoutEvent],
+  ].map(kpiCard).join("");
+
+  const vm = buildObservationListViewModel(filteredObservations(), model.assets);
+  const host = $("#observations-list");
+  if (vm.isEmpty) {
+    const anyObservations = model.observations.length > 0;
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: anyObservations ? "Ei osumia suodattimilla" : "Ei vielä havaintoja",
+      body: anyObservations ? "Muuta rakennusosa-, ajanjakso- tai hakusuodatinta." : vm.emptyMessage,
+    });
+    return;
+  }
+  const selectedId = selectionId("observations");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Rakennusosa</th><th>Havaintopäivä</th><th>Kuvaus</th><th>Lähteet</th><th></th></tr></thead>
+    <tbody>${vm.rows.map((row) => `
+      <tr class="${row.id === selectedId ? "is-selected" : ""}" data-observation-id="${escapeHtml(row.id)}">
+        <td>${escapeHtml(row.assetName)}</td>
+        <td>${escapeHtml(row.observedAt)}</td>
+        <td>${escapeHtml(row.description)}</td>
+        <td>${escapeHtml(row.sourceIds.join(", ") || "—")}</td>
+        <td><button type="button" class="secondary row-select">Näytä</button></td>
+      </tr>`).join("")}</tbody>
+  </table></div>`;
+  for (const row of $$("#observations-list tr[data-observation-id]")) {
+    row.querySelector(".row-select").addEventListener(
+      "click", () => selectObservation(row.dataset.observationId),
+    );
+  }
+}
+
+function selectObservation(observationId) {
+  state.selection = { view: "observations", id: observationId };
+  renderObservations();
+  renderDetailPanel();
+  openDetailPanel();
+}
+
+function renderObservationDetail() {
+  const model = state.admin;
+  const observation = model.observations.find((item) => item.id === selectionId("observations"));
+  if (!observation) { closeDetailPanel(); return; }
+  const asset = model.assets.find((item) => item.id === observation.assetId);
+  const linkedEvents = model.events.filter((event) =>
+    (event.observationIds ?? []).includes(observation.id));
+
+  $("#detail-panel-title").textContent = "Havainto";
+  $("#detail-panel-body").innerHTML = `
+    <div class="detail-group">
+      <div class="detail-item"><span>Rakennusosa</span><strong>${escapeHtml(asset?.name ?? observation.assetId)}</strong></div>
+      <div class="detail-item"><span>Havaintopäivä</span><strong>${escapeHtml(observation.observedAt)}</strong></div>
+      <div class="detail-item"><span>Kuvaus</span><strong>${escapeHtml(observation.description)}</strong></div>
+      <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((observation.sourceIds ?? []).join(", ") || "—")}</strong></div>
+    </div>
+    <div class="button-row"><button type="button" class="secondary" id="detail-edit-observation">Muokkaa</button></div>
+    ${detailGroup("Linkitetyt tapahtumat", linkedEvents.map((event) =>
+      `<li><strong>${escapeHtml(event.title)}</strong> · ${escapeHtml(event.status)}</li>`), "Ei linkitettyjä tapahtumia.")}
+    <p class="muted">Korjaustapahtuman luonti havainnosta toteutetaan vaiheessa 2B.</p>
+  `;
+  $("#detail-edit-observation").addEventListener(
+    "click", () => openObservationEditor("edit", observation.id),
+  );
+}
+
+function ensureObservationEditorHost() {
+  let host = $("#observation-editor");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "observation-editor";
+    host.className = "subsection";
+    const view = document.querySelector('.view[data-view="observations"]');
+    view.insertBefore(host, $("#observations-list"));
+  }
+  return host;
+}
+
+function closeObservationEditor() {
+  const host = $("#observation-editor");
+  if (host) { host.hidden = true; host.innerHTML = ""; }
+}
+
+function openObservationEditor(mode, observationId) {
+  const model = state.admin;
+  const observation = mode === "edit" ? model.observations.find((o) => o.id === observationId) : null;
+  const entitySources = observation ? (observation.sourceIds ?? []).join(", ") : "";
+  const assetOptions = model.assets
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "fi"))
+    .map((asset) => [asset.id, asset.name]);
+  const host = ensureObservationEditorHost();
+  host.hidden = false;
+  host.innerHTML = `
+    <form id="observation-form" class="card form-card" novalidate>
+      <h3>${mode === "edit" ? "Muokkaa havaintoa" : "Uusi havainto"}</h3>
+      <div class="form-grid">
+        ${textField("observation-id", "Tunniste", observation?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${selectField("observation-asset", "Rakennusosa", assetOptions, observation?.assetId ?? "")}
+        ${dateField("observation-observed-at", "Havaintopäivä", observation?.observedAt ?? "", { required: true })}
+        ${textareaField("observation-description", "Kuvaus", observation?.description ?? "")}
+        ${textField("observation-source-ids", "Havainnon lähdetunnisteet", entitySources, { required: true })}
+      </div>
+      <fieldset class="form-grid">
+        <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään havainnon lähteistä, muokattavissa)</legend>
+        ${textField("observation-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
+        ${textField("observation-explanation", "Muutoksen selitys", "", { required: true })}
+      </fieldset>
+      <p id="observation-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Tallenna havainto</button>
+        <button type="button" class="secondary" id="observation-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  $("#observation-form").onsubmit = (event) => submitObservationForm(event, mode);
+  $("#observation-cancel").addEventListener("click", closeObservationEditor);
+  wireSourceIdsPrefill("observation-source-ids", "observation-op-source-ids");
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function submitObservationForm(event, mode) {
+  event.preventDefault();
+  clearFieldErrors("#observation-form");
+  const raw = {
+    id: fieldValue("observation-id"),
+    assetId: fieldValue("observation-asset"),
+    observedAt: fieldValue("observation-observed-at"),
+    description: fieldValue("observation-description"),
+    sourceIds: fieldValue("observation-source-ids"),
+    operationSourceIds: fieldValue("observation-op-source-ids"),
+    explanation: fieldValue("observation-explanation"),
+  };
+  const result = buildSaveObservationOperation(raw, state.admin.assets);
+  if (!result.ok) {
+    applyFieldErrors("#observation-form", {
+      id: "observation-id", assetId: "observation-asset",
+      observedAt: "observation-observed-at", description: "observation-description",
+      sourceIds: "observation-source-ids",
+      operationSourceIds: "observation-op-source-ids", explanation: "observation-explanation",
+    }, result.errors);
+    setFeedback("#observation-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: mode === "edit" ? "Havainto päivitetty." : "Havainto lisätty.",
+  });
+  if (sent.ok) {
+    state.selection = { view: "observations", id: result.operation.value.id };
+    closeObservationEditor();
+    renderObservations();
+    renderDetailPanel();
+    openDetailPanel();
+  } else if (sent.conflict) {
+    setFeedback("#observation-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/* -------- Kustannusnäyttö -------- */
+
+function filteredCostEvidence() {
+  const model = state.admin;
+  const status = $("#cost-evidence-filter-status").value;
+  const assetFilter = $("#cost-evidence-filter-asset").value;
+  const gapOnly = $("#cost-evidence-filter-gap-only").checked;
+  return model.costEvidence.filter((evidence) => {
+    if (status && evidence.status !== status) return false;
+    if (assetFilter && evidence.assetId !== assetFilter) return false;
+    if (gapOnly && evidence.status !== "data_gap") return false;
+    return true;
+  });
+}
+
+function renderCostEvidence() {
+  if (!state.admin) return;
+  const model = state.admin;
+  populateAssetSelect($("#cost-evidence-filter-asset"), model.assets, { includeEmpty: true });
+
+  const allRows = buildCostEvidenceListViewModel(
+    model.costEvidence, model.assets, model.priceLevelConfirmations,
+  ).rows;
+  const counts = {
+    quote: allRows.filter((row) => row.status === "quote" && !isCostEvidenceExpired(row)).length,
+    estimate: allRows.filter((row) =>
+      (row.status === "estimate" || row.status === "estimate_from_actual") &&
+      !isCostEvidenceExpired(row)).length,
+    dataGap: allRows.filter((row) => row.isDataGap).length,
+  };
+  $("#cost-evidence-kpis").innerHTML = [
+    ["Voimassa olevat tarjoukset", counts.quote],
+    ["Voimassa olevat arviot", counts.estimate],
+    ["DATA GAPit", counts.dataGap],
+  ].map(kpiCard).join("");
+
+  const vm = buildCostEvidenceListViewModel(
+    filteredCostEvidence(), model.assets, model.priceLevelConfirmations,
+  );
+  const host = $("#cost-evidence-list");
+  if (vm.isEmpty) {
+    const anyEvidence = model.costEvidence.length > 0;
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: anyEvidence ? "Ei osumia suodattimilla" : "Ei vielä kustannusnäyttöä",
+      body: anyEvidence ? "Muuta tila-, rakennusosa- tai DATA GAP -suodatinta." : vm.emptyMessage,
+    });
+    return;
+  }
+  const selectedId = selectionId("cost-evidence");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Kohde</th><th>Tila</th><th class="num">Summa</th><th>Yksikkö</th>
+      <th class="num">Määrä</th><th>Hintatasovuosi</th><th>Hintatasovahvistus</th>
+      <th>Voimassaolo</th><th>Lähde</th><th></th>
+    </tr></thead>
+    <tbody>${vm.rows.map((row) => costEvidenceRow(row, row.id === selectedId)).join("")}</tbody>
+  </table></div>`;
+  for (const row of $$("#cost-evidence-list tr[data-cost-evidence-id]")) {
+    row.querySelector(".row-select").addEventListener(
+      "click", () => selectCostEvidence(row.dataset.costEvidenceId),
+    );
+  }
+}
+
+function costEvidenceRow(row, selected) {
+  const amount = row.isDataGap
+    ? `<span class="badge gap">DATA GAP</span>`
+    : money(row.amount ?? 0);
+  const target = row.assetName ?? (row.eventId ? `Tapahtuma ${row.eventId}` : "—");
+  const expired = isCostEvidenceExpired(row) ? ` <span class="badge inactive">Vanhentunut</span>` : "";
+  const confirmation = row.isDataGap
+    ? "—"
+    : row.hasPriceLevelConfirmation
+      ? `<span class="badge active">Vahvistettu</span>`
+      : row.needsPriceLevelConfirmation
+        ? `<span class="badge gap">Ei vahvistettu</span>`
+        : "—";
+  const source = row.sourceUrl
+    ? `<a href="${escapeHtml(row.sourceUrl)}" target="_blank" rel="noopener">Linkki</a>`
+    : escapeHtml(row.sourceId ?? "—");
+  const rowClasses = [selected ? "is-selected" : "", row.isDataGap ? "is-gap" : ""].filter(Boolean).join(" ");
+  return `<tr class="${rowClasses}" data-cost-evidence-id="${escapeHtml(row.id)}">
+    <td>${escapeHtml(target)}</td>
+    <td>${escapeHtml(COST_EVIDENCE_STATUS_LABELS[row.status] ?? row.status)}</td>
+    <td class="num">${amount}</td>
+    <td>${escapeHtml(row.unit)}</td>
+    <td class="num">${row.quantity ?? "—"}</td>
+    <td>${row.priceLevelYear}</td>
+    <td>${confirmation}</td>
+    <td>${escapeHtml(row.validUntil ?? "—")}${expired}</td>
+    <td>${source}</td>
+    <td><button type="button" class="secondary row-select">Näytä</button></td>
+  </tr>`;
+}
+
+function selectCostEvidence(costEvidenceId) {
+  state.selection = { view: "cost-evidence", id: costEvidenceId };
+  renderCostEvidence();
+  renderDetailPanel();
+  openDetailPanel();
+}
+
+function renderCostEvidenceDetail() {
+  const model = state.admin;
+  const evidence = model.costEvidence.find((item) => item.id === selectionId("cost-evidence"));
+  if (!evidence) { closeDetailPanel(); return; }
+  const asset = evidence.assetId ? model.assets.find((item) => item.id === evidence.assetId) : undefined;
+  const isDataGap = evidence.status === "data_gap";
+  const confirmed = model.priceLevelConfirmations.some((item) =>
+    item.costEvidenceId === evidence.id && item.targetYear === PROJECTION_PRICE_LEVEL_YEAR);
+  const needsConfirmation = !isDataGap && evidence.priceLevelYear !== PROJECTION_PRICE_LEVEL_YEAR;
+
+  $("#detail-panel-title").textContent = "Kustannusnäyttö";
+  $("#detail-panel-body").innerHTML = `
+    <div class="detail-group">
+      <div class="detail-item"><span>Kohde</span><strong>${escapeHtml(asset?.name ?? evidence.eventId ?? "—")}</strong></div>
+      <div class="detail-item"><span>Tila</span><strong>${escapeHtml(COST_EVIDENCE_STATUS_LABELS[evidence.status] ?? evidence.status)}</strong></div>
+      <div class="detail-item"><span>Summa</span><strong>${isDataGap ? "DATA GAP" : money(evidence.amount ?? 0)}</strong></div>
+      <div class="detail-item"><span>Yksikkö / määrä</span><strong>${escapeHtml(evidence.unit)}${evidence.quantity !== undefined ? ` · ${evidence.quantity}` : ""}</strong></div>
+      <div class="detail-item"><span>Hintatasovuosi</span><strong>${evidence.priceLevelYear}${confirmed ? ` · vahvistettu ${PROJECTION_PRICE_LEVEL_YEAR}` : ""}</strong></div>
+      <div class="detail-item"><span>Voimassaolo</span><strong>${escapeHtml(evidence.validUntil ?? "—")}</strong></div>
+      <div class="detail-item"><span>Lähde</span><strong>${evidence.sourceUrl ? `<a href="${escapeHtml(evidence.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(evidence.sourceUrl)}</a>` : escapeHtml(evidence.sourceId ?? "—")}</strong></div>
+      <div class="detail-item"><span>Huomio</span><strong>${escapeHtml(evidence.notes ?? "—")}</strong></div>
+    </div>
+    <div class="button-row">
+      <button type="button" class="secondary" id="detail-edit-cost-evidence">Muokkaa</button>
+      ${needsConfirmation && !confirmed
+        ? `<button type="button" class="secondary" id="detail-confirm-price-level">Vahvista hintataso ${PROJECTION_PRICE_LEVEL_YEAR}</button>`
+        : ""}
+    </div>
+  `;
+  $("#detail-edit-cost-evidence").addEventListener(
+    "click", () => openCostEvidenceEditor("edit", evidence.id),
+  );
+  const confirmButton = $("#detail-confirm-price-level");
+  if (confirmButton) {
+    confirmButton.addEventListener("click", () => openPriceLevelConfirmationEditor(evidence.id));
+  }
+}
+
+function ensureCostEvidenceEditorHost() {
+  let host = $("#cost-evidence-editor");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "cost-evidence-editor";
+    host.className = "subsection";
+    const view = document.querySelector('.view[data-view="cost-evidence"]');
+    view.insertBefore(host, $("#cost-evidence-list"));
+  }
+  return host;
+}
+
+function closeCostEvidenceEditor() {
+  const host = $("#cost-evidence-editor");
+  if (host) { host.hidden = true; host.innerHTML = ""; }
+}
+
+function openCostEvidenceEditor(mode, costEvidenceId) {
+  const model = state.admin;
+  const evidence = mode === "edit" ? model.costEvidence.find((item) => item.id === costEvidenceId) : null;
+  const assetOptions = [["", "Ei kytkentää"]].concat(
+    model.assets
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, "fi"))
+      .map((asset) => [asset.id, asset.name]),
+  );
+  const statusOptions = COST_EVIDENCE_STATUSES.map((status) => [status, COST_EVIDENCE_STATUS_LABELS[status] ?? status]);
+  const host = ensureCostEvidenceEditorHost();
+  host.hidden = false;
+  host.innerHTML = `
+    <form id="cost-evidence-form" class="card form-card" novalidate>
+      <h3>${mode === "edit" ? "Muokkaa kustannusnäyttöä" : "Uusi kustannusnäyttö"}</h3>
+      <div class="form-grid">
+        ${textField("cost-evidence-id", "Tunniste", evidence?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${selectField("cost-evidence-asset", "Rakennusosa", assetOptions, evidence?.assetId ?? "")}
+        ${selectField("cost-evidence-status", "Tila", statusOptions, evidence?.status ?? "quote")}
+        ${numberField("cost-evidence-amount", "Summa €", evidence?.amount ?? "", { min: 0, step: "0.01" })}
+        ${textField("cost-evidence-unit", "Yksikkö", evidence?.unit ?? "", { required: true })}
+        ${numberField("cost-evidence-quantity", "Määrä", evidence?.quantity ?? "", { min: 1, step: 1 })}
+        ${numberField("cost-evidence-price-level-year", "Hintatasovuosi", evidence?.priceLevelYear ?? PROJECTION_PRICE_LEVEL_YEAR, { required: true, step: 1 })}
+        ${selectField("cost-evidence-vat-included", "ALV sisältyy", [["", "Ei tiedossa"], ["true", "Kyllä"], ["false", "Ei"]], evidence?.vatIncluded === undefined ? "" : String(evidence.vatIncluded))}
+        ${dateField("cost-evidence-observed-at", "Havaintopäivä", evidence?.observedAt ?? "")}
+        ${dateField("cost-evidence-valid-until", "Voimassa asti", evidence?.validUntil ?? "")}
+        ${textField("cost-evidence-source-id", "Lähdetunniste", evidence?.sourceId ?? "")}
+        ${textField("cost-evidence-source-url", "Lähde-URL", evidence?.sourceUrl ?? "")}
+        ${textareaField("cost-evidence-notes", "Huomio", evidence?.notes ?? "")}
+      </div>
+      <p class="form-hint">Anna joko lähdetunniste tai lähde-URL. DATA GAP -tilalla summakenttä tyhjennetään eikä sitä lähetetä.</p>
+      <fieldset class="form-grid">
+        <legend class="form-hint">Muutoksen metatiedot</legend>
+        ${textField("cost-evidence-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
+        ${textField("cost-evidence-explanation", "Muutoksen selitys", "", { required: true })}
+      </fieldset>
+      <p id="cost-evidence-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Tallenna kustannusnäyttö</button>
+        <button type="button" class="secondary" id="cost-evidence-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  if (evidence?.eventId) {
+    const eventIdField = document.createElement("input");
+    eventIdField.type = "hidden";
+    eventIdField.id = "cost-evidence-event-id";
+    eventIdField.value = evidence.eventId;
+    $("#cost-evidence-form").append(eventIdField);
+  }
+  $("#cost-evidence-status").addEventListener("change", updateCostEvidenceAmountState);
+  updateCostEvidenceAmountState();
+  $("#cost-evidence-form").onsubmit = (event) => submitCostEvidenceForm(event, mode);
+  $("#cost-evidence-cancel").addEventListener("click", closeCostEvidenceEditor);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/**
+ * DATA GAP -kriittinen sääntö (L-004): kun tila on data_gap, summakenttä
+ * tyhjennetään ja lukitaan, jotta tuntematon kustannus ei koskaan tallennu
+ * nollana tai jonkin muun statuksen alla piilotettuna summana.
+ */
+function updateCostEvidenceAmountState() {
+  const status = fieldValue("cost-evidence-status");
+  const amountField = $("#cost-evidence-amount");
+  const isDataGap = status === "data_gap";
+  amountField.disabled = isDataGap;
+  if (isDataGap) amountField.value = "";
+}
+
+async function submitCostEvidenceForm(event, mode) {
+  event.preventDefault();
+  clearFieldErrors("#cost-evidence-form");
+  const raw = {
+    id: fieldValue("cost-evidence-id"),
+    assetId: fieldValue("cost-evidence-asset"),
+    eventId: $("#cost-evidence-event-id")?.value ?? "",
+    status: fieldValue("cost-evidence-status"),
+    amount: fieldValue("cost-evidence-amount"),
+    unit: fieldValue("cost-evidence-unit"),
+    quantity: fieldValue("cost-evidence-quantity"),
+    priceLevelYear: fieldValue("cost-evidence-price-level-year"),
+    vatIncluded: fieldValue("cost-evidence-vat-included"),
+    observedAt: fieldValue("cost-evidence-observed-at"),
+    validUntil: fieldValue("cost-evidence-valid-until"),
+    sourceId: fieldValue("cost-evidence-source-id"),
+    sourceUrl: fieldValue("cost-evidence-source-url"),
+    notes: fieldValue("cost-evidence-notes"),
+    operationSourceIds: fieldValue("cost-evidence-op-source-ids"),
+    explanation: fieldValue("cost-evidence-explanation"),
+  };
+  const result = buildSaveCostEvidenceOperation(raw, state.admin.assets, state.admin.events);
+  if (!result.ok) {
+    applyFieldErrors("#cost-evidence-form", {
+      id: "cost-evidence-id", assetId: "cost-evidence-asset", eventId: "cost-evidence-event-id",
+      status: "cost-evidence-status", amount: "cost-evidence-amount", unit: "cost-evidence-unit",
+      quantity: "cost-evidence-quantity", priceLevelYear: "cost-evidence-price-level-year",
+      observedAt: "cost-evidence-observed-at", validUntil: "cost-evidence-valid-until",
+      sourceId: "cost-evidence-source-id", sourceUrl: "cost-evidence-source-url",
+      operationSourceIds: "cost-evidence-op-source-ids", explanation: "cost-evidence-explanation",
+    }, result.errors);
+    setFeedback("#cost-evidence-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: mode === "edit" ? "Kustannusnäyttö päivitetty." : "Kustannusnäyttö lisätty.",
+  });
+  if (sent.ok) {
+    state.selection = { view: "cost-evidence", id: result.operation.value.id };
+    closeCostEvidenceEditor();
+    renderCostEvidence();
+    renderDetailPanel();
+    openDetailPanel();
+  } else if (sent.conflict) {
+    setFeedback("#cost-evidence-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/* -------- Hintatasovahvistus (kevyt rivitoiminto, decision 5.5) -------- */
+
+function openPriceLevelConfirmationEditor(costEvidenceId) {
+  const host = ensureCostEvidenceEditorHost();
+  host.hidden = false;
+  const confirmedBy = state.auth?.user?.email ?? "";
+  host.innerHTML = `
+    <form id="price-level-confirmation-form" class="card form-card narrow-card" novalidate>
+      <h3>Vahvista hintataso ${PROJECTION_PRICE_LEVEL_YEAR}</h3>
+      <div class="form-grid">
+        ${textField("plc-confirmed-by", "Vahvistaja", confirmedBy, { required: true })}
+        ${dateField("plc-confirmed-at", "Vahvistuspäivä", new Date().toISOString().slice(0, 10), { required: true })}
+      </div>
+      <fieldset class="form-grid">
+        <legend class="form-hint">Muutoksen metatiedot</legend>
+        ${textField("plc-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
+        ${textField("plc-explanation", "Muutoksen selitys", "", { required: true })}
+      </fieldset>
+      <p id="plc-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Vahvista</button>
+        <button type="button" class="secondary" id="plc-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  $("#price-level-confirmation-form").onsubmit = (event) =>
+    submitPriceLevelConfirmationForm(event, costEvidenceId);
+  $("#plc-cancel").addEventListener("click", closeCostEvidenceEditor);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function submitPriceLevelConfirmationForm(event, costEvidenceId) {
+  event.preventDefault();
+  clearFieldErrors("#price-level-confirmation-form");
+  const raw = {
+    costEvidenceId,
+    confirmedAt: fieldValue("plc-confirmed-at"),
+    confirmedBy: fieldValue("plc-confirmed-by"),
+    operationSourceIds: fieldValue("plc-op-source-ids"),
+    explanation: fieldValue("plc-explanation"),
+  };
+  const result = buildSavePriceLevelConfirmationOperation(raw, state.admin.costEvidence);
+  if (!result.ok) {
+    applyFieldErrors("#price-level-confirmation-form", {
+      confirmedAt: "plc-confirmed-at",
+      confirmedBy: "plc-confirmed-by",
+      operationSourceIds: "plc-op-source-ids", explanation: "plc-explanation",
+    }, result.errors);
+    setFeedback(
+      "#plc-feedback",
+      result.errors.costEvidenceId ?? "Korjaa merkityt kentät.",
+      "error",
+    );
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: "Hintataso vahvistettu.",
+  });
+  if (sent.ok) {
+    closeCostEvidenceEditor();
+    renderCostEvidence();
+    renderDetailPanel();
+  } else if (sent.conflict) {
+    setFeedback("#plc-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/* -------- Korjaustapahtumat placeholder + finance placeholders (decision 5) -------- */
+
+function renderEventsPlaceholder() {
+  $("#events-body").innerHTML = stateBlock({
+    kind: "not-built",
+    title: "Korjaustapahtumanäkymä tulossa vaiheessa 2B",
+    body: "Suunnitellut, hyväksytyt ja toteutuneet korjaustapahtumat, skenaariorivit sekä havainnosta luotu tapahtuma toteutetaan vaiheessa 2B. Tapahtumatiedot ovat toistaiseksi nähtävissä rakennusosan detaljipaneelissa Rakennusosat-näkymässä.",
+  });
 }
 
 function renderFinancePlaceholders() {
@@ -1202,6 +1812,22 @@ function selectField(id, label, options, selected) {
 function checkboxField(id, label, checked) {
   return `<label class="checkbox-field" for="${id}">
     <input id="${id}" type="checkbox"${checked ? " checked" : ""}> ${escapeHtml(label)}
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function dateField(id, label, value, opts = {}) {
+  const attrs = [opts.required ? "required" : ""].filter(Boolean).join(" ");
+  return `<label for="${id}">${escapeHtml(label)}
+    <input id="${id}" type="date" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error">
+    <span class="field-error" id="${id}-error"></span>
+  </label>`;
+}
+
+function textareaField(id, label, value, opts = {}) {
+  const attrs = [opts.required ? "required" : ""].filter(Boolean).join(" ");
+  return `<label for="${id}">${escapeHtml(label)}
+    <textarea id="${id}" rows="${opts.rows ?? 3}" ${attrs} aria-describedby="${id}-error">${escapeHtml(String(value ?? ""))}</textarea>
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }

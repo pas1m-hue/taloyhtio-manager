@@ -51,6 +51,57 @@ export const ASSET_CATEGORIES = [
 
 const CATEGORY_SET = new Set(ASSET_CATEGORIES);
 
+/** Mirrors COST_EVIDENCE_STATUSES in domain/types.ts. */
+export const COST_EVIDENCE_STATUSES = [
+  "actual",
+  "quote",
+  "estimate",
+  "estimate_from_actual",
+  "data_gap",
+];
+
+const COST_EVIDENCE_STATUS_SET = new Set(COST_EVIDENCE_STATUSES);
+
+/** Mirrors PROJECTION_PRICE_LEVEL_YEAR in domain/types.ts. */
+export const PROJECTION_PRICE_LEVEL_YEAR = 2026;
+
+/**
+ * @typedef {Object} ObservationValue
+ * @property {string} id
+ * @property {string} assetId
+ * @property {string} observedAt
+ * @property {string} description
+ * @property {string[]} sourceIds
+ */
+
+/** @typedef {"actual"|"quote"|"estimate"|"estimate_from_actual"|"data_gap"} CostEvidenceStatus */
+
+/**
+ * @typedef {Object} CostEvidenceValue
+ * @property {string} id
+ * @property {string} [assetId]
+ * @property {string} [eventId]
+ * @property {CostEvidenceStatus} status
+ * @property {number} [amount]
+ * @property {string} unit
+ * @property {number} [quantity]
+ * @property {number} priceLevelYear
+ * @property {boolean} [vatIncluded]
+ * @property {string} [observedAt]
+ * @property {string} [validUntil]
+ * @property {string} [sourceUrl]
+ * @property {string} [sourceId]
+ * @property {string} [notes]
+ */
+
+/**
+ * @typedef {Object} PriceLevelConfirmationValue
+ * @property {string} costEvidenceId
+ * @property {number} targetYear
+ * @property {string} confirmedAt
+ * @property {string} confirmedBy
+ */
+
 /**
  * @param {unknown} raw
  * @returns {string}
@@ -90,6 +141,31 @@ function optionalNumber(raw) {
   if (isBlank(raw)) return { present: false };
   const value = parseNumber(raw);
   return { present: true, value, valid: Number.isFinite(value) };
+}
+
+/**
+ * Optional boolean field, read from a checkbox value or a tri-state select
+ * ("", "true", "false"). Absent when blank, distinct from an explicit false.
+ * @param {unknown} raw
+ * @returns {{ present: false } | { present: true, value: boolean }}
+ */
+function optionalBoolean(raw) {
+  if (isBlank(raw)) return { present: false };
+  if (typeof raw === "boolean") return { present: true, value: raw };
+  const trimmed = toTrimmed(raw);
+  if (trimmed === "true") return { present: true, value: true };
+  if (trimmed === "false") return { present: true, value: false };
+  return { present: false };
+}
+
+/**
+ * Mirrors validDate in adminDataValidation.ts.
+ * @param {unknown} raw
+ * @returns {boolean}
+ */
+function isValidDate(raw) {
+  const trimmed = toTrimmed(raw);
+  return trimmed !== "" && Number.isFinite(Date.parse(trimmed));
 }
 
 /**
@@ -289,6 +365,406 @@ export function buildSaveAssetOperation(raw) {
       explanation: meta.value.explanation,
     },
   };
+}
+
+/**
+ * Mirrors validateObservation in adminDataValidation.ts. `assetId` must refer
+ * to an asset the caller already knows about (UI selects it from a dropdown,
+ * never free text), so the list of known assets is passed in explicitly.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @returns {ValidationResult<ObservationValue>}
+ */
+export function validateObservationInput(raw, assets) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const assetIds = new Set(
+    (Array.isArray(assets) ? assets : []).map((asset) => String(asset.id ?? "")),
+  );
+
+  const id = toTrimmed(raw.id);
+  if (id === "") errors.id = "Havainnon tunniste puuttuu.";
+
+  const assetId = toTrimmed(raw.assetId);
+  if (assetId === "") errors.assetId = "Valitse rakennusosa.";
+  else if (!assetIds.has(assetId)) errors.assetId = "Valittua rakennusosaa ei löydy.";
+
+  const observedAt = toTrimmed(raw.observedAt);
+  if (!isValidDate(observedAt)) errors.observedAt = "Anna kelvollinen havaintopäivä.";
+
+  const description = toTrimmed(raw.description);
+  if (description === "") errors.description = "Kuvaus on pakollinen.";
+
+  const sourceIds = parseSourceIds(raw.sourceIds);
+  if (sourceIds.length === 0) {
+    errors.sourceIds = "Havainnolla on oltava vähintään yksi lähdetunniste.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  return { ok: true, value: { id, assetId, observedAt, description, sourceIds } };
+}
+
+/**
+ * Builds a save_observation operation. The observation's own sourceIds come
+ * from `raw.sourceIds`; the operation sourceIds come from
+ * `raw.operationSourceIds` (same entity-vs-operation split as assets).
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @returns {OperationResult<{ type: "save_observation", value: ObservationValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveObservationOperation(raw, assets) {
+  const observation = validateObservationInput(raw, assets);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!observation.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(observation.ok ? {} : observation.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_observation",
+      value: observation.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/**
+ * Mirrors validateCostEvidence in adminDataValidation.ts, including the
+ * DATA GAP rule (L-004): status="data_gap" may never carry an amount, so an
+ * unknown cost stays a named gap instead of a silent zero.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ id?: unknown }>} [events]
+ * @returns {ValidationResult<CostEvidenceValue>}
+ */
+export function validateCostEvidenceInput(raw, assets, events) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const assetIds = new Set(
+    (Array.isArray(assets) ? assets : []).map((asset) => String(asset.id ?? "")),
+  );
+  const eventIds = new Set(
+    (Array.isArray(events) ? events : []).map((event) => String(event.id ?? "")),
+  );
+
+  const id = toTrimmed(raw.id);
+  if (id === "") errors.id = "Kustannusnäytön tunniste puuttuu.";
+
+  const status = toTrimmed(raw.status);
+  if (!COST_EVIDENCE_STATUS_SET.has(status)) errors.status = "Valitse sallittu tila.";
+
+  const unit = toTrimmed(raw.unit);
+  if (unit === "") errors.unit = "Yksikkö on pakollinen.";
+
+  const priceLevelYear = parseNumber(raw.priceLevelYear);
+  if (!Number.isInteger(priceLevelYear)) {
+    errors.priceLevelYear = "Hintatasovuoden on oltava kokonaisluku.";
+  }
+
+  const assetId = toTrimmed(raw.assetId);
+  const hasAssetId = assetId !== "";
+  if (hasAssetId && !assetIds.has(assetId)) {
+    errors.assetId = "Valittua rakennusosaa ei löydy.";
+  }
+
+  const eventId = toTrimmed(raw.eventId);
+  const hasEventId = eventId !== "";
+  if (hasEventId && !eventIds.has(eventId)) {
+    errors.eventId = "Viitattua tapahtumaa ei löydy.";
+  }
+
+  const amount = optionalNumber(raw.amount);
+  if (amount.present && (!amount.valid || amount.value < 0)) {
+    errors.amount = "Summan on oltava vähintään 0.";
+  }
+
+  const quantity = optionalNumber(raw.quantity);
+  if (quantity.present &&
+      (!quantity.valid || !Number.isInteger(quantity.value) || quantity.value <= 0)) {
+    errors.quantity = "Määrän on oltava positiivinen kokonaisluku.";
+  }
+
+  const sourceId = toTrimmed(raw.sourceId);
+  const sourceUrl = toTrimmed(raw.sourceUrl);
+  if (sourceId === "" && sourceUrl === "") {
+    const message = "Anna lähdetunniste tai lähde-URL.";
+    errors.sourceId = message;
+    errors.sourceUrl = message;
+  }
+
+  const observedAt = toTrimmed(raw.observedAt);
+  if (observedAt !== "" && !isValidDate(observedAt)) {
+    errors.observedAt = "Anna kelvollinen havaintopäivä.";
+  }
+
+  const validUntil = toTrimmed(raw.validUntil);
+  if (validUntil !== "" && !isValidDate(validUntil)) {
+    errors.validUntil = "Anna kelvollinen voimassaolopäivä.";
+  }
+
+  // DATA GAP -kriittinen sääntö (L-004): tuntematon kustannus on nimetty
+  // DATA GAP, ei nolla eikä tyhjä summa muun statuksen alla.
+  if (status === "data_gap" && amount.present) {
+    errors.amount = "DATA GAP -tilalla ei saa olla summaa.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {CostEvidenceValue} */
+  const value = {
+    id,
+    status: /** @type {CostEvidenceStatus} */ (status),
+    unit,
+    priceLevelYear,
+  };
+  if (hasAssetId) value.assetId = assetId;
+  if (hasEventId) value.eventId = eventId;
+  if (amount.present) value.amount = amount.value;
+  if (quantity.present) value.quantity = quantity.value;
+  const vatIncluded = optionalBoolean(raw.vatIncluded);
+  if (vatIncluded.present) value.vatIncluded = vatIncluded.value;
+  if (observedAt !== "") value.observedAt = observedAt;
+  if (validUntil !== "") value.validUntil = validUntil;
+  if (sourceId !== "") value.sourceId = sourceId;
+  if (sourceUrl !== "") value.sourceUrl = sourceUrl;
+  const notes = toTrimmed(raw.notes);
+  if (notes !== "") value.notes = notes;
+
+  return { ok: true, value };
+}
+
+/**
+ * Builds a save_cost_evidence operation. Entity vs. operation sourceIds are
+ * distinct: the evidence's own source is `sourceId`/`sourceUrl`, while the
+ * change-metadata sourceIds come from `raw.operationSourceIds`.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ id?: unknown }>} [events]
+ * @returns {OperationResult<{ type: "save_cost_evidence", value: CostEvidenceValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveCostEvidenceOperation(raw, assets, events) {
+  const evidence = validateCostEvidenceInput(raw, assets, events);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!evidence.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(evidence.ok ? {} : evidence.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_cost_evidence",
+      value: evidence.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/**
+ * Mirrors validatePriceLevelConfirmation in adminDataValidation.ts.
+ * `targetYear` is always the current projection price-level year; it is not
+ * a user-editable field.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [costEvidence]
+ * @returns {ValidationResult<PriceLevelConfirmationValue>}
+ */
+export function validatePriceLevelConfirmationInput(raw, costEvidence) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const evidenceIds = new Set(
+    (Array.isArray(costEvidence) ? costEvidence : []).map((item) => String(item.id ?? "")),
+  );
+
+  const costEvidenceId = toTrimmed(raw.costEvidenceId);
+  if (costEvidenceId === "") errors.costEvidenceId = "Kustannusnäytön tunniste puuttuu.";
+  else if (!evidenceIds.has(costEvidenceId)) {
+    errors.costEvidenceId = "Viitattua kustannusnäyttöä ei löydy.";
+  }
+
+  const confirmedAt = toTrimmed(raw.confirmedAt);
+  if (!isValidDate(confirmedAt)) errors.confirmedAt = "Anna kelvollinen vahvistuspäivä.";
+
+  const confirmedBy = toTrimmed(raw.confirmedBy);
+  if (confirmedBy === "") errors.confirmedBy = "Vahvistajan nimi tai tunniste on pakollinen.";
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    value: {
+      costEvidenceId,
+      targetYear: PROJECTION_PRICE_LEVEL_YEAR,
+      confirmedAt,
+      confirmedBy,
+    },
+  };
+}
+
+/**
+ * Builds a save_price_level_confirmation operation.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [costEvidence]
+ * @returns {OperationResult<{ type: "save_price_level_confirmation", value: PriceLevelConfirmationValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSavePriceLevelConfirmationOperation(raw, costEvidence) {
+  const confirmation = validatePriceLevelConfirmationInput(raw, costEvidence);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!confirmation.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(confirmation.ok ? {} : confirmation.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_price_level_confirmation",
+      value: confirmation.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/**
+ * View model for the observations list (decision 7: empty content is a
+ * first-class state with its own message).
+ * @param {ReadonlyArray<{ id?: unknown, assetId?: unknown, observedAt?: unknown, description?: unknown, sourceIds?: unknown }>} [observations]
+ * @param {ReadonlyArray<{ id?: unknown, name?: unknown }>} [assets]
+ * @returns {{ isEmpty: boolean, rows: Array<{ id: string, assetId: string, assetName: string, observedAt: string, description: string, sourceIds: string[] }>, emptyMessage: string }}
+ */
+export function buildObservationListViewModel(observations, assets) {
+  const list = Array.isArray(observations) ? observations : [];
+  const assetNames = new Map(
+    (Array.isArray(assets) ? assets : []).map((asset) => [String(asset.id ?? ""), String(asset.name ?? "")]),
+  );
+  const rows = list.map((observation) => {
+    const assetId = String(observation.assetId ?? "");
+    return {
+      id: String(observation.id ?? ""),
+      assetId,
+      assetName: assetNames.get(assetId) ?? assetId,
+      observedAt: String(observation.observedAt ?? ""),
+      description: String(observation.description ?? ""),
+      sourceIds: parseSourceIds(observation.sourceIds),
+    };
+  });
+  return {
+    isEmpty: rows.length === 0,
+    rows,
+    emptyMessage: "Ei vielä havaintoja. Lisää ensimmäinen havainto.",
+  };
+}
+
+/**
+ * Count of observations no building event references yet (Näkymäspesifikaatio:
+ * "ilman tapahtumaa olevat havainnot").
+ * @param {ReadonlyArray<{ id?: unknown }>} [observations]
+ * @param {ReadonlyArray<{ observationIds?: ReadonlyArray<unknown> }>} [events]
+ * @returns {number}
+ */
+export function countObservationsWithoutEvent(observations, events) {
+  /** @type {Set<string>} */
+  const linked = new Set();
+  for (const event of Array.isArray(events) ? events : []) {
+    for (const id of event.observationIds ?? []) linked.add(String(id));
+  }
+  return (Array.isArray(observations) ? observations : [])
+    .filter((observation) => !linked.has(String(observation.id ?? "")))
+    .length;
+}
+
+/**
+ * View model for the cost-evidence list. DATA GAP rows never carry an amount
+ * (decision L-004/L-007): `amount` stays undefined so the UI cannot render 0.
+ * @param {ReadonlyArray<{ id?: unknown, assetId?: unknown, eventId?: unknown, status?: unknown, amount?: unknown, unit?: unknown, quantity?: unknown, priceLevelYear?: unknown, vatIncluded?: unknown, observedAt?: unknown, validUntil?: unknown, sourceId?: unknown, sourceUrl?: unknown, notes?: unknown }>} [costEvidence]
+ * @param {ReadonlyArray<{ id?: unknown, name?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ costEvidenceId?: unknown, targetYear?: unknown }>} [priceLevelConfirmations]
+ * @returns {{ isEmpty: boolean, rows: Array<Record<string, unknown>>, emptyMessage: string }}
+ */
+export function buildCostEvidenceListViewModel(costEvidence, assets, priceLevelConfirmations) {
+  const list = Array.isArray(costEvidence) ? costEvidence : [];
+  const assetNames = new Map(
+    (Array.isArray(assets) ? assets : []).map((asset) => [String(asset.id ?? ""), String(asset.name ?? "")]),
+  );
+  const confirmedIds = new Set(
+    (Array.isArray(priceLevelConfirmations) ? priceLevelConfirmations : [])
+      .filter((item) => Number(item.targetYear) === PROJECTION_PRICE_LEVEL_YEAR)
+      .map((item) => String(item.costEvidenceId ?? "")),
+  );
+  const rows = list.map((evidence) => {
+    const isDataGap = evidence.status === "data_gap";
+    const priceLevelYear = Number(evidence.priceLevelYear);
+    const assetId = evidence.assetId !== undefined ? String(evidence.assetId) : undefined;
+    return {
+      id: String(evidence.id ?? ""),
+      assetId,
+      assetName: assetId !== undefined ? (assetNames.get(assetId) ?? assetId) : undefined,
+      eventId: evidence.eventId !== undefined ? String(evidence.eventId) : undefined,
+      status: String(evidence.status ?? ""),
+      isDataGap,
+      amount: isDataGap ? undefined : evidence.amount,
+      unit: String(evidence.unit ?? ""),
+      quantity: evidence.quantity,
+      priceLevelYear,
+      vatIncluded: evidence.vatIncluded ?? undefined,
+      observedAt: evidence.observedAt ?? undefined,
+      validUntil: evidence.validUntil ?? undefined,
+      sourceId: evidence.sourceId ?? undefined,
+      sourceUrl: evidence.sourceUrl ?? undefined,
+      notes: evidence.notes ?? undefined,
+      needsPriceLevelConfirmation: !isDataGap && priceLevelYear !== PROJECTION_PRICE_LEVEL_YEAR,
+      hasPriceLevelConfirmation: confirmedIds.has(String(evidence.id ?? "")),
+    };
+  });
+  return {
+    isEmpty: rows.length === 0,
+    rows,
+    emptyMessage: "Ei vielä kustannusnäyttöä. Lisää tarjous, arvio tai merkitse DATA GAP.",
+  };
+}
+
+/**
+ * Whether a cost-evidence row's validity window has passed (L-007 warning
+ * state, distinct from an error).
+ * @param {{ validUntil?: unknown }} row
+ * @param {string} [nowIso]
+ * @returns {boolean}
+ */
+export function isCostEvidenceExpired(row, nowIso) {
+  if (!row.validUntil || typeof row.validUntil !== "string") return false;
+  const validUntil = Date.parse(row.validUntil);
+  if (!Number.isFinite(validUntil)) return false;
+  const now = nowIso ? Date.parse(nowIso) : Date.now();
+  return validUntil < now;
 }
 
 /**
