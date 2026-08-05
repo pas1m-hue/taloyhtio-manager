@@ -92,6 +92,51 @@ describe("static id cross-check (index.html <-> app.js)", () => {
   });
 });
 
+/**
+ * Ids toggled via a direct `$("#id").disabled = ...` assignment in app.js.
+ * @param {string} source
+ * @returns {Set<string>}
+ */
+function directlyToggledIds(source) {
+  const ids = new Set();
+  for (const match of source.matchAll(/\$\("#([\w-]+)"\)\.disabled\s*=/g)) {
+    ids.add(match[1]);
+  }
+  return ids;
+}
+
+/**
+ * Ids toggled via a `for (const x of ["#a", "#b"]) { $(x).disabled = ... }`
+ * loop in app.js, e.g. renderAuthStatus()'s sign-in gate. Requires the loop
+ * body to dereference the same loop variable, so unrelated loops don't
+ * produce false matches.
+ * @param {string} source
+ * @returns {Set<string>}
+ */
+function loopToggledIds(source) {
+  const ids = new Set();
+  const loopPattern = /for \(const (\w+) of \[([^\]]*)\]\)\s*\{\s*\$\(\1\)\.disabled\s*=/g;
+  for (const match of source.matchAll(loopPattern)) {
+    for (const idMatch of match[2].matchAll(/#([\w-]+)/g)) {
+      ids.add(idMatch[1]);
+    }
+  }
+  return ids;
+}
+
+describe("static disabled/enabled toggle cross-check (index.html <-> app.js)", () => {
+  it("wires an enable path in app.js for every element that starts out disabled in index.html", () => {
+    const staticallyDisabled = [...html.matchAll(/\bid="([\w-]+)"[^>]*\bdisabled\b/g)]
+      .map((m) => m[1]);
+    const toggled = new Set([...directlyToggledIds(js), ...loopToggledIds(js)]);
+    const missing = [...new Set(staticallyDisabled)].filter((id) => !toggled.has(id)).sort();
+    expect(
+      missing,
+      "these ids start disabled in index.html but app.js never sets their .disabled property, so they can never become interactive",
+    ).toEqual([]);
+  });
+});
+
 describe("static view cross-check (KNOWN_VIEWS <-> data-view sections)", () => {
   /** @returns {string[]} */
   function knownViews() {
