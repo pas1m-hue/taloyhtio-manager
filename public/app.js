@@ -360,7 +360,7 @@ function renderAuthStatus() {
   $("#admin-auth-gate").hidden = signedIn;
   $("#admin-workspace").hidden = !signedIn;
   $("#admin-sign-out").disabled = !signedIn;
-  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new"]) {
+  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new", "#observations-new", "#cost-evidence-new"]) {
     $(selector).disabled = !signedIn;
   }
   $("#admin-batch-form button[type=submit]").disabled = !signedIn;
