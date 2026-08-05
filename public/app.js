@@ -751,6 +751,17 @@ function closeDetailPanel() {
   }
 }
 
+// Mirrors sourceField into opField as the user types, unless the user has typed into opField directly.
+function wireSourceIdsPrefill(sourceFieldId, opFieldId) {
+  const sourceField = $(`#${sourceFieldId}`);
+  const opField = $(`#${opFieldId}`);
+  let opFieldTouched = false;
+  opField.addEventListener("input", () => { opFieldTouched = true; });
+  sourceField.addEventListener("input", () => {
+    if (!opFieldTouched) opField.value = sourceField.value;
+  });
+}
+
 function openAssetEditor(mode, assetId) {
   const model = state.admin;
   const asset = mode === "edit" ? model.assets.find((a) => a.id === assetId) : null;
@@ -781,6 +792,7 @@ function openAssetEditor(mode, assetId) {
   `;
   $("#asset-form").onsubmit = (event) => submitAssetForm(event, mode);
   $("#asset-cancel").addEventListener("click", closeAssetEditor);
+  wireSourceIdsPrefill("asset-source-ids", "asset-op-source-ids");
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -989,6 +1001,7 @@ function openObservationEditor(mode, observationId) {
   `;
   $("#observation-form").onsubmit = (event) => submitObservationForm(event, mode);
   $("#observation-cancel").addEventListener("click", closeObservationEditor);
+  wireSourceIdsPrefill("observation-source-ids", "observation-op-source-ids");
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 

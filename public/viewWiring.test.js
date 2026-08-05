@@ -92,6 +92,35 @@ describe("static id cross-check (index.html <-> app.js)", () => {
   });
 });
 
+// This only proves the wireSourceIdsPrefill(...) call sites exist and point
+// at real field ids — it cannot exercise the actual "type in source field,
+// see op field update live" behavior without a DOM (jsdom is deliberately
+// out of scope here). Verify that behavior manually: open the asset (or
+// observation) editor in "new" mode, type into the entity source-ids field,
+// confirm the operation source-ids field mirrors it, then type into the
+// operation field directly and confirm further edits to the entity field no
+// longer overwrite it.
+describe("static source-ids prefill wiring (app.js -> field ids)", () => {
+  it("wires wireSourceIdsPrefill for each entity/operation source-id field pair", () => {
+    const defined = new Set([...definedIds(html), ...definedIds(js)]);
+    const wired = new Set(
+      [...js.matchAll(/wireSourceIdsPrefill\("([\w-]+)",\s*"([\w-]+)"\)/g)]
+        .map((m) => `${m[1]}->${m[2]}`),
+    );
+    for (const pair of [
+      "asset-source-ids->asset-op-source-ids",
+      "observation-source-ids->observation-op-source-ids",
+    ]) {
+      expect(wired.has(pair), `expected wireSourceIdsPrefill("${pair.replace("->", '", "')}") to be called`).toBe(true);
+    }
+    for (const pair of wired) {
+      const [sourceId, opId] = pair.split("->");
+      expect(defined.has(sourceId), `expected #${sourceId} to be a real field id`).toBe(true);
+      expect(defined.has(opId), `expected #${opId} to be a real field id`).toBe(true);
+    }
+  });
+});
+
 /**
  * Ids toggled via a direct `$("#id").disabled = ...` assignment in app.js.
  * @param {string} source
