@@ -17,7 +17,6 @@ import {
   countObservationsWithoutEvent,
   deriveDataGapAssets,
   deriveEventYearOptions,
-  EVENT_ORIGINS,
   EVENT_STATUSES,
   EVENT_TYPES,
   groupScheduleByScenario,
