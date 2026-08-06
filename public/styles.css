@@ -60,6 +60,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .topbar-title { font-size: 1.05rem; }
 .topbar-controls { display: flex; align-items: flex-end; gap: .7rem; flex-wrap: wrap; flex: 1 1 auto; }
 .topbar-field { display: grid; gap: .2rem; font-size: .72rem; font-weight: 700; color: #cfe4ea; text-transform: uppercase; letter-spacing: .05em; }
+.topbar-field[hidden] { display: none; }
 .topbar-field input, .topbar-field select {
   border: 1px solid rgba(255,255,255,.28); border-radius: .45rem; padding: .4rem .55rem;
   background: rgba(255,255,255,.08); color: #fff; min-width: 8ch;
@@ -150,6 +151,7 @@ legend { padding: 0 .4rem; }
 
 /* ---- Forms ---- */
 .form-card { display: grid; gap: 1rem; max-width: 760px; }
+.form-card[hidden] { display: none; }
 .wide-card { max-width: none; }
 .narrow-card { max-width: 640px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .8rem; }
