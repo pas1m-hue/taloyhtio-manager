@@ -82,6 +82,9 @@ describe("static id cross-check (index.html <-> app.js)", () => {
       "observations-list", "observations-kpis", "observations-new",
       "observations-filter-asset", "observations-filter-from",
       "observations-filter-to", "observations-filter-search",
+      "events-list", "events-kpis", "events-new",
+      "events-filter-year", "events-filter-status", "events-filter-type",
+      "events-filter-asset", "events-filter-gap-only",
       "cost-evidence-list", "cost-evidence-kpis", "cost-evidence-new",
       "cost-evidence-filter-status", "cost-evidence-filter-asset",
       "cost-evidence-filter-gap-only", "detail-panel", "detail-panel-title",
@@ -110,6 +113,7 @@ describe("static source-ids prefill wiring (app.js -> field ids)", () => {
     for (const pair of [
       "asset-source-ids->asset-op-source-ids",
       "observation-source-ids->observation-op-source-ids",
+      "event-source-ids->event-op-source-ids",
     ]) {
       expect(wired.has(pair), `expected wireSourceIdsPrefill("${pair.replace("->", '", "')}") to be called`).toBe(true);
     }

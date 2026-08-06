@@ -190,7 +190,7 @@
             <header class="view-head">
               <div>
                 <h2 id="observations-title">Havainnot</h2>
-                <p class="view-lead muted">Havainto kuuluu aina rakennusosaan. Korjaustapahtuman luonti havainnosta toteutetaan vaiheessa 2B.</p>
+                <p class="view-lead muted">Havainto kuuluu aina rakennusosaan. Havainnon detaljipaneelista voi luoda korjaustapahtuman.</p>
               </div>
               <div class="button-row">
                 <button id="observations-new" type="button" class="secondary" disabled>Lisää havainto</button>
@@ -216,10 +216,44 @@
             <div id="observations-list"></div>
           </section>
 
-          <!-- Korjaustapahtumat: placeholder (näkymä vaiheessa 2B) -->
+          <!-- Korjaustapahtumat -->
           <section class="view" data-view="events" aria-labelledby="events-title" hidden>
-            <header class="view-head"><h2 id="events-title">Korjaustapahtumat</h2></header>
-            <div id="events-body"></div>
+            <header class="view-head">
+              <div>
+                <h2 id="events-title">Korjaustapahtumat</h2>
+                <p class="view-lead muted">Ei automaattista sykliä. Skenaariorivit ja lähteet syötetään käsin.</p>
+              </div>
+              <div class="button-row">
+                <button id="events-new" type="button" class="secondary" disabled>Lisää korjaustapahtuma</button>
+              </div>
+            </header>
+            <div id="events-kpis" class="card-grid"></div>
+            <div class="assets-filters">
+              <label>Vuosi
+                <select id="events-filter-year">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Tila
+                <select id="events-filter-status">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Tyyppi
+                <select id="events-filter-type">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label>Rakennusosa
+                <select id="events-filter-asset">
+                  <option value="">Kaikki</option>
+                </select>
+              </label>
+              <label class="checkbox-field">
+                <input id="events-filter-gap-only" type="checkbox"> Vain DATA GAP
+              </label>
+            </div>
+            <div id="events-list"></div>
           </section>
 
           <!-- Kustannusnäyttö -->
