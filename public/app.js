@@ -2,17 +2,25 @@ import {
   ASSET_CATEGORIES,
   buildAssetListViewModel,
   buildCostEvidenceListViewModel,
+  buildEventListViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
+  buildSaveBuildingEventOperation,
   buildSaveCostEvidenceOperation,
   buildSaveHousingCompanyOperation,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
+  copyScheduleRowToAllScenarios,
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
   countObservationsWithoutEvent,
   deriveDataGapAssets,
+  deriveEventYearOptions,
+  EVENT_ORIGINS,
+  EVENT_STATUSES,
+  EVENT_TYPES,
+  groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
   PROJECTION_PRICE_LEVEL_YEAR,
@@ -28,7 +36,7 @@ const KNOWN_VIEWS = new Set([
 
 // Views that own the right-hand detail panel; navigating to any other view
 // closes it (decision: generalized from vaihe 1's assets-only behaviour).
-const DETAIL_PANEL_VIEWS = new Set(["assets", "observations", "cost-evidence"]);
+const DETAIL_PANEL_VIEWS = new Set(["assets", "observations", "cost-evidence", "events"]);
 
 const CATEGORY_LABELS = {
   hvac: "LVI", envelope: "Vaippa", structures: "Rakenteet",
@@ -43,13 +51,37 @@ const COST_EVIDENCE_STATUS_LABELS = {
   data_gap: "DATA GAP",
 };
 
+const EVENT_TYPE_LABELS = {
+  inspection: "Tarkastus",
+  maintenance: "Huolto",
+  repair: "Korjaus",
+  replacement: "Uusiminen",
+  renewal: "Kunnostus",
+  cleaning: "Puhdistus",
+  study: "Selvitys",
+  other: "Muu",
+};
+
+const EVENT_STATUS_LABELS = {
+  suggested: "Ehdotettu",
+  approved: "Hyväksytty",
+  actual: "Toteutunut",
+  cancelled: "Peruttu",
+};
+
 const SCENARIOS = ["optimistic", "base", "stress"];
+
+const SCENARIO_LABELS = {
+  optimistic: "Optimistinen",
+  base: "Perusura",
+  stress: "Stressi",
+};
 
 const state = {
   mode: "admin",
   view: "overview",
   admin: null,
-  /** Detail-panel selection: null or { view: "assets"|"observations"|"cost-evidence", id }. */
+  /** Detail-panel selection: null or { view: "assets"|"observations"|"cost-evidence"|"events", id }. */
   selection: null,
   selectedFiscalYear: null,
   cashpathScenario: "base",
@@ -58,6 +90,8 @@ const state = {
   visitorCredential: readCredential(),
   auth: readAuthSession(),
   staleWorkspace: false,
+  /** Set once per admin load so the year filter defaults to the current year without fighting user edits. */
+  eventsYearFilterInitialized: false,
 };
 
 function selectionId(view) {
@@ -65,7 +99,10 @@ function selectionId(view) {
 }
 
 function selectionStillExists(selection, model) {
-  const lists = { assets: model.assets, observations: model.observations, "cost-evidence": model.costEvidence };
+  const lists = {
+    assets: model.assets, observations: model.observations,
+    "cost-evidence": model.costEvidence, events: model.events,
+  };
   const list = lists[selection.view];
   return Boolean(list) && list.some((item) => item.id === selection.id);
 }
@@ -86,7 +123,6 @@ function boot() {
   wireStaticControls();
   wireNavigation();
   wireModeSwitch();
-  renderEventsPlaceholder();
   renderFinancePlaceholders();
   renderAuthStatus();
   applyRoute();
@@ -116,6 +152,12 @@ function wireStaticControls() {
   $("#observations-filter-from").addEventListener("change", renderObservations);
   $("#observations-filter-to").addEventListener("change", renderObservations);
   $("#observations-filter-search").addEventListener("input", renderObservations);
+  $("#events-new").addEventListener("click", () => openEventEditor("new"));
+  $("#events-filter-year").addEventListener("change", renderEvents);
+  $("#events-filter-status").addEventListener("change", renderEvents);
+  $("#events-filter-type").addEventListener("change", renderEvents);
+  $("#events-filter-asset").addEventListener("change", renderEvents);
+  $("#events-filter-gap-only").addEventListener("change", renderEvents);
   $("#cost-evidence-new").addEventListener("click", () => openCostEvidenceEditor("new"));
   $("#cost-evidence-filter-status").addEventListener("change", renderCostEvidence);
   $("#cost-evidence-filter-asset").addEventListener("change", renderCostEvidence);
@@ -153,6 +195,22 @@ function wireStaticControls() {
     option.value = status;
     option.textContent = COST_EVIDENCE_STATUS_LABELS[status] ?? status;
     statusFilter.append(option);
+  }
+
+  // Populate events status/type filters once.
+  const eventStatusFilter = $("#events-filter-status");
+  for (const status of EVENT_STATUSES) {
+    const option = document.createElement("option");
+    option.value = status;
+    option.textContent = EVENT_STATUS_LABELS[status] ?? status;
+    eventStatusFilter.append(option);
+  }
+  const eventTypeFilter = $("#events-filter-type");
+  for (const type of EVENT_TYPES) {
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = EVENT_TYPE_LABELS[type] ?? type;
+    eventTypeFilter.append(option);
   }
 }
 
@@ -360,7 +418,7 @@ function renderAuthStatus() {
   $("#admin-auth-gate").hidden = signedIn;
   $("#admin-workspace").hidden = !signedIn;
   $("#admin-sign-out").disabled = !signedIn;
-  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new", "#observations-new", "#cost-evidence-new"]) {
+  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new", "#observations-new", "#events-new", "#cost-evidence-new"]) {
     $(selector).disabled = !signedIn;
   }
   $("#admin-batch-form button[type=submit]").disabled = !signedIn;
@@ -461,8 +519,8 @@ function renderWorkspace() {
   renderCompanyForm();
   renderAssets();
   renderObservations();
+  renderEvents();
   renderCostEvidence();
-  renderEventsPlaceholder();
   renderFinancePlaceholders();
   renderScenarios();
   renderCashpath();
@@ -480,9 +538,10 @@ function renderLoadPrompts() {
   $("#overview-fiscal").innerHTML = "";
   $("#overview-notes").innerHTML = prompt;
   $("#observations-kpis").innerHTML = "";
+  $("#events-kpis").innerHTML = "";
   $("#cost-evidence-kpis").innerHTML = "";
   for (const id of [
-    "#assets-list", "#observations-list", "#cost-evidence-list",
+    "#assets-list", "#observations-list", "#events-list", "#cost-evidence-list",
     "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary",
   ]) {
     $(id).innerHTML = prompt;
@@ -710,6 +769,7 @@ function renderDetailPanel() {
   if (state.selection.view === "assets") renderAssetDetail();
   else if (state.selection.view === "observations") renderObservationDetail();
   else if (state.selection.view === "cost-evidence") renderCostEvidenceDetail();
+  else if (state.selection.view === "events") renderEventDetail();
 }
 
 function renderAssetDetail() {
@@ -746,7 +806,7 @@ function openDetailPanel() { $("#detail-panel").hidden = false; }
 function closeDetailPanel() {
   $("#detail-panel").hidden = true;
   state.selection = null;
-  for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected")) {
+  for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected, #events-list tr.is-selected")) {
     el.classList.remove("is-selected");
   }
 }
@@ -940,14 +1000,21 @@ function renderObservationDetail() {
       <div class="detail-item"><span>Kuvaus</span><strong>${escapeHtml(observation.description)}</strong></div>
       <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((observation.sourceIds ?? []).join(", ") || "—")}</strong></div>
     </div>
-    <div class="button-row"><button type="button" class="secondary" id="detail-edit-observation">Muokkaa</button></div>
+    <div class="button-row">
+      <button type="button" class="secondary" id="detail-edit-observation">Muokkaa</button>
+      <button type="button" class="secondary" id="detail-create-event-from-observation">Luo korjaustapahtuma</button>
+    </div>
     ${detailGroup("Linkitetyt tapahtumat", linkedEvents.map((event) =>
       `<li><strong>${escapeHtml(event.title)}</strong> · ${escapeHtml(event.status)}</li>`), "Ei linkitettyjä tapahtumia.")}
-    <p class="muted">Korjaustapahtuman luonti havainnosta toteutetaan vaiheessa 2B.</p>
   `;
   $("#detail-edit-observation").addEventListener(
     "click", () => openObservationEditor("edit", observation.id),
   );
+  $("#detail-create-event-from-observation").addEventListener("click", () => {
+    closeDetailPanel();
+    navigate("events");
+    openEventEditor("new", null, { assetId: observation.assetId, observationIds: [observation.id] });
+  });
 }
 
 function ensureObservationEditorHost() {
@@ -1385,14 +1452,396 @@ async function submitPriceLevelConfirmationForm(event, costEvidenceId) {
   }
 }
 
-/* -------- Korjaustapahtumat placeholder + finance placeholders (decision 5) -------- */
+/* -------- Korjaustapahtumat -------- */
 
-function renderEventsPlaceholder() {
-  $("#events-body").innerHTML = stateBlock({
-    kind: "not-built",
-    title: "Korjaustapahtumanäkymä tulossa vaiheessa 2B",
-    body: "Suunnitellut, hyväksytyt ja toteutuneet korjaustapahtumat, skenaariorivit sekä havainnosta luotu tapahtuma toteutetaan vaiheessa 2B. Tapahtumatiedot ovat toistaiseksi nähtävissä rakennusosan detaljipaneelissa Rakennusosat-näkymässä.",
+function eventFilters() {
+  const year = $("#events-filter-year").value;
+  const status = $("#events-filter-status").value;
+  const type = $("#events-filter-type").value;
+  const assetId = $("#events-filter-asset").value;
+  return {
+    year: year === "" ? undefined : Number(year),
+    status: status === "" ? undefined : status,
+    type: type === "" ? undefined : type,
+    assetId: assetId === "" ? undefined : assetId,
+    gapOnly: $("#events-filter-gap-only").checked,
+  };
+}
+
+// Defaults the year filter to "Kuluva kausi <nykyinen vuosi>" once per load
+// (Näkymäspesifikaatio §7.3), but never overwrites a filter the user already
+// touched.
+function populateEventYearFilter(events) {
+  const select = $("#events-filter-year");
+  const years = deriveEventYearOptions(events);
+  const current = select.value;
+  select.innerHTML = `<option value="">Kaikki</option>` +
+    years.map((year) => `<option value="${year}">${year}</option>`).join("");
+  if (!state.eventsYearFilterInitialized) {
+    state.eventsYearFilterInitialized = true;
+    const nowYear = new Date().getFullYear();
+    if (years.includes(nowYear)) { select.value = String(nowYear); return; }
+  }
+  select.value = current !== "" && years.includes(Number(current)) ? current : "";
+}
+
+function renderEvents() {
+  if (!state.admin) return;
+  const model = state.admin;
+  populateAssetSelect($("#events-filter-asset"), model.assets, { includeEmpty: true });
+  populateEventYearFilter(model.events);
+
+  $("#events-kpis").innerHTML = [
+    ["Ehdotettu", model.counts.suggestedEvents],
+    ["Hyväksytty", model.counts.approvedEvents],
+    ["Toteutunut", model.counts.actualEvents],
+    ["Peruttu", model.counts.cancelledEvents],
+  ].map(kpiCard).join("");
+
+  const vm = buildEventListViewModel(model.events, model.assets, model.costEvidence, eventFilters());
+  const host = $("#events-list");
+  if (vm.isEmpty) {
+    const anyEvents = model.events.length > 0;
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: anyEvents ? "Ei osumia suodattimilla" : "Ei vielä korjaustapahtumia",
+      body: anyEvents ? "Muuta vuosi-, tila-, tyyppi- tai rakennusosasuodatinta." : vm.emptyMessage,
+    });
+    return;
+  }
+  const selectedId = selectionId("events");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Rakennusosa</th><th>Otsikko</th><th>Tyyppi</th><th>Tila</th><th>Vuodet</th><th></th></tr></thead>
+    <tbody>${vm.rows.map((row) => {
+      const rowClasses = [row.id === selectedId ? "is-selected" : "", row.hasDataGap ? "is-gap" : ""].filter(Boolean).join(" ");
+      return `<tr class="${rowClasses}" data-event-id="${escapeHtml(row.id)}">
+        <td>${escapeHtml(row.assetName)}</td>
+        <td>${escapeHtml(row.title)}</td>
+        <td>${escapeHtml(EVENT_TYPE_LABELS[row.type] ?? row.type)}</td>
+        <td>${escapeHtml(EVENT_STATUS_LABELS[row.status] ?? row.status)}</td>
+        <td>${escapeHtml(row.yearRange)}${row.hasDataGap ? ` <span class="badge gap">DATA GAP</span>` : ""}</td>
+        <td><button type="button" class="secondary row-select">Näytä</button></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table></div>`;
+  for (const row of $$("#events-list tr[data-event-id]")) {
+    row.querySelector(".row-select").addEventListener("click", () => selectEvent(row.dataset.eventId));
+  }
+}
+
+function selectEvent(eventId) {
+  state.selection = { view: "events", id: eventId };
+  renderEvents();
+  renderDetailPanel();
+  openDetailPanel();
+}
+
+function costEvidenceLabel(evidence, fallbackId) {
+  if (!evidence) return fallbackId || "—";
+  return evidence.status === "data_gap"
+    ? `${evidence.id} (DATA GAP)`
+    : `${evidence.id} · ${money(evidence.amount ?? 0)}`;
+}
+
+function renderEventDetail() {
+  const model = state.admin;
+  const event = model.events.find((item) => item.id === selectionId("events"));
+  if (!event) { closeDetailPanel(); return; }
+  const asset = model.assets.find((item) => item.id === event.assetId);
+  const linkedObservations = model.observations.filter((o) =>
+    (event.observationIds ?? []).includes(o.id));
+  const evidenceById = new Map(model.costEvidence.map((item) => [item.id, item]));
+
+  const scheduleBlock = event.status === "actual"
+    ? detailGroup("Toteuma", event.actual ? [
+        `<li>Vuosi ${event.actual.year}${event.actual.occurredAt ? ` · ${escapeHtml(event.actual.occurredAt)}` : ""}${event.actual.amount !== undefined ? ` · ${money(event.actual.amount)}` : ""}${event.actual.quantity !== undefined ? ` · ${event.actual.quantity} kpl` : ""}</li>`,
+        `<li>${escapeHtml(costEvidenceLabel(evidenceById.get(event.actual.costEvidenceId), event.actual.costEvidenceId))}</li>`,
+      ] : [], "Ei toteumatietoja.")
+    : SCENARIOS.map((scenario) => {
+        const rows = groupScheduleByScenario(event.schedule ?? [])[scenario] ?? [];
+        return detailGroup(SCENARIO_LABELS[scenario], rows.map((entry) => {
+          const evidence = evidenceById.get(entry.costEvidenceId);
+          return `<li>${entry.year}${entry.amount !== undefined ? ` · ${money(entry.amount)}` : ""}${entry.quantity !== undefined ? ` · ${entry.quantity} kpl` : ""} · ${escapeHtml(costEvidenceLabel(evidence, entry.costEvidenceId))}</li>`;
+        }), "Ei rivejä.");
+      }).join("");
+
+  $("#detail-panel-title").textContent = event.title;
+  $("#detail-panel-body").innerHTML = `
+    <div class="detail-group">
+      <div class="detail-item"><span>Rakennusosa</span><strong>${escapeHtml(asset?.name ?? event.assetId)}</strong></div>
+      <div class="detail-item"><span>Tyyppi</span><strong>${escapeHtml(EVENT_TYPE_LABELS[event.type] ?? event.type)}</strong></div>
+      <div class="detail-item"><span>Tila</span><strong>${escapeHtml(EVENT_STATUS_LABELS[event.status] ?? event.status)}</strong></div>
+      <div class="detail-item"><span>Alkuperä</span><strong>${escapeHtml(event.origin)}</strong></div>
+      <div class="detail-item"><span>Huomio</span><strong>${escapeHtml(event.notes ?? "—")}</strong></div>
+      <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((event.sourceIds ?? []).join(", ") || "—")}</strong></div>
+    </div>
+    <div class="button-row"><button type="button" class="secondary" id="detail-edit-event">Muokkaa</button></div>
+    ${scheduleBlock}
+    ${detailGroup("Linkitetyt havainnot", linkedObservations.map((o) =>
+      `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei linkitettyjä havaintoja.")}
+  `;
+  $("#detail-edit-event").addEventListener("click", () => openEventEditor("edit", event.id));
+}
+
+function ensureEventEditorHost() {
+  let host = $("#event-editor");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "event-editor";
+    host.className = "subsection";
+    const view = document.querySelector('.view[data-view="events"]');
+    view.insertBefore(host, $("#events-list"));
+  }
+  return host;
+}
+
+function closeEventEditor() {
+  const host = $("#event-editor");
+  if (host) { host.hidden = true; host.innerHTML = ""; }
+}
+
+function costEvidenceOptions(model) {
+  return [["", "Valitse kustannusnäyttö"]].concat(
+    model.costEvidence
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id, "fi"))
+      .map((item) => [
+        item.id,
+        item.status === "data_gap"
+          ? `${item.id} (DATA GAP)`
+          : `${item.id} · ${COST_EVIDENCE_STATUS_LABELS[item.status] ?? item.status}`,
+      ]),
+  );
+}
+
+function generateId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Opens the building-event editor. `prefill` is used by the "Luo
+ * korjaustapahtuma" button on a havainto's detail panel (decision 5.5):
+ * `{ assetId, observationIds }` pre-fills the asset and the observation link,
+ * the rest (schedule, cost evidence) is left for the user to fill in.
+ */
+function openEventEditor(mode, eventId, prefill) {
+  const model = state.admin;
+  const event = mode === "edit" ? model.events.find((e) => e.id === eventId) : null;
+  const entitySources = event ? (event.sourceIds ?? []).join(", ") : "";
+  const assetOptions = model.assets
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "fi"))
+    .map((asset) => [asset.id, asset.name]);
+  const typeOptions = EVENT_TYPES.map((type) => [type, EVENT_TYPE_LABELS[type] ?? type]);
+  const statusOptions = EVENT_STATUSES.map((status) => [status, EVENT_STATUS_LABELS[status] ?? status]);
+  const origin = event?.origin ?? "manual";
+  const observationIds = event
+    ? (event.observationIds ?? []).join(", ")
+    : (prefill?.observationIds ?? []).join(", ");
+  const assetId = event?.assetId ?? prefill?.assetId ?? "";
+
+  const host = ensureEventEditorHost();
+  host.hidden = false;
+  host.innerHTML = `
+    <form id="event-form" class="card form-card wide-card" novalidate>
+      <h3>${mode === "edit" ? "Muokkaa korjaustapahtumaa" : "Uusi korjaustapahtuma"}</h3>
+      <div class="form-grid">
+        ${textField("event-id", "Tunniste", event?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${selectField("event-asset", "Rakennusosa", assetOptions, assetId)}
+        ${textField("event-title", "Otsikko", event?.title ?? "", { required: true })}
+        ${selectField("event-type", "Tyyppi", typeOptions, event?.type ?? "")}
+        ${selectField("event-status", "Tila", statusOptions, event?.status ?? "suggested")}
+        ${textareaField("event-notes", "Huomio", event?.notes ?? "")}
+        ${textField("event-observation-ids", "Linkitetyt havainnot (tunnisteet)", observationIds, {})}
+        ${textField("event-source-ids", "Tapahtuman lähdetunnisteet", entitySources, { required: true })}
+      </div>
+      <p class="form-hint">Alkuperä: ${escapeHtml(origin === "manual" ? "Manuaalinen" : origin)}</p>
+      <input type="hidden" id="event-origin" value="${escapeHtml(origin)}">
+
+      <div id="event-schedule-editor" class="schedule-editor">
+        <h4>Skenaariorivit</h4>
+        <p class="form-hint">Tarkat rivit skenaarioittain. Ei automaattista sykliä tai generointia.</p>
+        <span id="event-schedule-error" class="field-error"></span>
+        <div class="schedule-scenario-columns">
+          ${SCENARIOS.map((scenario) => `
+            <div class="subsection schedule-scenario-column" data-scenario-column="${scenario}">
+              <h5>${escapeHtml(SCENARIO_LABELS[scenario])}</h5>
+              <div id="event-schedule-rows-${scenario}" class="schedule-rows"></div>
+              <button type="button" class="secondary schedule-add-row" data-scenario="${scenario}">+ Lisää rivi</button>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+
+      <div id="event-actual-editor" class="card form-card" hidden>
+        <h4>Toteuma</h4>
+        <div class="form-grid">
+          ${numberField("event-actual-year", "Toteumavuosi", event?.actual?.year ?? "", { required: true, step: 1 })}
+          ${dateField("event-actual-occurred-at", "Toteutumispäivä", event?.actual?.occurredAt ?? "")}
+          ${numberField("event-actual-amount", "Summa €", event?.actual?.amount ?? "", { min: 0, step: "0.01" })}
+          ${numberField("event-actual-quantity", "Määrä", event?.actual?.quantity ?? "", { min: 1, step: 1 })}
+          ${selectField("event-actual-cost-evidence", "Kustannusnäyttö", costEvidenceOptions(model), event?.actual?.costEvidenceId ?? "")}
+        </div>
+      </div>
+
+      <fieldset class="form-grid">
+        <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään tapahtuman lähteistä, muokattavissa)</legend>
+        ${textField("event-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
+        ${textField("event-explanation", "Muutoksen selitys", "", { required: true })}
+      </fieldset>
+      <p id="event-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Tallenna tapahtuma</button>
+        <button type="button" class="secondary" id="event-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+
+  for (const scenario of SCENARIOS) {
+    for (const row of (event?.schedule ?? []).filter((entry) => entry.scenario === scenario)) {
+      appendScheduleRow(scenario, row);
+    }
+  }
+  for (const button of $$("#event-schedule-editor .schedule-add-row")) {
+    button.addEventListener("click", () => appendScheduleRow(button.dataset.scenario));
+  }
+
+  $("#event-status").addEventListener("change", updateEventEditorStatusState);
+  updateEventEditorStatusState();
+  $("#event-form").onsubmit = (formEvent) => submitEventForm(formEvent, mode);
+  $("#event-cancel").addEventListener("click", closeEventEditor);
+  wireSourceIdsPrefill("event-source-ids", "event-op-source-ids");
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function appendScheduleRow(scenario, entry) {
+  const rowsId = `event-schedule-rows-${scenario}`;
+  const container = $(`#${rowsId}`);
+  const uid = entry?.id ?? generateId("schedule_row");
+  const row = document.createElement("div");
+  row.className = "schedule-row";
+  row.dataset.rowUid = uid;
+  row.dataset.scenario = scenario;
+  row.innerHTML = `
+    <div class="form-grid compact">
+      ${textField(`event-schedule-${uid}-id`, "Rivitunniste", uid, { readonly: true })}
+      ${numberField(`event-schedule-${uid}-year`, "Vuosi", entry?.year ?? "", { required: true, step: 1 })}
+      ${numberField(`event-schedule-${uid}-amount`, "Summa €", entry?.amount ?? "", { min: 0, step: "0.01" })}
+      ${numberField(`event-schedule-${uid}-quantity`, "Määrä", entry?.quantity ?? "", { min: 1, step: 1 })}
+      ${selectField(`event-schedule-${uid}-cost-evidence`, "Kustannusnäyttö", costEvidenceOptions(state.admin), entry?.costEvidenceId ?? "")}
+      ${textField(`event-schedule-${uid}-explanation`, "Selitys", entry?.explanation ?? "")}
+    </div>
+    <div class="button-row">
+      <button type="button" class="secondary schedule-copy-row">Kopioi kaikkiin skenaarioihin</button>
+      <button type="button" class="secondary schedule-remove-row">Poista rivi</button>
+    </div>
+  `;
+  container.append(row);
+  row.querySelector(".schedule-copy-row").addEventListener("click", () => copyScheduleRowUiAction(uid));
+  row.querySelector(".schedule-remove-row").addEventListener("click", () => row.remove());
+}
+
+// "Kopioi rivi kaikkiin skenaarioihin" (L-003): duplicates the row the user
+// just filled in as a starting point for the other two scenarios. Never
+// infers numbers — the user edits the per-scenario differences afterward.
+function copyScheduleRowUiAction(uid) {
+  const row = document.querySelector(`.schedule-row[data-row-uid="${uid}"]`);
+  if (!row) return;
+  const source = {
+    id: uid,
+    year: fieldValue(`event-schedule-${uid}-year`),
+    amount: fieldValue(`event-schedule-${uid}-amount`),
+    quantity: fieldValue(`event-schedule-${uid}-quantity`),
+    costEvidenceId: fieldValue(`event-schedule-${uid}-cost-evidence`),
+    explanation: fieldValue(`event-schedule-${uid}-explanation`),
+  };
+  const existingRows = $$(".schedule-row").map((el) => ({ id: el.dataset.rowUid }));
+  for (const copy of copyScheduleRowToAllScenarios(source, existingRows)) {
+    appendScheduleRow(copy.scenario, copy);
+  }
+}
+
+function updateEventEditorStatusState() {
+  const status = fieldValue("event-status");
+  $("#event-schedule-editor").hidden = status === "actual";
+  $("#event-actual-editor").hidden = status !== "actual";
+}
+
+async function submitEventForm(formEvent, mode) {
+  formEvent.preventDefault();
+  clearFieldErrors("#event-form");
+  const status = fieldValue("event-status");
+  const raw = {
+    id: fieldValue("event-id"),
+    assetId: fieldValue("event-asset"),
+    title: fieldValue("event-title"),
+    type: fieldValue("event-type"),
+    status,
+    origin: fieldValue("event-origin"),
+    notes: fieldValue("event-notes"),
+    observationIds: fieldValue("event-observation-ids"),
+    sourceIds: fieldValue("event-source-ids"),
+    operationSourceIds: fieldValue("event-op-source-ids"),
+    explanation: fieldValue("event-explanation"),
+  };
+
+  /** Maps this submission's `schedule.<index>.<field>` error keys to real field ids. */
+  const scheduleFieldMap = {};
+  if (status === "actual") {
+    raw.actualYear = fieldValue("event-actual-year");
+    raw.actualOccurredAt = fieldValue("event-actual-occurred-at");
+    raw.actualAmount = fieldValue("event-actual-amount");
+    raw.actualQuantity = fieldValue("event-actual-quantity");
+    raw.actualCostEvidenceId = fieldValue("event-actual-cost-evidence");
+  } else {
+    raw.schedule = $$("#event-schedule-editor .schedule-row").map((row, index) => {
+      const uid = row.dataset.rowUid;
+      scheduleFieldMap[`schedule.${index}.id`] = `event-schedule-${uid}-id`;
+      scheduleFieldMap[`schedule.${index}.year`] = `event-schedule-${uid}-year`;
+      scheduleFieldMap[`schedule.${index}.costEvidenceId`] = `event-schedule-${uid}-cost-evidence`;
+      scheduleFieldMap[`schedule.${index}.amount`] = `event-schedule-${uid}-amount`;
+      scheduleFieldMap[`schedule.${index}.quantity`] = `event-schedule-${uid}-quantity`;
+      return {
+        id: uid,
+        scenario: row.dataset.scenario,
+        year: fieldValue(`event-schedule-${uid}-year`),
+        amount: fieldValue(`event-schedule-${uid}-amount`),
+        quantity: fieldValue(`event-schedule-${uid}-quantity`),
+        costEvidenceId: fieldValue(`event-schedule-${uid}-cost-evidence`),
+        explanation: fieldValue(`event-schedule-${uid}-explanation`),
+      };
+    });
+  }
+
+  const result = buildSaveBuildingEventOperation(
+    raw, state.admin.assets, state.admin.costEvidence, state.admin.observations,
+  );
+  if (!result.ok) {
+    applyFieldErrors("#event-form", {
+      id: "event-id", assetId: "event-asset", title: "event-title", type: "event-type",
+      status: "event-status", sourceIds: "event-source-ids", observationIds: "event-observation-ids",
+      schedule: "event-schedule",
+      actualYear: "event-actual-year", actualOccurredAt: "event-actual-occurred-at",
+      actualAmount: "event-actual-amount", actualQuantity: "event-actual-quantity",
+      actualCostEvidenceId: "event-actual-cost-evidence",
+      operationSourceIds: "event-op-source-ids", explanation: "event-explanation",
+      ...scheduleFieldMap,
+    }, result.errors);
+    setFeedback("#event-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations([result.operation], {
+    successMessage: mode === "edit" ? "Korjaustapahtuma päivitetty." : "Korjaustapahtuma lisätty.",
   });
+  if (sent.ok) {
+    state.selection = { view: "events", id: result.operation.value.id };
+    closeEventEditor();
+    renderEvents();
+    renderDetailPanel();
+    openDetailPanel();
+  } else if (sent.conflict) {
+    setFeedback("#event-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
 }
 
 function renderFinancePlaceholders() {
