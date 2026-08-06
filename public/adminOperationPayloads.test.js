@@ -2,22 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   buildAssetListViewModel,
   buildCostEvidenceListViewModel,
+  buildEventListViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
+  buildSaveBuildingEventOperation,
   buildSaveCostEvidenceOperation,
   buildSaveHousingCompanyOperation,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
+  copyScheduleRowToAllScenarios,
   countActiveAssets,
   countObservationsWithoutEvent,
   deriveDataGapAssets,
+  deriveEventYearOptions,
+  groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
   parseSourceIds,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   validateAssetInput,
+  validateBuildingEventInput,
   validateCompanyInput,
   validateCostEvidenceInput,
   validateObservationInput,
@@ -30,6 +36,16 @@ const ASSETS = [
 ];
 
 const EVENTS = [{ id: "event_roof_repair" }];
+
+const COST_EVIDENCE_ROWS = [
+  { id: "quote_roof_2026", status: "quote" },
+  { id: "gap_roof", status: "data_gap" },
+];
+
+const OBSERVATIONS = [
+  { id: "observation_roof_leak", assetId: "asset_roof" },
+  { id: "observation_yard_crack", assetId: "asset_yard" },
+];
 
 describe("buildSaveHousingCompanyOperation", () => {
   const validRaw = {
@@ -517,6 +533,400 @@ describe("buildSaveCostEvidenceOperation", () => {
       expect(result.operation.value.amount).toBeUndefined();
       expect(result.operation.value.status).toBe("data_gap");
     });
+  });
+});
+
+describe("buildSaveBuildingEventOperation", () => {
+  const suggestedRaw = {
+    id: "event_roof_repair",
+    assetId: "asset_roof",
+    title: "Vesikaton uusiminen",
+    type: "replacement",
+    status: "suggested",
+    origin: "manual",
+    sourceIds: "board_2026",
+    notes: "Karkea arvio, tarkennettava.",
+    schedule: [
+      {
+        id: "row_base_2030",
+        scenario: "base",
+        year: "2030",
+        amount: "18000",
+        quantity: "1",
+        costEvidenceId: "quote_roof_2026",
+      },
+    ],
+    operationSourceIds: "board_2026",
+    explanation: "Hallitus hyväksyi suunnitelman.",
+  };
+
+  it("builds a save_building_event operation for a suggested future event", () => {
+    const result = buildSaveBuildingEventOperation(suggestedRaw, ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS);
+    expect(result).toEqual({
+      ok: true,
+      operation: {
+        type: "save_building_event",
+        value: {
+          id: "event_roof_repair",
+          assetId: "asset_roof",
+          title: "Vesikaton uusiminen",
+          type: "replacement",
+          origin: "manual",
+          sourceIds: ["board_2026"],
+          notes: "Karkea arvio, tarkennettava.",
+          status: "suggested",
+          schedule: [
+            {
+              id: "row_base_2030",
+              scenario: "base",
+              year: 2030,
+              amount: 18000,
+              quantity: 1,
+              costEvidenceId: "quote_roof_2026",
+            },
+          ],
+        },
+        sourceIds: ["board_2026"],
+        explanation: "Hallitus hyväksyi suunnitelman.",
+      },
+    });
+  });
+
+  it("rejects a future event (suggested/approved) with no schedule rows", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, schedule: [] },
+      ASSETS,
+      COST_EVIDENCE_ROWS,
+      OBSERVATIONS,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.schedule).toBeTruthy();
+  });
+
+  it("accepts an approved event the same way as suggested", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, status: "approved" },
+      ASSETS,
+      COST_EVIDENCE_ROWS,
+      OBSERVATIONS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.operation.value.status).toBe("approved");
+  });
+
+  it("accepts a cancelled event without any schedule rows", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, status: "cancelled", schedule: [] },
+      ASSETS,
+      COST_EVIDENCE_ROWS,
+      OBSERVATIONS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.operation.value.status).toBe("cancelled");
+    expect(result.operation.value.schedule).toBeUndefined();
+  });
+
+  it("accepts a cancelled event that still carries schedule rows", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, status: "cancelled" },
+      ASSETS,
+      COST_EVIDENCE_ROWS,
+      OBSERVATIONS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.operation.value.schedule).toHaveLength(1);
+  });
+
+  describe("schedule row rules", () => {
+    it("rejects an invalid scenario", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [{ ...suggestedRaw.schedule[0], scenario: "guess" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.0.scenario"]).toBeTruthy();
+    });
+
+    it("rejects a non-integer year", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [{ ...suggestedRaw.schedule[0], year: "2030.5" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.0.year"]).toBeTruthy();
+    });
+
+    it("rejects a missing costEvidenceId", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [{ ...suggestedRaw.schedule[0], costEvidenceId: "" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.0.costEvidenceId"]).toBeTruthy();
+    });
+
+    it("rejects a duplicate row id", () => {
+      const row = suggestedRaw.schedule[0];
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [row, { ...row, scenario: "stress" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.1.id"]).toBeTruthy();
+    });
+
+    it("rejects a negative amount", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [{ ...suggestedRaw.schedule[0], amount: "-1" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.0.amount"]).toBeTruthy();
+    });
+
+    it("rejects a non-integer quantity", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...suggestedRaw, schedule: [{ ...suggestedRaw.schedule[0], quantity: "1.5" }] },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors["schedule.0.quantity"]).toBeTruthy();
+    });
+  });
+
+  describe("actual event", () => {
+    const actualRaw = {
+      id: "event_roof_repair_done",
+      assetId: "asset_roof",
+      title: "Vesikaton uusiminen",
+      type: "replacement",
+      status: "actual",
+      origin: "manual",
+      sourceIds: "board_2026",
+      actualYear: "2027",
+      actualCostEvidenceId: "quote_roof_2026",
+      actualOccurredAt: "2027-06-15",
+      actualAmount: "17500",
+      actualQuantity: "1",
+      operationSourceIds: "board_2026",
+      explanation: "Kirjattiin toteutunut korjaus.",
+    };
+
+    it("builds a save_building_event operation for an actual event", () => {
+      const result = buildSaveBuildingEventOperation(actualRaw, ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.operation.value.actual).toEqual({
+        year: 2027,
+        occurredAt: "2027-06-15",
+        amount: 17500,
+        quantity: 1,
+        costEvidenceId: "quote_roof_2026",
+      });
+      expect(result.operation.value.schedule).toBeUndefined();
+    });
+
+    it("rejects an actual event with no costEvidenceId", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...actualRaw, actualCostEvidenceId: "" },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.actualCostEvidenceId).toBeTruthy();
+    });
+
+    it("rejects an actual event with a non-integer year", () => {
+      const result = buildSaveBuildingEventOperation(
+        { ...actualRaw, actualYear: "2027.5" },
+        ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.actualYear).toBeTruthy();
+    });
+  });
+
+  it("keeps entity sourceIds and operation sourceIds distinct", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, sourceIds: "entity_src", operationSourceIds: "" },
+      ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.operationSourceIds).toBeTruthy();
+    expect(result.errors.sourceIds).toBeUndefined();
+  });
+
+  it("rejects observationIds that reference an observation on a different asset", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, observationIds: "observation_yard_crack" },
+      ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.observationIds).toBeTruthy();
+  });
+
+  it("accepts observationIds that reference an observation on the same asset", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, observationIds: "observation_roof_leak" },
+      ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.operation.value.observationIds).toEqual(["observation_roof_leak"]);
+  });
+
+  it("rejects duplicate observationIds", () => {
+    const result = buildSaveBuildingEventOperation(
+      { ...suggestedRaw, observationIds: ["observation_roof_leak", "observation_roof_leak"] },
+      ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.observationIds).toBeTruthy();
+  });
+});
+
+describe("copyScheduleRowToAllScenarios", () => {
+  const row = {
+    id: "row_base_2030",
+    year: 2030,
+    amount: 18000,
+    quantity: 1,
+    costEvidenceId: "quote_roof_2026",
+    explanation: "Karkea arvio.",
+  };
+
+  it("produces three rows, one per scenario, with unique ids and otherwise identical fields", () => {
+    const rows = copyScheduleRowToAllScenarios(row, []);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((item) => item.scenario)).toEqual(["optimistic", "base", "stress"]);
+    const ids = rows.map((item) => item.id);
+    expect(new Set(ids).size).toBe(3);
+    for (const copy of rows) {
+      expect(copy.year).toBe(row.year);
+      expect(copy.amount).toBe(row.amount);
+      expect(copy.quantity).toBe(row.quantity);
+      expect(copy.costEvidenceId).toBe(row.costEvidenceId);
+      expect(copy.explanation).toBe(row.explanation);
+    }
+  });
+
+  it("avoids id collisions with rows already in the event", () => {
+    const rows = copyScheduleRowToAllScenarios(row, [{ id: "row_base_2030_base" }]);
+    const ids = rows.map((item) => item.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).not.toContain("row_base_2030_base");
+  });
+
+  it("never infers or changes numeric fields, only clones the input row", () => {
+    const zeroRow = { ...row, amount: 0, quantity: undefined };
+    const rows = copyScheduleRowToAllScenarios(zeroRow, []);
+    for (const copy of rows) {
+      expect(copy.amount).toBe(0);
+      expect(copy.quantity).toBeUndefined();
+    }
+  });
+});
+
+describe("buildEventListViewModel", () => {
+  const events = [
+    {
+      id: "event_roof_repair",
+      assetId: "asset_roof",
+      title: "Vesikaton uusiminen",
+      type: "replacement",
+      status: "suggested",
+      schedule: [
+        { scenario: "base", year: 2030, costEvidenceId: "quote_roof_2026" },
+        { scenario: "stress", year: 2028, costEvidenceId: "gap_roof" },
+      ],
+    },
+    {
+      id: "event_yard_inspection",
+      assetId: "asset_yard",
+      title: "Pihan tarkastus",
+      type: "inspection",
+      status: "actual",
+      actual: { year: 2026, costEvidenceId: "quote_roof_2026" },
+    },
+  ];
+
+  it("builds rows with asset names, year ranges and DATA GAP flags", () => {
+    const vm = buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS);
+    expect(vm.isEmpty).toBe(false);
+    const roofRow = vm.rows.find((row) => row.id === "event_roof_repair");
+    expect(roofRow.assetName).toBe("Vesikatto");
+    expect(roofRow.yearRange).toBe("2028–2030");
+    expect(roofRow.hasDataGap).toBe(true);
+    const yardRow = vm.rows.find((row) => row.id === "event_yard_inspection");
+    expect(yardRow.yearRange).toBe("2026");
+    expect(yardRow.hasDataGap).toBe(false);
+  });
+
+  it("filters by status, type, asset, year and gap-only", () => {
+    expect(buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS, { status: "actual" }).rows).toHaveLength(1);
+    expect(buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS, { type: "inspection" }).rows).toHaveLength(1);
+    expect(buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS, { assetId: "asset_yard" }).rows).toHaveLength(1);
+    expect(buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS, { year: 2028 }).rows).toHaveLength(1);
+    expect(buildEventListViewModel(events, ASSETS, COST_EVIDENCE_ROWS, { gapOnly: true }).rows).toHaveLength(1);
+  });
+
+  it("reports an empty state with a message when there are no events", () => {
+    const vm = buildEventListViewModel([], ASSETS, COST_EVIDENCE_ROWS);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.emptyMessage).toBeTruthy();
+  });
+});
+
+describe("deriveEventYearOptions", () => {
+  it("collects unique sorted years from schedule rows and actual entries", () => {
+    const events = [
+      { status: "suggested", schedule: [{ year: 2030 }, { year: 2028 }] },
+      { status: "actual", actual: { year: 2026 } },
+      { status: "suggested", schedule: [{ year: 2028 }] },
+    ];
+    expect(deriveEventYearOptions(events)).toEqual([2026, 2028, 2030]);
+  });
+});
+
+describe("groupScheduleByScenario", () => {
+  it("groups rows into their scenario buckets", () => {
+    const schedule = [
+      { id: "a", scenario: "base" },
+      { id: "b", scenario: "stress" },
+      { id: "c", scenario: "base" },
+    ];
+    const groups = groupScheduleByScenario(schedule);
+    expect(groups.base.map((row) => row.id)).toEqual(["a", "c"]);
+    expect(groups.stress.map((row) => row.id)).toEqual(["b"]);
+    expect(groups.optimistic).toEqual([]);
+  });
+});
+
+describe("validateBuildingEventInput", () => {
+  it("is used directly by buildSaveBuildingEventOperation's error mapping (exported for form-level checks)", () => {
+    const result = validateBuildingEventInput(
+      { id: "", assetId: "", title: "", type: "", status: "", origin: "" },
+      ASSETS, COST_EVIDENCE_ROWS, OBSERVATIONS,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(Object.keys(result.errors)).toEqual(
+      expect.arrayContaining(["id", "assetId", "title", "type", "status", "origin", "sourceIds"]),
+    );
   });
 });
 

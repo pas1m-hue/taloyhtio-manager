@@ -654,6 +654,496 @@ export function buildSavePriceLevelConfirmationOperation(raw, costEvidence) {
   };
 }
 
+/** Mirrors EVENT_TYPES in domain/types.ts. */
+export const EVENT_TYPES = [
+  "inspection",
+  "maintenance",
+  "repair",
+  "replacement",
+  "renewal",
+  "cleaning",
+  "study",
+  "other",
+];
+
+const EVENT_TYPE_SET = new Set(EVENT_TYPES);
+
+/** Mirrors EVENT_STATUSES in domain/types.ts. */
+export const EVENT_STATUSES = ["suggested", "approved", "actual", "cancelled"];
+
+const EVENT_STATUS_SET = new Set(EVENT_STATUSES);
+
+/** Mirrors EVENT_ORIGINS in domain/types.ts. */
+export const EVENT_ORIGINS = ["initial_excel", "manual", "document_update"];
+
+const EVENT_ORIGIN_SET = new Set(EVENT_ORIGINS);
+
+/** Mirrors SCENARIOS in domain/types.ts. */
+export const SCENARIOS = ["optimistic", "base", "stress"];
+
+const SCENARIO_SET = new Set(SCENARIOS);
+
+/**
+ * @typedef {Object} EventScheduleEntryValue
+ * @property {string} id
+ * @property {"optimistic"|"base"|"stress"} scenario
+ * @property {number} year
+ * @property {number} [amount]
+ * @property {number} [quantity]
+ * @property {string} costEvidenceId
+ * @property {string} [explanation]
+ */
+
+/**
+ * @typedef {Object} ActualEventEntryValue
+ * @property {number} year
+ * @property {string} [occurredAt]
+ * @property {number} [amount]
+ * @property {number} [quantity]
+ * @property {string} costEvidenceId
+ */
+
+/**
+ * @typedef {Object} BuildingEventValue
+ * @property {string} id
+ * @property {string} assetId
+ * @property {string} title
+ * @property {"inspection"|"maintenance"|"repair"|"replacement"|"renewal"|"cleaning"|"study"|"other"} type
+ * @property {"initial_excel"|"manual"|"document_update"} origin
+ * @property {string[]} sourceIds
+ * @property {string[]} [observationIds]
+ * @property {string} [notes]
+ * @property {"suggested"|"approved"|"actual"|"cancelled"} status
+ * @property {EventScheduleEntryValue[]} [schedule]
+ * @property {ActualEventEntryValue} [actual]
+ */
+
+/**
+ * Parses and uniqueness-checks a list of observation ids. Mirrors the
+ * observationIds check in validateBuildingEventRuntime: no blanks, no
+ * duplicates.
+ * @param {unknown} raw
+ * @returns {{ ok: true, value: string[] } | { ok: false }}
+ */
+function parseObservationIds(raw) {
+  const ids = parseSourceIds(raw);
+  if (new Set(ids).size !== ids.length) return { ok: false };
+  return { ok: true, value: ids };
+}
+
+/**
+ * Validates one EventScheduleEntry row. Mirrors the schedule-row rules in
+ * validateBuildingEventRuntime.
+ * @param {Record<string, unknown>} raw
+ * @param {Set<string>} seenIds Row ids already used earlier in the same event (mutated).
+ * @param {ReadonlyArray<{ id?: unknown }>} costEvidence
+ * @param {string} prefix Error-key prefix, e.g. "schedule.0".
+ * @returns {{ ok: true, value: EventScheduleEntryValue } | { ok: false, errors: Record<string, string> }}
+ */
+function validateScheduleRow(raw, seenIds, costEvidence, prefix) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const evidenceIds = new Set(
+    (Array.isArray(costEvidence) ? costEvidence : []).map((item) => String(item.id ?? "")),
+  );
+
+  const id = toTrimmed(raw.id);
+  if (id === "") errors[`${prefix}.id`] = "Rivin tunniste puuttuu.";
+  else if (seenIds.has(id)) errors[`${prefix}.id`] = "Rivin tunniste on jo käytössä tässä tapahtumassa.";
+
+  const scenario = toTrimmed(raw.scenario);
+  if (!SCENARIO_SET.has(scenario)) errors[`${prefix}.scenario`] = "Valitse sallittu skenaario.";
+
+  const year = parseNumber(raw.year);
+  if (!Number.isInteger(year)) errors[`${prefix}.year`] = "Vuoden on oltava kokonaisluku.";
+
+  const costEvidenceId = toTrimmed(raw.costEvidenceId);
+  if (costEvidenceId === "") errors[`${prefix}.costEvidenceId`] = "Valitse kustannusnäyttö.";
+  else if (!evidenceIds.has(costEvidenceId)) {
+    errors[`${prefix}.costEvidenceId`] = "Viitattua kustannusnäyttöä ei löydy.";
+  }
+
+  const amount = optionalNumber(raw.amount);
+  if (amount.present && (!amount.valid || amount.value < 0)) {
+    errors[`${prefix}.amount`] = "Summan on oltava vähintään 0.";
+  }
+
+  const quantity = optionalNumber(raw.quantity);
+  if (quantity.present &&
+      (!quantity.valid || !Number.isInteger(quantity.value) || quantity.value <= 0)) {
+    errors[`${prefix}.quantity`] = "Määrän on oltava positiivinen kokonaisluku.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  seenIds.add(id);
+
+  /** @type {EventScheduleEntryValue} */
+  const value = {
+    id,
+    scenario: /** @type {"optimistic"|"base"|"stress"} */ (scenario),
+    year,
+    costEvidenceId,
+  };
+  if (amount.present) value.amount = amount.value;
+  if (quantity.present) value.quantity = quantity.value;
+  const explanation = toTrimmed(raw.explanation);
+  if (explanation !== "") value.explanation = explanation;
+  return { ok: true, value };
+}
+
+/**
+ * Validates a list of schedule rows, collecting all row errors.
+ * @param {ReadonlyArray<Record<string, unknown>>} rows
+ * @param {ReadonlyArray<{ id?: unknown }>} costEvidence
+ * @returns {{ ok: true, value: EventScheduleEntryValue[] } | { ok: false, errors: Record<string, string> }}
+ */
+function validateScheduleRows(rows, costEvidence) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  /** @type {EventScheduleEntryValue[]} */
+  const values = [];
+  const seenIds = new Set();
+  rows.forEach((row, index) => {
+    const result = validateScheduleRow(row, seenIds, costEvidence, `schedule.${index}`);
+    if (result.ok) values.push(result.value);
+    else Object.assign(errors, result.errors);
+  });
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  return { ok: true, value: values };
+}
+
+/**
+ * Validates the actual-event entry. Mirrors the status === "actual" branch
+ * in validateBuildingEventRuntime.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} costEvidence
+ * @returns {{ ok: true, value: ActualEventEntryValue } | { ok: false, errors: Record<string, string> }}
+ */
+function validateActualEntry(raw, costEvidence) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const evidenceIds = new Set(
+    (Array.isArray(costEvidence) ? costEvidence : []).map((item) => String(item.id ?? "")),
+  );
+
+  const year = parseNumber(raw.actualYear);
+  if (!Number.isInteger(year)) errors.actualYear = "Toteumavuoden on oltava kokonaisluku.";
+
+  const costEvidenceId = toTrimmed(raw.actualCostEvidenceId);
+  if (costEvidenceId === "") errors.actualCostEvidenceId = "Valitse kustannusnäyttö.";
+  else if (!evidenceIds.has(costEvidenceId)) {
+    errors.actualCostEvidenceId = "Viitattua kustannusnäyttöä ei löydy.";
+  }
+
+  const occurredAt = toTrimmed(raw.actualOccurredAt);
+  if (occurredAt !== "" && !isValidDate(occurredAt)) {
+    errors.actualOccurredAt = "Anna kelvollinen toteutumispäivä.";
+  }
+
+  const amount = optionalNumber(raw.actualAmount);
+  if (amount.present && (!amount.valid || amount.value < 0)) {
+    errors.actualAmount = "Summan on oltava vähintään 0.";
+  }
+
+  const quantity = optionalNumber(raw.actualQuantity);
+  if (quantity.present &&
+      (!quantity.valid || !Number.isInteger(quantity.value) || quantity.value <= 0)) {
+    errors.actualQuantity = "Määrän on oltava positiivinen kokonaisluku.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {ActualEventEntryValue} */
+  const value = { year, costEvidenceId };
+  if (occurredAt !== "") value.occurredAt = occurredAt;
+  if (amount.present) value.amount = amount.value;
+  if (quantity.present) value.quantity = quantity.value;
+  return { ok: true, value };
+}
+
+/**
+ * Mirrors validateBuildingEventRuntime in adminDataValidation.ts. `raw.schedule`
+ * is expected as an array of row objects (built by the UI's schedule editor,
+ * not typed by the user as text). `raw.observationIds` accepts an array or a
+ * comma/newline separated string, same as sourceIds.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ id?: unknown }>} [costEvidence]
+ * @param {ReadonlyArray<{ id?: unknown, assetId?: unknown }>} [observations]
+ * @returns {ValidationResult<BuildingEventValue>}
+ */
+export function validateBuildingEventInput(raw, assets, costEvidence, observations) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const assetIds = new Set(
+    (Array.isArray(assets) ? assets : []).map((asset) => String(asset.id ?? "")),
+  );
+  const observationsById = new Map(
+    (Array.isArray(observations) ? observations : [])
+      .map((item) => [String(item.id ?? ""), item]),
+  );
+
+  const id = toTrimmed(raw.id);
+  if (id === "") errors.id = "Tapahtuman tunniste puuttuu.";
+
+  const assetId = toTrimmed(raw.assetId);
+  if (assetId === "") errors.assetId = "Valitse rakennusosa.";
+  else if (!assetIds.has(assetId)) errors.assetId = "Valittua rakennusosaa ei löydy.";
+
+  const title = toTrimmed(raw.title);
+  if (title === "") errors.title = "Otsikko on pakollinen.";
+
+  const type = toTrimmed(raw.type);
+  if (!EVENT_TYPE_SET.has(type)) errors.type = "Valitse sallittu tyyppi.";
+
+  const status = toTrimmed(raw.status);
+  if (!EVENT_STATUS_SET.has(status)) errors.status = "Valitse sallittu tila.";
+
+  const origin = toTrimmed(raw.origin);
+  if (!EVENT_ORIGIN_SET.has(origin)) errors.origin = "Alkuperä puuttuu.";
+
+  const sourceIds = parseSourceIds(raw.sourceIds);
+  if (sourceIds.length === 0) {
+    errors.sourceIds = "Tapahtumalla on oltava vähintään yksi lähdetunniste.";
+  }
+
+  const observationIdsResult = parseObservationIds(raw.observationIds);
+  if (!observationIdsResult.ok) {
+    errors.observationIds = "Havaintotunnisteet eivät saa toistua.";
+  } else if (assetId !== "") {
+    for (const observationId of observationIdsResult.value) {
+      const observation = observationsById.get(observationId);
+      if (observation === undefined || String(observation.assetId ?? "") !== assetId) {
+        errors.observationIds = "Kaikkien linkitettyjen havaintojen on kuuluttava samaan rakennusosaan.";
+        break;
+      }
+    }
+  }
+
+  let schedule;
+  let actual;
+  if (status === "actual") {
+    const actualResult = validateActualEntry(raw, costEvidence);
+    if (!actualResult.ok) Object.assign(errors, actualResult.errors);
+    else actual = actualResult.value;
+  } else {
+    const rows = Array.isArray(raw.schedule) ? raw.schedule : [];
+    if (status !== "cancelled" && rows.length === 0) {
+      errors.schedule = "Suunnitellulla tapahtumalla on oltava vähintään yksi skenaariorivi.";
+    } else {
+      const scheduleResult = validateScheduleRows(rows, costEvidence);
+      if (!scheduleResult.ok) Object.assign(errors, scheduleResult.errors);
+      else schedule = scheduleResult.value;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {BuildingEventValue} */
+  const value = {
+    id,
+    assetId,
+    title,
+    type: /** @type {any} */ (type),
+    origin: /** @type {any} */ (origin),
+    sourceIds,
+    status: /** @type {any} */ (status),
+  };
+  if (observationIdsResult.ok && observationIdsResult.value.length > 0) {
+    value.observationIds = observationIdsResult.value;
+  }
+  const notes = toTrimmed(raw.notes);
+  if (notes !== "") value.notes = notes;
+  if (status === "actual") value.actual = actual;
+  else if (schedule !== undefined && (status !== "cancelled" || schedule.length > 0)) {
+    value.schedule = schedule;
+  }
+
+  return { ok: true, value };
+}
+
+/**
+ * Builds a save_building_event operation. Entity vs. operation sourceIds
+ * split matches assets/observations/costEvidence: the event's own sourceIds
+ * come from `raw.sourceIds`, the change metadata from `raw.operationSourceIds`.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ id?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ id?: unknown }>} [costEvidence]
+ * @param {ReadonlyArray<{ id?: unknown, assetId?: unknown }>} [observations]
+ * @returns {OperationResult<{ type: "save_building_event", value: BuildingEventValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveBuildingEventOperation(raw, assets, costEvidence, observations) {
+  const event = validateBuildingEventInput(raw, assets, costEvidence, observations);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!event.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(event.ok ? {} : event.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_building_event",
+      value: event.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/**
+ * "Kopioi rivi kaikkiin skenaarioihin" (L-003): duplicates one schedule row
+ * into all three scenarios as a starting point. Never infers numbers — it
+ * only clones the row the user already entered; scenario-specific
+ * differences remain the user's manual follow-up edit.
+ * @param {{ year?: unknown, amount?: unknown, quantity?: unknown, costEvidenceId?: unknown, explanation?: unknown }} row
+ * @param {ReadonlyArray<{ id?: unknown }>} existingRows Rows already in the event, for id uniqueness.
+ * @returns {Array<{ id: string, scenario: "optimistic"|"base"|"stress", year: unknown, amount: unknown, quantity: unknown, costEvidenceId: unknown, explanation: unknown }>}
+ */
+export function copyScheduleRowToAllScenarios(row, existingRows) {
+  const usedIds = new Set(
+    (Array.isArray(existingRows) ? existingRows : []).map((item) => String(item.id ?? "")),
+  );
+  const baseId = toTrimmed(row.id) || "schedule_row";
+  return SCENARIOS.map((scenario) => {
+    let id = `${baseId}_${scenario}`;
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      id = `${baseId}_${scenario}_${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(id);
+    return {
+      id,
+      scenario,
+      year: row.year,
+      amount: row.amount,
+      quantity: row.quantity,
+      costEvidenceId: row.costEvidenceId,
+      explanation: row.explanation,
+    };
+  });
+}
+
+/**
+ * View model for the building-events list. `filters` narrows on year,
+ * status, type, asset and a "gap only" toggle (event links a data_gap
+ * cost-evidence row). Empty content is a first-class state (decision 7).
+ * @param {ReadonlyArray<{ id?: unknown, assetId?: unknown, title?: unknown, type?: unknown, status?: unknown, schedule?: ReadonlyArray<{ scenario?: unknown, year?: unknown, costEvidenceId?: unknown }>, actual?: { year?: unknown, costEvidenceId?: unknown } }>} [events]
+ * @param {ReadonlyArray<{ id?: unknown, name?: unknown }>} [assets]
+ * @param {ReadonlyArray<{ id?: unknown, status?: unknown }>} [costEvidence]
+ * @param {{ year?: number|string, status?: string, type?: string, assetId?: string, gapOnly?: boolean }} [filters]
+ * @returns {{ isEmpty: boolean, rows: Array<{ id: string, assetId: string, assetName: string, title: string, type: string, status: string, yearRange: string, hasDataGap: boolean, linkedCostEvidenceIds: string[] }>, emptyMessage: string }}
+ */
+export function buildEventListViewModel(events, assets, costEvidence, filters) {
+  const list = Array.isArray(events) ? events : [];
+  const assetNames = new Map(
+    (Array.isArray(assets) ? assets : []).map((asset) => [String(asset.id ?? ""), String(asset.name ?? "")]),
+  );
+  const dataGapIds = new Set(
+    (Array.isArray(costEvidence) ? costEvidence : [])
+      .filter((item) => item.status === "data_gap")
+      .map((item) => String(item.id ?? "")),
+  );
+  const opts = filters ?? {};
+
+  const rows = [];
+  for (const event of list) {
+    const assetId = String(event.assetId ?? "");
+    const status = String(event.status ?? "");
+    const type = String(event.type ?? "");
+    const schedule = Array.isArray(event.schedule) ? event.schedule : [];
+    const years = status === "actual" && event.actual
+      ? [Number(event.actual.year)]
+      : schedule.map((entry) => Number(entry.year)).filter((year) => Number.isFinite(year));
+    const linkedCostEvidenceIds = [
+      ...(status === "actual" && event.actual?.costEvidenceId
+        ? [String(event.actual.costEvidenceId)]
+        : []),
+      ...schedule
+        .map((entry) => entry.costEvidenceId)
+        .filter((value) => value !== undefined && value !== null)
+        .map((value) => String(value)),
+    ];
+    const hasDataGap = linkedCostEvidenceIds.some((evidenceId) => dataGapIds.has(evidenceId));
+
+    if (opts.assetId && assetId !== opts.assetId) continue;
+    if (opts.status && status !== opts.status) continue;
+    if (opts.type && type !== opts.type) continue;
+    if (opts.gapOnly && !hasDataGap) continue;
+    if (opts.year !== undefined && opts.year !== "" && !years.includes(Number(opts.year))) continue;
+
+    const yearRange = years.length === 0
+      ? "—"
+      : years.length === 1 || Math.min(...years) === Math.max(...years)
+        ? String(Math.min(...years))
+        : `${Math.min(...years)}–${Math.max(...years)}`;
+
+    rows.push({
+      id: String(event.id ?? ""),
+      assetId,
+      assetName: assetNames.get(assetId) ?? assetId,
+      title: String(event.title ?? ""),
+      type,
+      status,
+      yearRange,
+      hasDataGap,
+      linkedCostEvidenceIds: [...new Set(linkedCostEvidenceIds)],
+    });
+  }
+
+  return {
+    isEmpty: rows.length === 0,
+    rows,
+    emptyMessage: "Ei vielä korjaustapahtumia. Lisää ensimmäinen tapahtuma.",
+  };
+}
+
+/**
+ * Building events available as year filter options (Näkymäspesifikaatio:
+ * vuosisuodatin, oletuksena nykyinen vuosi jos sellainen data löytyy).
+ * @param {ReadonlyArray<{ status?: unknown, schedule?: ReadonlyArray<{ year?: unknown }>, actual?: { year?: unknown } }>} [events]
+ * @returns {number[]}
+ */
+export function deriveEventYearOptions(events) {
+  const years = new Set();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event.status === "actual" && event.actual) {
+      const year = Number(event.actual.year);
+      if (Number.isFinite(year)) years.add(year);
+    }
+    for (const entry of Array.isArray(event.schedule) ? event.schedule : []) {
+      const year = Number(entry.year);
+      if (Number.isFinite(year)) years.add(year);
+    }
+  }
+  return [...years].sort((a, b) => a - b);
+}
+
+/**
+ * Groups schedule rows by scenario for the schedule editor's three columns.
+ * @param {ReadonlyArray<{ scenario?: unknown }>} [schedule]
+ * @returns {Record<"optimistic"|"base"|"stress", Array<Record<string, unknown>>>}
+ */
+export function groupScheduleByScenario(schedule) {
+  /** @type {Record<string, Array<Record<string, unknown>>>} */
+  const groups = { optimistic: [], base: [], stress: [] };
+  for (const entry of Array.isArray(schedule) ? schedule : []) {
+    const scenario = String(entry.scenario ?? "");
+    if (groups[scenario]) groups[scenario].push(entry);
+  }
+  return /** @type {any} */ (groups);
+}
+
 /**
  * View model for the observations list (decision 7: empty content is a
  * first-class state with its own message).
