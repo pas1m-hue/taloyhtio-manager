@@ -60,6 +60,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .topbar-title { font-size: 1.05rem; }
 .topbar-controls { display: flex; align-items: flex-end; gap: .7rem; flex-wrap: wrap; flex: 1 1 auto; }
 .topbar-field { display: grid; gap: .2rem; font-size: .72rem; font-weight: 700; color: #cfe4ea; text-transform: uppercase; letter-spacing: .05em; }
+.topbar-field[hidden] { display: none; }
 .topbar-field input, .topbar-field select {
   border: 1px solid rgba(255,255,255,.28); border-radius: .45rem; padding: .4rem .55rem;
   background: rgba(255,255,255,.08); color: #fff; min-width: 8ch;
@@ -150,6 +151,7 @@ legend { padding: 0 .4rem; }
 
 /* ---- Forms ---- */
 .form-card { display: grid; gap: 1rem; max-width: 760px; }
+.form-card[hidden] { display: none; }
 .wide-card { max-width: none; }
 .narrow-card { max-width: 640px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .8rem; }
@@ -206,6 +208,13 @@ tbody tr.is-gap { background: #fdf3ea; }
 .scenario-card h4 { text-transform: capitalize; }
 .scenario-card ul { padding-left: 1.1rem; margin-bottom: 0; }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+
+/* ---- Korjaustapahtumat: schedule editor ---- */
+.schedule-scenario-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: .8rem; }
+.schedule-scenario-column h5 { margin: 0 0 .5rem; }
+.schedule-rows { display: grid; gap: .7rem; margin-bottom: .7rem; }
+.schedule-row { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem; background: var(--panel); }
+.schedule-row .form-grid.compact { gap: .5rem; margin-bottom: .5rem; }
 .notice { padding: .8rem 1rem; border-left: 4px solid var(--accent); background: var(--soft); border-radius: 0 .5rem .5rem 0; }
 
 /* ---- Detail panel ---- */
