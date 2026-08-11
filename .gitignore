@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-worker/
+scripts-dist/
 .wrangler/
 .dev.vars
 .env
