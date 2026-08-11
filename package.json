@@ -21,7 +21,8 @@
     "dev:worker": "wrangler dev",
     "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
     "deploy:worker": "wrangler deploy",
-    "test:cloudflare": "vitest run src/cloudflare/worker.test.ts"
+    "test:cloudflare": "vitest run src/cloudflare/worker.test.ts",
+    "seed:initial-data": "tsc -p scripts/tsconfig.json && node scripts-dist/scripts/seed-initial-data.js"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.4",
