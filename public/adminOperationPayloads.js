@@ -1348,6 +1348,527 @@ export function selectFinancialYearViewModel(financialYears, selectedYear) {
   };
 }
 
+/** Mirrors FINANCIAL_ACCOUNT_KINDS in domain/types.ts. */
+export const FINANCIAL_ACCOUNT_KINDS = ["income", "expense"];
+
+const FINANCIAL_ACCOUNT_KIND_SET = new Set(FINANCIAL_ACCOUNT_KINDS);
+
+/** Mirrors FINANCIAL_ACCOUNT_NATURES in domain/types.ts. */
+export const FINANCIAL_ACCOUNT_NATURES = ["maintenance", "repair"];
+
+const FINANCIAL_ACCOUNT_NATURE_SET = new Set(FINANCIAL_ACCOUNT_NATURES);
+
+/** Mirrors FINANCIAL_ACCOUNT_CONTROLLABILITIES in domain/types.ts. */
+export const FINANCIAL_ACCOUNT_CONTROLLABILITIES = ["fixed", "variable", "mixed"];
+
+const FINANCIAL_ACCOUNT_CONTROLLABILITY_SET = new Set(FINANCIAL_ACCOUNT_CONTROLLABILITIES);
+
+/**
+ * @typedef {Object} FinancialAccountValue
+ * @property {string} accountCode
+ * @property {string} name
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {"maintenance"|"repair"} [nature]
+ * @property {"fixed"|"variable"|"mixed"} [controllability]
+ * @property {boolean} active
+ */
+
+/**
+ * @typedef {Object} FinancialEntryValue
+ * @property {string} accountCode
+ * @property {number} year
+ * @property {number} [budgetAmount]
+ * @property {number} [actualAmount]
+ * @property {string[]} sourceIds
+ * @property {string} [notes]
+ */
+
+/**
+ * Mirrors validateFinancialAccount in adminDataValidation.ts. FinancialAccount
+ * has no sourceIds field of its own (like HousingCompany), so its operation
+ * metadata reads sourceIds/explanation straight from `raw`.
+ * @param {Record<string, unknown>} raw
+ * @returns {ValidationResult<FinancialAccountValue>}
+ */
+export function validateFinancialAccountInput(raw) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+
+  const accountCode = toTrimmed(raw.accountCode);
+  if (accountCode === "") errors.accountCode = "Tilinumero puuttuu.";
+
+  const name = toTrimmed(raw.name);
+  if (name === "") errors.name = "Nimi on pakollinen.";
+
+  const kind = toTrimmed(raw.kind);
+  if (!FINANCIAL_ACCOUNT_KIND_SET.has(kind)) errors.kind = "Valitse tulo tai kulu.";
+
+  const group = toTrimmed(raw.group);
+  if (group === "") errors.group = "Ryhmä on pakollinen.";
+
+  const nature = toTrimmed(raw.nature);
+  if (nature !== "" && !FINANCIAL_ACCOUNT_NATURE_SET.has(nature)) {
+    errors.nature = "Valitse sallittu luonne.";
+  }
+
+  const controllability = toTrimmed(raw.controllability);
+  if (controllability !== "" && !FINANCIAL_ACCOUNT_CONTROLLABILITY_SET.has(controllability)) {
+    errors.controllability = "Valitse sallittu ohjattavuus.";
+  }
+
+  const active = raw.active;
+  if (typeof active !== "boolean") errors.active = "Aktiivisuus on määriteltävä.";
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {FinancialAccountValue} */
+  const value = {
+    accountCode,
+    name,
+    kind: /** @type {"income"|"expense"} */ (kind),
+    group,
+    active: /** @type {boolean} */ (active),
+  };
+  if (nature !== "") value.nature = /** @type {"maintenance"|"repair"} */ (nature);
+  if (controllability !== "") {
+    value.controllability = /** @type {"fixed"|"variable"|"mixed"} */ (controllability);
+  }
+  return { ok: true, value };
+}
+
+/**
+ * @param {Record<string, unknown>} raw
+ * @returns {OperationResult<{ type: "save_financial_account", value: FinancialAccountValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveFinancialAccountOperation(raw) {
+  const account = validateFinancialAccountInput(raw);
+  const meta = validateOperationMeta(raw);
+  if (!account.ok || !meta.ok) {
+    return {
+      ok: false,
+      errors: {
+        ...(account.ok ? {} : account.errors),
+        ...(meta.ok ? {} : meta.errors),
+      },
+    };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_financial_account",
+      value: account.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/**
+ * Mirrors validateFinancialEntry in adminDataValidation.ts. `accountCode` must
+ * refer to a known account (mirrors observation->asset), and at least one of
+ * budgetAmount/actualAmount must be present — a row with neither is rejected,
+ * never silently coerced to zero.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ accountCode?: unknown }>} [accounts]
+ * @returns {ValidationResult<FinancialEntryValue>}
+ */
+export function validateFinancialEntryInput(raw, accounts) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const accountCodes = new Set(
+    (Array.isArray(accounts) ? accounts : []).map((account) => String(account.accountCode ?? "")),
+  );
+
+  const accountCode = toTrimmed(raw.accountCode);
+  if (accountCode === "") errors.accountCode = "Tilinumero puuttuu.";
+  else if (!accountCodes.has(accountCode)) errors.accountCode = "Valittua tiliä ei löydy.";
+
+  const year = parseNumber(raw.year);
+  if (!Number.isInteger(year)) errors.year = "Vuoden on oltava kokonaisluku.";
+
+  const budgetAmount = optionalNumber(raw.budgetAmount);
+  if (budgetAmount.present && !budgetAmount.valid) {
+    errors.budgetAmount = "Budjetin on oltava luku.";
+  }
+
+  const actualAmount = optionalNumber(raw.actualAmount);
+  if (actualAmount.present && !actualAmount.valid) {
+    errors.actualAmount = "Toteuman on oltava luku.";
+  }
+
+  if (!budgetAmount.present && !actualAmount.present) {
+    const message = "Anna budjetti tai toteuma.";
+    errors.budgetAmount = message;
+    errors.actualAmount = message;
+  }
+
+  const sourceIds = parseSourceIds(raw.sourceIds);
+  if (sourceIds.length === 0) {
+    errors.sourceIds = "Rivillä on oltava vähintään yksi lähdetunniste.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {FinancialEntryValue} */
+  const value = { accountCode, year, sourceIds };
+  if (budgetAmount.present) value.budgetAmount = budgetAmount.value;
+  if (actualAmount.present) value.actualAmount = actualAmount.value;
+  const notes = toTrimmed(raw.notes);
+  if (notes !== "") value.notes = notes;
+  return { ok: true, value };
+}
+
+/**
+ * Builds a save_financial_entry operation. Entity vs. operation sourceIds
+ * split matches asset/observation/costEvidence: the entry's own sourceIds
+ * come from `raw.sourceIds`, the change metadata from `raw.operationSourceIds`.
+ * @param {Record<string, unknown>} raw
+ * @param {ReadonlyArray<{ accountCode?: unknown }>} [accounts]
+ * @returns {OperationResult<{ type: "save_financial_entry", value: FinancialEntryValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveFinancialEntryOperation(raw, accounts) {
+  const entry = validateFinancialEntryInput(raw, accounts);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!entry.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(entry.ok ? {} : entry.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_financial_entry",
+      value: entry.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/** Column headers recognized as the optional header row in a financial paste. */
+const FINANCIAL_PASTE_HEADER = ["kind", "ryhmä", "tili", "nimi", "vuosi", "budjetti", "toteuma"];
+
+/** Finnish paste-input kind tokens mapped to the domain kind. */
+const FINANCIAL_PASTE_KIND_MAP = { kulu: "expense", tulo: "income" };
+
+/**
+ * Parses one decimal cell, accepting both "." and "," as the separator
+ * (§6 of the vaihe-3A handoff: source data uses Finnish comma decimals).
+ * The sign is preserved as-is, never flipped.
+ * @param {string} trimmed
+ * @returns {{ present: false } | { present: true, value: number, valid: boolean }}
+ */
+function parseFinancialAmountCell(trimmed) {
+  if (trimmed === "") return { present: false };
+  const value = Number(trimmed.replace(",", "."));
+  return { present: true, value, valid: Number.isFinite(value) };
+}
+
+/**
+ * @typedef {Object} ParsedFinancialAccount
+ * @property {string} accountCode
+ * @property {string} name
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {boolean} active
+ */
+
+/**
+ * @typedef {Object} ParsedFinancialEntry
+ * @property {string} accountCode
+ * @property {number} year
+ * @property {number} [budgetAmount]
+ * @property {number} [actualAmount]
+ */
+
+/**
+ * @typedef {Object} ParsedFinancialError
+ * @property {number} row 1-indexed line number in the pasted text.
+ * @property {string} message
+ */
+
+/**
+ * Strict, pure parser for the "Liitä tilikohtainen data" paste format (handoff
+ * §6): one row per (account, year), tab-separated columns in the exact order
+ * `kind, ryhmä, tili, nimi, vuosi, budjetti, toteuma`. Every rejected row
+ * produces a named, row-numbered error — never a silent skip or a guessed
+ * value. Blank lines are ignored without consuming a row number. A first row
+ * that matches the column headers (case-insensitively) is skipped as a
+ * header row.
+ * @param {string} rawText
+ * @returns {{ accounts: ParsedFinancialAccount[], entries: ParsedFinancialEntry[], errors: ParsedFinancialError[] }}
+ */
+export function parseFinancialPasteInput(rawText) {
+  const text = typeof rawText === "string" ? rawText : "";
+  const lines = text.split(/\r\n|\r|\n/);
+
+  let startIndex = 0;
+  const firstDataIndex = lines.findIndex((line) => line.trim() !== "");
+  if (firstDataIndex !== -1) {
+    const firstCols = lines[firstDataIndex].split("\t").map((cell) => cell.trim().toLowerCase());
+    const isHeader = firstCols.length === FINANCIAL_PASTE_HEADER.length &&
+      firstCols.every((cell, index) => cell === FINANCIAL_PASTE_HEADER[index]);
+    if (isHeader) startIndex = firstDataIndex + 1;
+  }
+
+  /** @type {Map<string, ParsedFinancialAccount>} */
+  const accountsByCode = new Map();
+  /** @type {ParsedFinancialEntry[]} */
+  const entries = [];
+  /** @type {ParsedFinancialError[]} */
+  const errors = [];
+  const seenEntryKeys = new Set();
+
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const row = i + 1;
+    const cols = line.split("\t");
+    if (cols.length !== 7) {
+      errors.push({ row, message: `Rivi ${row}: odotettiin 7 saraketta, löytyi ${cols.length}.` });
+      continue;
+    }
+
+    const [kindRaw, groupRaw, accountCodeRaw, nameRaw, yearRaw, budgetRaw, actualRaw] =
+      cols.map((cell) => cell.trim());
+
+    const kind = FINANCIAL_PASTE_KIND_MAP[kindRaw.toLowerCase()];
+    if (!kind) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: tuntematon kind "${kindRaw}" (odotettiin "kulu" tai "tulo").`,
+      });
+      continue;
+    }
+    if (groupRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: ryhmä puuttuu.` });
+      continue;
+    }
+    if (accountCodeRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: tilinumero puuttuu.` });
+      continue;
+    }
+    if (nameRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: tilin nimi puuttuu.` });
+      continue;
+    }
+
+    const year = Number(yearRaw);
+    if (!Number.isInteger(year)) {
+      errors.push({ row, message: `Rivi ${row}: vuosi "${yearRaw}" ei ole kokonaisluku.` });
+      continue;
+    }
+
+    const budget = parseFinancialAmountCell(budgetRaw);
+    if (budget.present && !budget.valid) {
+      errors.push({ row, message: `Rivi ${row}: budjetti "${budgetRaw}" ei ole luku.` });
+      continue;
+    }
+    const actual = parseFinancialAmountCell(actualRaw);
+    if (actual.present && !actual.valid) {
+      errors.push({ row, message: `Rivi ${row}: toteuma "${actualRaw}" ei ole luku.` });
+      continue;
+    }
+    if (!budget.present && !actual.present) {
+      errors.push({ row, message: `Rivi ${row}: sekä budjetti että toteuma puuttuvat.` });
+      continue;
+    }
+
+    const existingAccount = accountsByCode.get(accountCodeRaw);
+    if (existingAccount) {
+      if (existingAccount.name !== nameRaw || existingAccount.group !== groupRaw ||
+          existingAccount.kind !== kind) {
+        errors.push({
+          row,
+          message: `Rivi ${row}: tili ${accountCodeRaw} on ristiriidassa aiemman rivin ` +
+            `kanssa (nimi, ryhmä tai kind ei täsmää).`,
+        });
+        continue;
+      }
+    } else {
+      accountsByCode.set(accountCodeRaw, {
+        accountCode: accountCodeRaw,
+        name: nameRaw,
+        kind,
+        group: groupRaw,
+        active: true,
+      });
+    }
+
+    const entryKey = `${accountCodeRaw}:${year}`;
+    if (seenEntryKeys.has(entryKey)) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: tili ${accountCodeRaw} vuodelle ${year} esiintyy jo aiemmalla rivillä.`,
+      });
+      continue;
+    }
+    seenEntryKeys.add(entryKey);
+
+    /** @type {ParsedFinancialEntry} */
+    const entry = { accountCode: accountCodeRaw, year };
+    if (budget.present) entry.budgetAmount = budget.value;
+    if (actual.present) entry.actualAmount = actual.value;
+    entries.push(entry);
+  }
+
+  return { accounts: [...accountsByCode.values()], entries, errors };
+}
+
+/**
+ * Builds the save_financial_account / save_financial_entry operations for one
+ * successfully parsed import, in cross-reference order: every account
+ * operation before any entry operation (applyAdminBatch requires the account
+ * to already exist in the same-or-earlier batch). One shared sourceIds +
+ * explanation applies to the whole import, both as each operation's own
+ * metadata and (for entries) as the entity's own sourceIds field.
+ * @param {{ accounts: ParsedFinancialAccount[], entries: ParsedFinancialEntry[] }} parsed
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ * @returns {Array<{ type: "save_financial_account", value: FinancialAccountValue, sourceIds: string[], explanation: string } | { type: "save_financial_entry", value: FinancialEntryValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildFinancialImportOperations(parsed, opMeta) {
+  const accountOperations = parsed.accounts.map((account) => ({
+    type: /** @type {const} */ ("save_financial_account"),
+    value: account,
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  }));
+  const entryOperations = parsed.entries.map((entry) => ({
+    type: /** @type {const} */ ("save_financial_entry"),
+    value: { ...entry, sourceIds: opMeta.sourceIds },
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  }));
+  return [...accountOperations, ...entryOperations];
+}
+
+/**
+ * @typedef {Object} AccountCostsColumn
+ * @property {string} key
+ * @property {number} year
+ * @property {"budget"|"actual"} kind
+ * @property {string} label
+ */
+
+/**
+ * @typedef {Object} AccountCostsRow
+ * @property {string} accountCode
+ * @property {string} name
+ * @property {Record<string, number|undefined>} values Keyed by column key.
+ */
+
+/**
+ * @typedef {Object} AccountCostsGroup
+ * @property {string} group
+ * @property {AccountCostsRow[]} rows
+ * @property {Record<string, number>} totals Keyed by column key.
+ */
+
+/**
+ * View model for "Kulut tileittäin" (spec §6.3, handoff §7): expense accounts
+ * only, grouped by `group`, with year columns derived from the entry data
+ * (never hardcoded). When both a budget and an actual column exist for the
+ * same year, the budget column is ordered first (the rule that runs through
+ * the whole spec, decision carried over from Budjetti vs. toteuma).
+ * @param {ReadonlyArray<{ accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown }>} [accounts]
+ * @param {ReadonlyArray<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }>} [entries]
+ * @returns {{ isEmpty: boolean, columns: AccountCostsColumn[], groups: AccountCostsGroup[], totals: Record<string, number>, emptyMessage: string }}
+ */
+export function buildAccountCostsViewModel(accounts, entries) {
+  const emptyMessage = "Ei vielä tilidataa. Tuo se Liitä-näkymästä.";
+  const accountList = (Array.isArray(accounts) ? accounts : [])
+    .filter((account) => account.kind === "expense");
+  const accountCodes = new Set(accountList.map((account) => String(account.accountCode ?? "")));
+  const entryList = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => accountCodes.has(String(entry.accountCode ?? "")));
+
+  if (accountList.length === 0 || entryList.length === 0) {
+    return { isEmpty: true, columns: [], groups: [], totals: {}, emptyMessage };
+  }
+
+  const yearsWithBudget = new Set();
+  const yearsWithActual = new Set();
+  for (const entry of entryList) {
+    const year = Number(entry.year);
+    if (entry.budgetAmount !== undefined) yearsWithBudget.add(year);
+    if (entry.actualAmount !== undefined) yearsWithActual.add(year);
+  }
+  const years = [...new Set([...yearsWithBudget, ...yearsWithActual])].sort((a, b) => a - b);
+
+  /** @type {AccountCostsColumn[]} */
+  const columns = [];
+  for (const year of years) {
+    if (yearsWithBudget.has(year)) {
+      columns.push({ key: `budget-${year}`, year, kind: "budget", label: `Budjetti ${year}` });
+    }
+    if (yearsWithActual.has(year)) {
+      columns.push({ key: `actual-${year}`, year, kind: "actual", label: `Toteuma ${year}` });
+    }
+  }
+
+  /** @type {Map<string, Array<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }>>} */
+  const entriesByAccount = new Map();
+  for (const entry of entryList) {
+    const code = String(entry.accountCode ?? "");
+    const list = entriesByAccount.get(code) ?? [];
+    list.push(entry);
+    entriesByAccount.set(code, list);
+  }
+
+  /** @type {Map<string, AccountCostsRow[]>} */
+  const groupMap = new Map();
+  for (const account of accountList) {
+    const code = String(account.accountCode ?? "");
+    const accountEntries = entriesByAccount.get(code);
+    if (!accountEntries || accountEntries.length === 0) continue;
+    const group = String(account.group ?? "");
+    /** @type {Record<string, number|undefined>} */
+    const values = {};
+    for (const column of columns) {
+      const entry = accountEntries.find((item) => Number(item.year) === column.year);
+      const raw = entry
+        ? (column.kind === "budget" ? entry.budgetAmount : entry.actualAmount)
+        : undefined;
+      values[column.key] = typeof raw === "number" ? raw : undefined;
+    }
+    const rows = groupMap.get(group) ?? [];
+    rows.push({ accountCode: code, name: String(account.name ?? ""), values });
+    groupMap.set(group, rows);
+  }
+
+  const groups = [...groupMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([group, rows]) => {
+      const sortedRows = [...rows].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      /** @type {Record<string, number>} */
+      const groupTotals = {};
+      for (const column of columns) {
+        groupTotals[column.key] = sortedRows.reduce(
+          (sum, row) => sum + (row.values[column.key] ?? 0),
+          0,
+        );
+      }
+      return { group, rows: sortedRows, totals: groupTotals };
+    });
+
+  /** @type {Record<string, number>} */
+  const totals = {};
+  for (const column of columns) {
+    totals[column.key] = groups.reduce((sum, entry) => sum + (entry.totals[column.key] ?? 0), 0);
+  }
+
+  return { isEmpty: groups.length === 0, columns, groups, totals, emptyMessage };
+}
+
 /**
  * Interpretation of a failed admin save (decision 6). A 409 revision conflict
  * must surface a clear reload path, never a silent overwrite.
