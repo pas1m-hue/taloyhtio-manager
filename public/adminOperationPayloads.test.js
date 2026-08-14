@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { applyAdminBatch, createAdminDataSnapshot } from "../src/admin/applyAdminBatch.js";
 import {
+  buildAccountCostsViewModel,
   buildAssetListViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
+  buildFinancialImportOperations,
   buildObservationListViewModel,
   buildSaveAssetOperation,
   buildSaveBuildingEventOperation,
   buildSaveCostEvidenceOperation,
+  buildSaveFinancialAccountOperation,
+  buildSaveFinancialEntryOperation,
   buildSaveHousingCompanyOperation,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
@@ -19,6 +24,7 @@ import {
   groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
+  parseFinancialPasteInput,
   parseSourceIds,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
@@ -26,6 +32,8 @@ import {
   validateBuildingEventInput,
   validateCompanyInput,
   validateCostEvidenceInput,
+  validateFinancialAccountInput,
+  validateFinancialEntryInput,
   validateObservationInput,
   validatePriceLevelConfirmationInput,
 } from "./adminOperationPayloads.js";
@@ -1058,5 +1066,422 @@ describe("validateObservationInput / validateCostEvidenceInput / validatePriceLe
     expect(validateObservationInput({}, ASSETS).ok).toBe(false);
     expect(validateCostEvidenceInput({}, ASSETS, EVENTS).ok).toBe(false);
     expect(validatePriceLevelConfirmationInput({}, []).ok).toBe(false);
+  });
+});
+
+const FINANCIAL_ACCOUNTS = [
+  { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "HALLINTOPALVELUT" },
+  { accountCode: "3000", name: "Hoitovastikkeet", kind: "income", group: "VASTIKETULOT" },
+];
+
+describe("validateFinancialAccountInput / buildSaveFinancialAccountOperation", () => {
+  const validRaw = {
+    accountCode: "5300",
+    name: "Isännöintipalkkiot",
+    kind: "expense",
+    group: "HALLINTOPALVELUT",
+    active: true,
+    sourceIds: "initial_excel",
+    explanation: "Tuonti Excelistä.",
+  };
+
+  it("accepts a valid minimal account", () => {
+    const result = validateFinancialAccountInput(validRaw);
+    expect(result.ok).toBe(true);
+    expect(result.value).toEqual({
+      accountCode: "5300",
+      name: "Isännöintipalkkiot",
+      kind: "expense",
+      group: "HALLINTOPALVELUT",
+      active: true,
+    });
+  });
+
+  it("includes nature and controllability only when provided", () => {
+    const result = validateFinancialAccountInput({
+      ...validRaw,
+      nature: "maintenance",
+      controllability: "fixed",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.value.nature).toBe("maintenance");
+    expect(result.value.controllability).toBe("fixed");
+  });
+
+  it("rejects a missing accountCode, name, or group", () => {
+    expect(validateFinancialAccountInput({ ...validRaw, accountCode: "" }).ok).toBe(false);
+    expect(validateFinancialAccountInput({ ...validRaw, name: "" }).ok).toBe(false);
+    expect(validateFinancialAccountInput({ ...validRaw, group: "" }).ok).toBe(false);
+  });
+
+  it("rejects an unknown kind, nature, or controllability", () => {
+    expect(validateFinancialAccountInput({ ...validRaw, kind: "expense_and_income" }).ok).toBe(false);
+    expect(validateFinancialAccountInput({ ...validRaw, nature: "renovation" }).ok).toBe(false);
+    expect(validateFinancialAccountInput({ ...validRaw, controllability: "unknown" }).ok).toBe(false);
+  });
+
+  it("rejects a non-boolean active value", () => {
+    expect(validateFinancialAccountInput({ ...validRaw, active: undefined }).ok).toBe(false);
+  });
+
+  it("builds an operation with account value and operation metadata", () => {
+    const result = buildSaveFinancialAccountOperation(validRaw);
+    expect(result.ok).toBe(true);
+    expect(result.operation).toEqual({
+      type: "save_financial_account",
+      value: {
+        accountCode: "5300",
+        name: "Isännöintipalkkiot",
+        kind: "expense",
+        group: "HALLINTOPALVELUT",
+        active: true,
+      },
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+  });
+
+  it("rejects a missing sourceIds or explanation, mirroring housing-company metadata", () => {
+    const missingSource = buildSaveFinancialAccountOperation({ ...validRaw, sourceIds: "" });
+    expect(missingSource.ok).toBe(false);
+    expect(missingSource.errors.sourceIds).toBeDefined();
+
+    const missingExplanation = buildSaveFinancialAccountOperation({ ...validRaw, explanation: "" });
+    expect(missingExplanation.ok).toBe(false);
+    expect(missingExplanation.errors.explanation).toBeDefined();
+  });
+});
+
+describe("validateFinancialEntryInput / buildSaveFinancialEntryOperation", () => {
+  const validRaw = {
+    accountCode: "5300",
+    year: "2025",
+    budgetAmount: "13000",
+    actualAmount: "12800.25",
+    sourceIds: "initial_excel",
+    explanation: "Tuonti Excelistä.",
+  };
+
+  it("accepts a valid entry with both amounts", () => {
+    const result = validateFinancialEntryInput(validRaw, FINANCIAL_ACCOUNTS);
+    expect(result.ok).toBe(true);
+    expect(result.value).toEqual({
+      accountCode: "5300",
+      year: 2025,
+      sourceIds: ["initial_excel"],
+      budgetAmount: 13000,
+      actualAmount: 12800.25,
+    });
+  });
+
+  it("accepts an entry with only budgetAmount or only actualAmount", () => {
+    expect(validateFinancialEntryInput({ ...validRaw, actualAmount: "" }, FINANCIAL_ACCOUNTS).ok).toBe(true);
+    expect(validateFinancialEntryInput({ ...validRaw, budgetAmount: "" }, FINANCIAL_ACCOUNTS).ok).toBe(true);
+  });
+
+  it("rejects an entry with neither budgetAmount nor actualAmount", () => {
+    const result = validateFinancialEntryInput(
+      { ...validRaw, budgetAmount: "", actualAmount: "" },
+      FINANCIAL_ACCOUNTS,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.budgetAmount).toBeDefined();
+    expect(result.errors.actualAmount).toBeDefined();
+  });
+
+  it("rejects an accountCode that does not exist among known accounts", () => {
+    const result = validateFinancialEntryInput({ ...validRaw, accountCode: "9999" }, FINANCIAL_ACCOUNTS);
+    expect(result.ok).toBe(false);
+    expect(result.errors.accountCode).toBeDefined();
+  });
+
+  it("rejects a non-integer year", () => {
+    expect(validateFinancialEntryInput({ ...validRaw, year: "2025.5" }, FINANCIAL_ACCOUNTS).ok).toBe(false);
+  });
+
+  it("rejects an empty sourceIds list", () => {
+    const result = validateFinancialEntryInput({ ...validRaw, sourceIds: "" }, FINANCIAL_ACCOUNTS);
+    expect(result.ok).toBe(false);
+    expect(result.errors.sourceIds).toBeDefined();
+  });
+
+  it("builds an operation with the entity/operation sourceIds split", () => {
+    const result = buildSaveFinancialEntryOperation(
+      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "batch_source", explanation: "Tuonti." },
+      FINANCIAL_ACCOUNTS,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.operation).toEqual({
+      type: "save_financial_entry",
+      value: { accountCode: "5300", year: 2025, sourceIds: ["row_source"], actualAmount: 12000 },
+      sourceIds: ["batch_source"],
+      explanation: "Tuonti.",
+    });
+  });
+
+  it("reports operation-metadata errors under operationSourceIds, not sourceIds", () => {
+    const result = buildSaveFinancialEntryOperation(
+      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "", explanation: "" },
+      FINANCIAL_ACCOUNTS,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.operationSourceIds).toBeDefined();
+    expect(result.errors.sourceIds).toBeUndefined();
+  });
+});
+
+describe("parseFinancialPasteInput", () => {
+  function row(kind, group, tili, nimi, vuosi, budjetti, toteuma) {
+    return [kind, group, tili, nimi, vuosi, budjetti, toteuma].join("\t");
+  }
+
+  it("parses a valid multi-row paste with a header row", () => {
+    const text = [
+      row("kind", "ryhmä", "tili", "nimi", "vuosi", "budjetti", "toteuma"),
+      row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "2024", "", "12500,50"),
+      row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "2025", "13000", "12800.25"),
+      row("tulo", "VASTIKETULOT", "3000", "Hoitovastikkeet", "2025", "500000", "495000"),
+    ].join("\n");
+
+    const result = parseFinancialPasteInput(text);
+
+    expect(result.errors).toEqual([]);
+    expect(result.accounts).toEqual([
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "HALLINTOPALVELUT", active: true },
+      { accountCode: "3000", name: "Hoitovastikkeet", kind: "income", group: "VASTIKETULOT", active: true },
+    ]);
+    expect(result.entries).toEqual([
+      { accountCode: "5300", year: 2024, actualAmount: 12500.5 },
+      { accountCode: "5300", year: 2025, budgetAmount: 13000, actualAmount: 12800.25 },
+      { accountCode: "3000", year: 2025, budgetAmount: 500000, actualAmount: 495000 },
+    ]);
+  });
+
+  it("parses correctly without a header row", () => {
+    const text = row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "2025", "1000", "");
+    const result = parseFinancialPasteInput(text);
+    expect(result.errors).toEqual([]);
+    expect(result.entries).toEqual([{ accountCode: "5300", year: 2025, budgetAmount: 1000 }]);
+  });
+
+  it("does not treat a data row that merely starts with 'kind' as a header", () => {
+    const text = row("kulu", "ryhmä", "tili", "nimi", "vuosi", "budjetti", "toteuma");
+    const result = parseFinancialPasteInput(text);
+    expect(result.errors).toEqual([
+      { row: 1, message: 'Rivi 1: vuosi "vuosi" ei ole kokonaisluku.' },
+    ]);
+  });
+
+  it("returns no rows for empty or whitespace-only input", () => {
+    expect(parseFinancialPasteInput("")).toEqual({ accounts: [], entries: [], errors: [] });
+    expect(parseFinancialPasteInput("   \n\t\n  ")).toEqual({ accounts: [], entries: [], errors: [] });
+  });
+
+  it("skips blank lines without shifting row numbers", () => {
+    const text = [
+      row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "2025", "1000", ""),
+      "",
+      row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "huono-vuosi", "1000", ""),
+    ].join("\n");
+    const result = parseFinancialPasteInput(text);
+    expect(result.entries).toEqual([{ accountCode: "5300", year: 2025, budgetAmount: 1000 }]);
+    expect(result.errors).toEqual([
+      { row: 3, message: 'Rivi 3: vuosi "huono-vuosi" ei ole kokonaisluku.' },
+    ]);
+  });
+
+  it("reports the wrong column count with a row number", () => {
+    const result = parseFinancialPasteInput("kulu\tHALLINTOPALVELUT\t5300\tNimi\t2025");
+    expect(result.errors).toEqual([
+      { row: 1, message: "Rivi 1: odotettiin 7 saraketta, löytyi 5." },
+    ]);
+  });
+
+  it("reports an unknown kind", () => {
+    const result = parseFinancialPasteInput(row("meno", "X", "5300", "Nimi", "2025", "100", ""));
+    expect(result.errors).toEqual([
+      { row: 1, message: 'Rivi 1: tuntematon kind "meno" (odotettiin "kulu" tai "tulo").' },
+    ]);
+  });
+
+  it("reports a non-numeric amount", () => {
+    const budgetResult = parseFinancialPasteInput(row("kulu", "X", "5300", "Nimi", "2025", "abc", ""));
+    expect(budgetResult.errors).toEqual([
+      { row: 1, message: 'Rivi 1: budjetti "abc" ei ole luku.' },
+    ]);
+    const actualResult = parseFinancialPasteInput(row("kulu", "X", "5300", "Nimi", "2025", "", "abc"));
+    expect(actualResult.errors).toEqual([
+      { row: 1, message: 'Rivi 1: toteuma "abc" ei ole luku.' },
+    ]);
+  });
+
+  it("reports a row where both budget and actual are empty", () => {
+    const result = parseFinancialPasteInput(row("kulu", "X", "5300", "Nimi", "2025", "", ""));
+    expect(result.errors).toEqual([
+      { row: 1, message: "Rivi 1: sekä budjetti että toteuma puuttuvat." },
+    ]);
+  });
+
+  it("preserves a negative sign on amounts", () => {
+    const result = parseFinancialPasteInput(row("kulu", "X", "5300", "Nimi", "2025", "-100", "-50,25"));
+    expect(result.entries).toEqual([{ accountCode: "5300", year: 2025, budgetAmount: -100, actualAmount: -50.25 }]);
+  });
+
+  it("groups multiple years under one account", () => {
+    const text = [
+      row("kulu", "X", "5300", "Nimi", "2024", "", "1000"),
+      row("kulu", "X", "5300", "Nimi", "2025", "", "1100"),
+      row("kulu", "X", "5300", "Nimi", "2026", "1200", ""),
+    ].join("\n");
+    const result = parseFinancialPasteInput(text);
+    expect(result.accounts).toHaveLength(1);
+    expect(result.entries).toHaveLength(3);
+  });
+
+  it("rejects a conflicting name/group/kind on a later row for the same account", () => {
+    const text = [
+      row("kulu", "HALLINTOPALVELUT", "5300", "Isännöintipalkkiot", "2024", "", "1000"),
+      row("kulu", "MUU_RYHMA", "5300", "Isännöintipalkkiot", "2025", "", "1100"),
+    ].join("\n");
+    const result = parseFinancialPasteInput(text);
+    expect(result.accounts).toEqual([
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "HALLINTOPALVELUT", active: true },
+    ]);
+    expect(result.entries).toHaveLength(1);
+    expect(result.errors).toEqual([
+      {
+        row: 2,
+        message: "Rivi 2: tili 5300 on ristiriidassa aiemman rivin kanssa (nimi, ryhmä tai kind ei täsmää).",
+      },
+    ]);
+  });
+
+  it("rejects a duplicate (accountCode, year) pair", () => {
+    const text = [
+      row("kulu", "X", "5300", "Nimi", "2025", "", "1000"),
+      row("kulu", "X", "5300", "Nimi", "2025", "", "1100"),
+    ].join("\n");
+    const result = parseFinancialPasteInput(text);
+    expect(result.entries).toHaveLength(1);
+    expect(result.errors).toEqual([
+      { row: 2, message: "Rivi 2: tili 5300 vuodelle 2025 esiintyy jo aiemmalla rivillä." },
+    ]);
+  });
+});
+
+describe("buildFinancialImportOperations", () => {
+  it("orders every save_financial_account operation before any save_financial_entry operation", () => {
+    const parsed = parseFinancialPasteInput([
+      "kulu\tHALLINTOPALVELUT\t5300\tIsännöintipalkkiot\t2024\t\t1000",
+      "kulu\tHALLINTOPALVELUT\t5300\tIsännöintipalkkiot\t2025\t1100\t",
+      "tulo\tVASTIKETULOT\t3000\tHoitovastikkeet\t2025\t500000\t495000",
+    ].join("\n"));
+    const operations = buildFinancialImportOperations(parsed, {
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+
+    const accountOps = operations.filter((op) => op.type === "save_financial_account");
+    const entryOps = operations.filter((op) => op.type === "save_financial_entry");
+    expect(accountOps).toHaveLength(2);
+    expect(entryOps).toHaveLength(3);
+    expect(operations.indexOf(accountOps[0])).toBeLessThan(operations.indexOf(entryOps[0]));
+    expect(operations.indexOf(accountOps[1])).toBeLessThan(operations.indexOf(entryOps[0]));
+
+    for (const op of operations) {
+      expect(op.sourceIds).toEqual(["initial_excel"]);
+      expect(op.explanation).toBe("Tuonti Excelistä.");
+    }
+    for (const op of entryOps) {
+      expect(op.value.sourceIds).toEqual(["initial_excel"]);
+    }
+  });
+
+  it("produces operations that applyAdminBatch accepts in one batch, in cross-reference order", () => {
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "housing_company_demo", name: "Testiyhtiö", apartmentCount: 12 },
+      updatedAt: "2026-07-17T15:00:00+03:00",
+      updatedBy: "admin:test",
+    });
+    const parsed = parseFinancialPasteInput([
+      "kulu\tHALLINTOPALVELUT\t5300\tIsännöintipalkkiot\t2024\t\t1000",
+      "kulu\tHALLINTOPALVELUT\t5300\tIsännöintipalkkiot\t2025\t1100\t",
+      "tulo\tVASTIKETULOT\t3000\tHoitovastikkeet\t2025\t500000\t495000",
+    ].join("\n"));
+    const operations = buildFinancialImportOperations(parsed, {
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+
+    const next = applyAdminBatch(snapshot, {
+      companyId: "housing_company_demo",
+      expectedRevision: 0,
+      actorId: "admin:test",
+      occurredAt: "2026-07-18T09:00:00+03:00",
+      operations,
+    });
+
+    expect(next.revision).toBe(1);
+    expect(next.financialAccounts).toHaveLength(2);
+    expect(next.financialEntries).toHaveLength(3);
+    expect(next.financialAccounts.map((a) => a.accountCode).sort()).toEqual(["3000", "5300"]);
+  });
+});
+
+describe("buildAccountCostsViewModel", () => {
+  it("is empty with no accounts or no matching entries", () => {
+    expect(buildAccountCostsViewModel([], []).isEmpty).toBe(true);
+    expect(buildAccountCostsViewModel(FINANCIAL_ACCOUNTS, []).isEmpty).toBe(true);
+  });
+
+  it("includes only expense accounts, derives year columns from data, and orders budget before actual", () => {
+    const accounts = [
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "HALLINTOPALVELUT" },
+      { accountCode: "3000", name: "Hoitovastikkeet", kind: "income", group: "VASTIKETULOT" },
+    ];
+    const entries = [
+      { accountCode: "5300", year: 2024, actualAmount: 1000 },
+      { accountCode: "5300", year: 2025, budgetAmount: 1300, actualAmount: 1200 },
+      { accountCode: "3000", year: 2025, budgetAmount: 500000, actualAmount: 495000 },
+    ];
+
+    const vm = buildAccountCostsViewModel(accounts, entries);
+
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.columns.map((c) => c.key)).toEqual(["actual-2024", "budget-2025", "actual-2025"]);
+    expect(vm.groups).toHaveLength(1);
+    expect(vm.groups[0].group).toBe("HALLINTOPALVELUT");
+    expect(vm.groups[0].rows).toEqual([
+      {
+        accountCode: "5300",
+        name: "Isännöintipalkkiot",
+        values: { "actual-2024": 1000, "budget-2025": 1300, "actual-2025": 1200 },
+      },
+    ]);
+  });
+
+  it("groups multiple accounts and sums group and grand totals", () => {
+    const accounts = [
+      { accountCode: "5300", name: "Isännöinti", kind: "expense", group: "HALLINTO" },
+      { accountCode: "5310", name: "Kirjanpito", kind: "expense", group: "HALLINTO" },
+      { accountCode: "6000", name: "Lämmitys", kind: "expense", group: "LÄMMITYS" },
+    ];
+    const entries = [
+      { accountCode: "5300", year: 2025, actualAmount: 1000 },
+      { accountCode: "5310", year: 2025, actualAmount: 500 },
+      { accountCode: "6000", year: 2025, actualAmount: 2000 },
+    ];
+
+    const vm = buildAccountCostsViewModel(accounts, entries);
+
+    expect(vm.groups.map((g) => g.group)).toEqual(["HALLINTO", "LÄMMITYS"]);
+    const hallinto = vm.groups.find((g) => g.group === "HALLINTO");
+    expect(hallinto.totals["actual-2025"]).toBe(1500);
+    expect(vm.totals["actual-2025"]).toBe(3500);
+  });
+
+  it("shows an empty-state message pointing at the import view", () => {
+    const vm = buildAccountCostsViewModel([], []);
+    expect(vm.emptyMessage).toBe("Ei vielä tilidataa. Tuo se Liitä-näkymästä.");
   });
 });
