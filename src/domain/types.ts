@@ -85,6 +85,41 @@ export interface FinancialYear {
   readonly notes?: string;
 }
 
+export const FINANCIAL_ACCOUNT_KINDS = ["income", "expense"] as const;
+export type FinancialAccountKind = (typeof FINANCIAL_ACCOUNT_KINDS)[number];
+
+export const FINANCIAL_ACCOUNT_NATURES = ["maintenance", "repair"] as const;
+export type FinancialAccountNature = (typeof FINANCIAL_ACCOUNT_NATURES)[number];
+
+export const FINANCIAL_ACCOUNT_CONTROLLABILITIES = [
+  "fixed",
+  "variable",
+  "mixed",
+] as const;
+export type FinancialAccountControllability =
+  (typeof FINANCIAL_ACCOUNT_CONTROLLABILITIES)[number];
+
+/** One account in the chart of accounts. Descriptive metadata, not a yearly figure. */
+export interface FinancialAccount {
+  readonly accountCode: string;
+  readonly name: string;
+  readonly kind: FinancialAccountKind;
+  readonly group: string;
+  readonly nature?: FinancialAccountNature;
+  readonly controllability?: FinancialAccountControllability;
+  readonly active: boolean;
+}
+
+/** One account's budget and/or actual figure for one year. */
+export interface FinancialEntry {
+  readonly accountCode: string;
+  readonly year: number;
+  readonly budgetAmount?: number;
+  readonly actualAmount?: number;
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
 /** Manually entered liquidity inputs captured at one named date. */
 export interface LiquidityBaselineRecord {
   readonly id: string;
@@ -384,6 +419,8 @@ export const ADMIN_ENTITY_TYPES = [
   "cost_evidence",
   "price_level_confirmation",
   "building_event",
+  "financial_account",
+  "financial_entry",
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
@@ -397,7 +434,9 @@ export type AdminEntitySnapshot =
   | Observation
   | CostEvidence
   | PriceLevelConfirmation
-  | BuildingEvent;
+  | BuildingEvent
+  | FinancialAccount
+  | FinancialEntry;
 
 export interface AdminAuditEntry {
   readonly id: string;
@@ -424,6 +463,8 @@ export interface AdminDataSnapshot {
   readonly costEvidence: readonly CostEvidence[];
   readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
   readonly events: readonly BuildingEvent[];
+  readonly financialAccounts: readonly FinancialAccount[];
+  readonly financialEntries: readonly FinancialEntry[];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly updatedAt: string;
   readonly updatedBy: string;
@@ -442,7 +483,9 @@ export type AdminDataOperation =
   | ({ readonly type: "save_observation"; readonly value: Observation } & AdminOperationMetadata)
   | ({ readonly type: "save_cost_evidence"; readonly value: CostEvidence } & AdminOperationMetadata)
   | ({ readonly type: "save_price_level_confirmation"; readonly value: PriceLevelConfirmation } & AdminOperationMetadata)
-  | ({ readonly type: "save_building_event"; readonly value: BuildingEvent } & AdminOperationMetadata);
+  | ({ readonly type: "save_building_event"; readonly value: BuildingEvent } & AdminOperationMetadata)
+  | ({ readonly type: "save_financial_account"; readonly value: FinancialAccount } & AdminOperationMetadata)
+  | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata);
 
 export interface AdminDataBatchCommand {
   readonly companyId: string;

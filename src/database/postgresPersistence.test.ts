@@ -283,6 +283,27 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     await expect(publications.load(COMPANY_ID))
       .rejects.toMatchObject({ code: "DATABASE_INTEGRITY_ERROR" });
   });
+
+  it("defaults additive collection fields missing from a pre-existing stored row instead of throwing", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    // Simulates a row written before financialAccounts/financialEntries
+    // existed: the JSONB payload simply has no such keys, the way a real
+    // pre-vaihe-3A Supabase row does. Without withDefaultedAdminCollections()
+    // this reproduces "TypeError: values is not iterable" from
+    // validateAdminDataSnapshot's uniqueBy() on the missing arrays.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = payload - 'financialAccounts' - 'financialEntries'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.financialAccounts).toEqual([]);
+    expect(loaded!.financialEntries).toEqual([]);
+  });
 });
 
 describe("V2.5 PostgreSQL visitor-session repository", () => {

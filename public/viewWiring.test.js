@@ -89,6 +89,10 @@ describe("static id cross-check (index.html <-> app.js)", () => {
       "cost-evidence-filter-status", "cost-evidence-filter-asset",
       "cost-evidence-filter-gap-only", "detail-panel", "detail-panel-title",
       "detail-panel-body",
+      "finance-import-form", "finance-import-text", "finance-import-source-ids",
+      "finance-import-explanation", "finance-import-preview",
+      "finance-import-feedback", "finance-import-submit",
+      "finance-costs-account-body",
     ]) {
       expect(defined.has(id), `expected #${id} to be defined`).toBe(true);
     }

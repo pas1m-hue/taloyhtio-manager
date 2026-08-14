@@ -58,6 +58,7 @@
           <p class="nav-group-title">Talous</p>
           <ul>
             <li><a class="nav-link" href="#/finance-summary" data-view="finance-summary">Yhteenveto</a></li>
+            <li><a class="nav-link" href="#/finance-import" data-view="finance-import">Liitä tilidataa</a></li>
             <li><a class="nav-link" href="#/finance-income" data-view="finance-income">Tulot</a></li>
             <li><a class="nav-link" href="#/finance-costs-group" data-view="finance-costs-group">Kulut ryhmittäin</a></li>
             <li><a class="nav-link" href="#/finance-costs-account" data-view="finance-costs-account">Kulut tileittäin</a></li>
@@ -291,6 +292,33 @@
             <header class="view-head"><h2 id="finance-summary-title">Talous · Yhteenveto</h2></header>
             <div class="finance-placeholder" data-finance></div>
           </section>
+          <section class="view" data-view="finance-import" aria-labelledby="finance-import-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="finance-import-title">Talous · Liitä tilikohtainen data</h2>
+                <p class="view-lead muted">Liitä tab-erotellut rivit muodossa kind, ryhmä, tili, nimi, vuosi, budjetti, toteuma. kind on "kulu" tai "tulo". Otsikkorivi tunnistetaan ja ohitetaan automaattisesti.</p>
+              </div>
+            </header>
+            <form id="finance-import-form" class="card form-card wide-card" novalidate>
+              <label for="finance-import-text">Liitettävä data
+                <textarea id="finance-import-text" rows="12" spellcheck="false" placeholder="kind&#9;ryhmä&#9;tili&#9;nimi&#9;vuosi&#9;budjetti&#9;toteuma"></textarea>
+              </label>
+              <fieldset class="form-grid">
+                <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+                <label for="finance-import-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                  <input id="finance-import-source-ids" required aria-describedby="finance-import-source-ids-error" autocomplete="off">
+                  <span class="field-error" id="finance-import-source-ids-error"></span>
+                </label>
+                <label for="finance-import-explanation">Muutoksen selitys
+                  <input id="finance-import-explanation" required aria-describedby="finance-import-explanation-error" autocomplete="off">
+                  <span class="field-error" id="finance-import-explanation-error"></span>
+                </label>
+              </fieldset>
+              <div id="finance-import-preview"></div>
+              <p id="finance-import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+              <div class="button-row"><button id="finance-import-submit" type="submit" disabled>Tallenna tuonti</button></div>
+            </form>
+          </section>
           <section class="view" data-view="finance-income" aria-labelledby="finance-income-title" hidden>
             <header class="view-head"><h2 id="finance-income-title">Talous · Tulot</h2></header>
             <div class="finance-placeholder" data-finance></div>
@@ -301,7 +329,7 @@
           </section>
           <section class="view" data-view="finance-costs-account" aria-labelledby="finance-costs-account-title" hidden>
             <header class="view-head"><h2 id="finance-costs-account-title">Talous · Kulut tileittäin</h2></header>
-            <div class="finance-placeholder" data-finance></div>
+            <div id="finance-costs-account-body"></div>
           </section>
           <section class="view" data-view="finance-budget" aria-labelledby="finance-budget-title" hidden>
             <header class="view-head"><h2 id="finance-budget-title">Talous · Budjetti vs. toteuma</h2></header>

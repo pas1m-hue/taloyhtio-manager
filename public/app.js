@@ -1,8 +1,10 @@
 import {
   ASSET_CATEGORIES,
+  buildAccountCostsViewModel,
   buildAssetListViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
+  buildFinancialImportOperations,
   buildObservationListViewModel,
   buildSaveAssetOperation,
   buildSaveBuildingEventOperation,
@@ -22,13 +24,15 @@ import {
   groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
+  parseFinancialPasteInput,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
+  validateOperationMeta,
 } from "./adminOperationPayloads.js";
 
 const KNOWN_VIEWS = new Set([
   "overview", "company", "assets", "observations", "events", "cost-evidence",
-  "finance-summary", "finance-income", "finance-costs-group",
+  "finance-summary", "finance-import", "finance-income", "finance-costs-group",
   "finance-costs-account", "finance-budget", "finance-position",
   "scenarios", "cashpath", "required-collection", "publish", "developer",
 ]);
@@ -91,6 +95,8 @@ const state = {
   staleWorkspace: false,
   /** Set once per admin load so the year filter defaults to the current year without fighting user edits. */
   eventsYearFilterInitialized: false,
+  /** Last parseFinancialPasteInput() result for the finance-import form, or null before any input. */
+  financeImportParsed: null,
 };
 
 function selectionId(view) {
@@ -166,6 +172,8 @@ function wireStaticControls() {
     renderOverview();
   });
   $("#detail-panel-close").addEventListener("click", closeDetailPanel);
+  $("#finance-import-form").addEventListener("submit", submitFinanceImport);
+  $("#finance-import-text").addEventListener("input", updateFinanceImportPreview);
 
   // Visitor
   $("#visitor-load-overview").addEventListener("click", loadPublished);
@@ -521,6 +529,7 @@ function renderWorkspace() {
   renderEvents();
   renderCostEvidence();
   renderFinancePlaceholders();
+  renderAccountCosts();
   renderScenarios();
   renderCashpath();
   renderRequiredCollection();
@@ -541,6 +550,7 @@ function renderLoadPrompts() {
   $("#cost-evidence-kpis").innerHTML = "";
   for (const id of [
     "#assets-list", "#observations-list", "#events-list", "#cost-evidence-list",
+    "#finance-costs-account-body",
     "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary",
   ]) {
     $(id).innerHTML = prompt;
@@ -1847,9 +1857,105 @@ function renderFinancePlaceholders() {
   for (const host of $$("[data-finance]")) {
     host.innerHTML = stateBlock({
       kind: "not-modelled",
-      title: "Tietomalli ei vielä tue tätä näkymää",
-      body: "Tilikohtainen talousmalli (FinancialAccount/FinancialEntry) toteutetaan vaiheessa 3. Yleiskuvan talousvuosivalitsin näyttää vuositason budjetti- ja toteumaluvut jo nyt.",
+      title: "Näkymä ei vielä käytä tilikohtaista dataa",
+      body: "Tuo tilikohtainen data Liitä tilidataa -näkymästä. Tämä näkymä (Tulot / Kulut ryhmittäin / Budjetti vs. toteuma / Taloudellinen asema) toteutetaan vaiheessa 3B/4. Kulut tileittäin -näkymä käyttää tuotua dataa jo nyt.",
     });
+  }
+}
+
+function renderAccountCosts() {
+  if (!state.admin) return;
+  const vm = buildAccountCostsViewModel(state.admin.financialAccounts, state.admin.financialEntries);
+  const host = $("#finance-costs-account-body");
+  if (vm.isEmpty) {
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: "Ei vielä tilidataa",
+      body: vm.emptyMessage,
+    });
+    return;
+  }
+  const headerCells = vm.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
+  const groupBlocks = vm.groups.map((group) => {
+    const rows = group.rows.map((row) => {
+      const cells = vm.columns.map((column) => {
+        const value = row.values[column.key];
+        return `<td>${value === undefined ? "—" : money(value)}</td>`;
+      }).join("");
+      return `<tr><td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>${cells}</tr>`;
+    }).join("");
+    const totalCells = vm.columns.map((column) => `<td>${money(group.totals[column.key] ?? 0)}</td>`).join("");
+    return `<tbody>
+      <tr class="group-header"><td colspan="${2 + vm.columns.length}">${escapeHtml(group.group)}</td></tr>
+      ${rows}
+      <tr class="group-total"><td colspan="2">Ryhmä yhteensä</td>${totalCells}</tr>
+    </tbody>`;
+  }).join("");
+  const grandTotalCells = vm.columns.map((column) => `<td>${money(vm.totals[column.key] ?? 0)}</td>`).join("");
+  host.innerHTML = `<table class="data-table">
+    <thead><tr><th>Tili</th><th>Nimi</th>${headerCells}</tr></thead>
+    ${groupBlocks}
+    <tfoot><tr><td colspan="2">Kaikki yhteensä</td>${grandTotalCells}</tr></tfoot>
+  </table>`;
+}
+
+/* -------- Finance import ("Liitä tilikohtainen data") -------- */
+
+function updateFinanceImportPreview() {
+  const text = $("#finance-import-text").value;
+  const host = $("#finance-import-preview");
+  if (text.trim() === "") {
+    host.innerHTML = "";
+    state.financeImportParsed = null;
+    $("#finance-import-submit").disabled = true;
+    return;
+  }
+  const parsed = parseFinancialPasteInput(text);
+  state.financeImportParsed = parsed;
+  const summary = `${parsed.accounts.length} tiliä, ${parsed.entries.length} riviä tunnistettu.`;
+  host.innerHTML = parsed.errors.length > 0
+    ? stateBlock({
+      kind: "error",
+      title: summary,
+      body: `${parsed.errors.length} virhettä. Tallennus on estetty, kunnes virheet on korjattu.`,
+      items: parsed.errors.map((error) => error.message),
+    })
+    : `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p></article>`;
+  const hasRows = parsed.accounts.length > 0 || parsed.entries.length > 0;
+  $("#finance-import-submit").disabled = !hasRows || parsed.errors.length > 0;
+}
+
+async function submitFinanceImport(event) {
+  event.preventDefault();
+  clearFieldErrors("#finance-import-form");
+  const parsed = state.financeImportParsed;
+  if (!parsed || parsed.errors.length > 0 ||
+      (parsed.accounts.length === 0 && parsed.entries.length === 0)) {
+    setFeedback("#finance-import-feedback", "Korjaa virheet ennen tallennusta.", "error");
+    return;
+  }
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue("finance-import-source-ids"),
+    explanation: fieldValue("finance-import-explanation"),
+  });
+  if (!meta.ok) {
+    applyFieldErrors("#finance-import-form", {
+      sourceIds: "finance-import-source-ids",
+      explanation: "finance-import-explanation",
+    }, meta.errors);
+    setFeedback("#finance-import-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const operations = buildFinancialImportOperations(parsed, meta.value);
+  const sent = await sendAdminOperations(operations, {
+    successMessage: `Tuotu ${parsed.accounts.length} tiliä ja ${parsed.entries.length} riviä.`,
+  });
+  if (sent.ok) {
+    setFeedback("#finance-import-feedback", "Tallennettu.", "ok");
+    $("#finance-import-text").value = "";
+    updateFinanceImportPreview();
+  } else if (sent.conflict) {
+    setFeedback("#finance-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
   }
 }
 

@@ -43,6 +43,8 @@ export interface AdminDashboardReadModel {
   readonly costEvidence: AdminDataSnapshot["costEvidence"];
   readonly priceLevelConfirmations: AdminDataSnapshot["priceLevelConfirmations"];
   readonly events: AdminDataSnapshot["events"];
+  readonly financialAccounts: AdminDataSnapshot["financialAccounts"];
+  readonly financialEntries: AdminDataSnapshot["financialEntries"];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly publication: AdminPublicationStatus;
   readonly counts: AdminDashboardCounts;
@@ -88,6 +90,8 @@ export function buildAdminDashboardReadModel(
     costEvidence: admin.costEvidence,
     priceLevelConfirmations: admin.priceLevelConfirmations,
     events: admin.events,
+    financialAccounts: admin.financialAccounts,
+    financialEntries: admin.financialEntries,
     auditTrail: admin.auditTrail,
     publication,
     counts,

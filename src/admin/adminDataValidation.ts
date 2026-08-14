@@ -4,6 +4,9 @@ import {
   EVENT_ORIGINS,
   EVENT_STATUSES,
   EVENT_TYPES,
+  FINANCIAL_ACCOUNT_CONTROLLABILITIES,
+  FINANCIAL_ACCOUNT_KINDS,
+  FINANCIAL_ACCOUNT_NATURES,
   PROJECTION_PRICE_LEVEL_YEAR,
   SCENARIOS,
   DomainValidationError,
@@ -11,6 +14,8 @@ import {
   type Asset,
   type BuildingEvent,
   type CostEvidence,
+  type FinancialAccount,
+  type FinancialEntry,
   type FinancialYear,
   type HousingCompany,
   type LiquidityBaselineRecord,
@@ -38,10 +43,19 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
     (item) => item.costEvidenceId,
     "price-level confirmation",
   );
+  uniqueBy(state.financialAccounts, (item) => item.accountCode, "financial account");
+  uniqueBy(
+    state.financialEntries,
+    (item) => `${item.accountCode}:${item.year}`,
+    "financial entry",
+  );
 
   const assets = new Map(state.assets.map((item) => [item.id, item]));
   const events = new Map(state.events.map((item) => [item.id, item]));
   const evidence = new Map(state.costEvidence.map((item) => [item.id, item]));
+  const financialAccounts = new Map(
+    state.financialAccounts.map((item) => [item.accountCode, item]),
+  );
 
   state.assets.forEach(validateAsset);
   state.events.forEach(validateBuildingEventRuntime);
@@ -53,6 +67,10 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   state.costEvidence.forEach((item) => validateCostEvidence(item, assets, events));
   state.priceLevelConfirmations.forEach((item) =>
     validatePriceLevelConfirmation(item, evidence)
+  );
+  state.financialAccounts.forEach(validateFinancialAccount);
+  state.financialEntries.forEach((item) =>
+    validateFinancialEntry(item, financialAccounts)
   );
 
   // projectEvents is the calculation boundary validator. Suggested events are
@@ -97,6 +115,32 @@ function validateFinancialYear(value: FinancialYear): void {
       figures.some((item) => item !== undefined &&
         (!Number.isFinite(item) || item < 0))) {
     throw invalid(`Financial year ${value.year} is invalid`);
+  }
+}
+
+function validateFinancialAccount(value: FinancialAccount): void {
+  if (!isNonEmpty(value.accountCode) || !isNonEmpty(value.name) ||
+      !FINANCIAL_ACCOUNT_KINDS.includes(value.kind) || !isNonEmpty(value.group) ||
+      (value.nature !== undefined && !FINANCIAL_ACCOUNT_NATURES.includes(value.nature)) ||
+      (value.controllability !== undefined &&
+        !FINANCIAL_ACCOUNT_CONTROLLABILITIES.includes(value.controllability)) ||
+      typeof value.active !== "boolean") {
+    throw invalid(`Financial account ${value.accountCode || "<empty>"} is invalid`);
+  }
+}
+
+function validateFinancialEntry(
+  value: FinancialEntry,
+  accounts: ReadonlyMap<string, FinancialAccount>,
+): void {
+  if (!isNonEmpty(value.accountCode) || !accounts.has(value.accountCode) ||
+      !Number.isInteger(value.year) || !validSources(value.sourceIds) ||
+      (value.budgetAmount === undefined && value.actualAmount === undefined) ||
+      (value.budgetAmount !== undefined && !Number.isFinite(value.budgetAmount)) ||
+      (value.actualAmount !== undefined && !Number.isFinite(value.actualAmount))) {
+    throw invalid(
+      `Financial entry ${value.accountCode || "<empty>"}:${value.year} is invalid`,
+    );
   }
 }
 
