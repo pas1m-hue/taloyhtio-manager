@@ -277,7 +277,9 @@ async function currentAdminRevision(
 }
 
 function parseAdminRow(row: AdminRow): AdminDataSnapshot {
-  const payload = parsePayload<AdminDataSnapshot>(row.payload, "admin snapshot");
+  const payload = withDefaultedAdminCollections(
+    parsePayload<AdminDataSnapshot>(row.payload, "admin snapshot"),
+  );
   const revision = integer(row.revision, "admin revision");
   if (payload.companyId !== row.company_id || payload.revision !== revision ||
       payload.updatedBy !== row.updated_by ||
@@ -287,6 +289,35 @@ function parseAdminRow(row: AdminRow): AdminDataSnapshot {
   }
   validateAdminDataSnapshot(payload);
   return clone(payload);
+}
+
+/**
+ * Defaults every additive AdminDataSnapshot collection field to an empty
+ * array when a stored row predates it. The JSONB snapshot has no SQL
+ * migration path (single-blob architecture, see the vaihe-3A handoff): a row
+ * written before a new collection field existed simply omits that JSON key,
+ * so `payload.someCollection` is `undefined` at runtime despite the static
+ * type saying otherwise. Without this, validateAdminDataSnapshot's
+ * `uniqueBy()`/`.forEach()` calls throw "is not iterable" the first time an
+ * old row is loaded after a field is added — this happened for
+ * financialAccounts/financialEntries against real Supabase data.
+ */
+function withDefaultedAdminCollections(
+  payload: AdminDataSnapshot,
+): AdminDataSnapshot {
+  return {
+    ...payload,
+    financialYears: payload.financialYears ?? [],
+    liquidityBaselines: payload.liquidityBaselines ?? [],
+    assets: payload.assets ?? [],
+    observations: payload.observations ?? [],
+    costEvidence: payload.costEvidence ?? [],
+    priceLevelConfirmations: payload.priceLevelConfirmations ?? [],
+    events: payload.events ?? [],
+    financialAccounts: payload.financialAccounts ?? [],
+    financialEntries: payload.financialEntries ?? [],
+    auditTrail: payload.auditTrail ?? [],
+  };
 }
 
 function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
