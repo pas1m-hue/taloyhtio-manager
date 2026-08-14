@@ -7,6 +7,8 @@ import {
   type AdminEntitySnapshot,
   type AdminEntityType,
   type BuildingEvent,
+  type FinancialAccount,
+  type FinancialEntry,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
 
@@ -19,6 +21,8 @@ export interface CreateAdminSnapshotInput {
   readonly costEvidence?: AdminDataSnapshot["costEvidence"];
   readonly priceLevelConfirmations?: AdminDataSnapshot["priceLevelConfirmations"];
   readonly events?: AdminDataSnapshot["events"];
+  readonly financialAccounts?: AdminDataSnapshot["financialAccounts"];
+  readonly financialEntries?: AdminDataSnapshot["financialEntries"];
   readonly updatedAt: string;
   readonly updatedBy: string;
 }
@@ -37,6 +41,8 @@ export function createAdminDataSnapshot(
     costEvidence: clone(input.costEvidence ?? []),
     priceLevelConfirmations: clone(input.priceLevelConfirmations ?? []),
     events: clone(input.events ?? []),
+    financialAccounts: clone(input.financialAccounts ?? []),
+    financialEntries: clone(input.financialEntries ?? []),
     auditTrail: [],
     updatedAt: input.updatedAt,
     updatedBy: input.updatedBy,
@@ -119,6 +125,8 @@ interface MutableAdminState {
   costEvidence: AdminDataSnapshot["costEvidence"] extends readonly (infer T)[] ? T[] : never;
   priceLevelConfirmations: AdminDataSnapshot["priceLevelConfirmations"] extends readonly (infer T)[] ? T[] : never;
   events: BuildingEvent[];
+  financialAccounts: FinancialAccount[];
+  financialEntries: FinancialEntry[];
   auditTrail: AdminAuditEntry[];
   updatedAt: string;
   updatedBy: string;
@@ -182,6 +190,13 @@ function describeOperation(operation: AdminDataOperation): {
       };
     case "save_building_event":
       return { entityType: "building_event", entityKey: operation.value.id };
+    case "save_financial_account":
+      return { entityType: "financial_account", entityKey: operation.value.accountCode };
+    case "save_financial_entry":
+      return {
+        entityType: "financial_entry",
+        entityKey: `${operation.value.accountCode}:${operation.value.year}`,
+      };
   }
 }
 
@@ -225,6 +240,22 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
     case "save_building_event":
       state.events = upsertById(state.events, operation.value);
       return;
+    case "save_financial_account":
+      state.financialAccounts = upsert(
+        state.financialAccounts,
+        (item) => item.accountCode === operation.value.accountCode,
+        operation.value,
+      );
+      return;
+    case "save_financial_entry":
+      state.financialEntries = upsert(
+        state.financialEntries,
+        (item) =>
+          item.accountCode === operation.value.accountCode &&
+          item.year === operation.value.year,
+        operation.value,
+      );
+      return;
   }
 }
 
@@ -250,6 +281,12 @@ function findCurrent(
       return state.priceLevelConfirmations.find((item) => item.costEvidenceId === key);
     case "building_event":
       return state.events.find((item) => item.id === key);
+    case "financial_account":
+      return state.financialAccounts.find((item) => item.accountCode === key);
+    case "financial_entry":
+      return state.financialEntries.find(
+        (item) => `${item.accountCode}:${item.year}` === key,
+      );
   }
 }
 
@@ -266,6 +303,16 @@ function normalize(state: MutableAdminState): Omit<AdminDataSnapshot, "revision"
       .sort((a, b) => a.costEvidenceId.localeCompare(b.costEvidenceId))
       .map(clone),
     events: [...state.events].sort(byId).map(clone),
+    financialAccounts: [...state.financialAccounts]
+      .sort((a, b) => a.accountCode.localeCompare(b.accountCode))
+      .map(clone),
+    financialEntries: [...state.financialEntries]
+      .sort((a, b) =>
+        a.accountCode === b.accountCode
+          ? a.year - b.year
+          : a.accountCode.localeCompare(b.accountCode)
+      )
+      .map(clone),
   };
 }
 

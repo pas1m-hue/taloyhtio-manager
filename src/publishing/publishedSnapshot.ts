@@ -85,6 +85,8 @@ export function validatePublishedDataSnapshot(
     costEvidence: clone(snapshot.costEvidence),
     priceLevelConfirmations: clone(snapshot.priceLevelConfirmations),
     events: clone(snapshot.events),
+    financialAccounts: [],
+    financialEntries: [],
     auditTrail: [],
     updatedAt: snapshot.publishedAt,
     updatedBy: snapshot.publishedBy,
