@@ -1869,6 +1869,455 @@ export function buildAccountCostsViewModel(accounts, entries) {
   return { isEmpty: groups.length === 0, columns, groups, totals, emptyMessage };
 }
 
+/** Shared empty-state message for the vaihe 3B financial views (handoff §3). */
+const FINANCE_VIEW_EMPTY_MESSAGE = "Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.";
+
+/**
+ * Years for which the data contains both a budget figure (on some account)
+ * and an actual figure (on some, possibly different, account) — the only
+ * years a budget-vs-actual comparison is meaningful for (handoff §3.3).
+ * @param {ReadonlyArray<{year?: unknown, budgetAmount?: unknown, actualAmount?: unknown}>} [entries]
+ * @returns {number[]}
+ */
+export function deriveComparableYears(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const budgetYears = new Set();
+  const actualYears = new Set();
+  for (const entry of list) {
+    const year = Number(entry.year);
+    if (!Number.isFinite(year)) continue;
+    if (entry.budgetAmount !== undefined) budgetYears.add(year);
+    if (entry.actualAmount !== undefined) actualYears.add(year);
+  }
+  return [...budgetYears].filter((year) => actualYears.has(year)).sort((a, b) => a - b);
+}
+
+/**
+ * @typedef {Object} FinanceGroupRow
+ * @property {string} accountCode
+ * @property {string} name
+ * @property {Record<number, number|undefined>} actuals Keyed by actual year.
+ * @property {number|undefined} budget Latest-budget-year amount, if any.
+ * @property {string[]} notes
+ */
+
+/**
+ * @typedef {Object} FinanceGroup
+ * @property {string} group
+ * @property {FinanceGroupRow[]} rows Account-level breakdown for the detail panel.
+ * @property {Record<number, number|undefined>} actuals Group sums per actual year (undefined = no data at all, never a silent zero).
+ * @property {number|undefined} budget Group sum for the latest budget year.
+ * @property {number|undefined} changeAmount Latest actual year minus the previous one.
+ * @property {number|undefined} changePercent undefined when the previous year's value is 0 or missing (no division by zero).
+ * @property {string} notes
+ */
+
+/**
+ * Shared grouping/aggregation core for "Tulot" and "Kulut ryhmittäin" (spec
+ * §6.1/§6.2): groups accounts of the given kind by their `group`, derives
+ * actual-year columns and the single latest budget year from the data
+ * (never hardcoded — historical budgets are intentionally excluded from both
+ * views per the handoff), and computes the group-level change between the
+ * two most recent actual years. Extracted because both views need identical
+ * actual/budget/change math and differ only in the extra columns they attach
+ * (osuus tuloista vs. nature/controllability).
+ * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown, nature?: unknown, controllability?: unknown}>} accounts
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} entries
+ * @param {"income"|"expense"} kind
+ * @returns {{
+ *   isEmpty: boolean,
+ *   actualYears: number[],
+ *   budgetYear: number|null,
+ *   changeYears: { previous: number, latest: number }|null,
+ *   groups: Array<FinanceGroup & { accountRows: Array<FinanceGroupRow & { nature?: unknown, controllability?: unknown }> }>,
+ *   totals: { actuals: Record<number, number|undefined>, budget: number|undefined },
+ * }}
+ */
+function buildGroupedFinanceCore(accounts, entries, kind) {
+  const accountList = (Array.isArray(accounts) ? accounts : []).filter((a) => a.kind === kind);
+  const accountCodes = new Set(accountList.map((a) => String(a.accountCode ?? "")));
+  const entryList = (Array.isArray(entries) ? entries : [])
+    .filter((e) => accountCodes.has(String(e.accountCode ?? "")));
+
+  if (accountList.length === 0 || entryList.length === 0) {
+    return {
+      isEmpty: true,
+      actualYears: [],
+      budgetYear: null,
+      changeYears: null,
+      groups: [],
+      totals: { actuals: {}, budget: undefined },
+    };
+  }
+
+  const actualYearsSet = new Set();
+  const budgetYearsSet = new Set();
+  for (const entry of entryList) {
+    const year = Number(entry.year);
+    if (entry.actualAmount !== undefined) actualYearsSet.add(year);
+    if (entry.budgetAmount !== undefined) budgetYearsSet.add(year);
+  }
+  const actualYears = [...actualYearsSet].sort((a, b) => a - b);
+  const budgetYear = budgetYearsSet.size > 0 ? Math.max(...budgetYearsSet) : null;
+  const changeYears = actualYears.length >= 2
+    ? { previous: actualYears[actualYears.length - 2], latest: actualYears[actualYears.length - 1] }
+    : null;
+
+  /** @type {Map<string, Array<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>>} */
+  const entriesByAccount = new Map();
+  for (const entry of entryList) {
+    const code = String(entry.accountCode ?? "");
+    const list = entriesByAccount.get(code) ?? [];
+    list.push(entry);
+    entriesByAccount.set(code, list);
+  }
+
+  /** @type {Map<string, Array<FinanceGroupRow & { nature?: unknown, controllability?: unknown }>>} */
+  const groupMap = new Map();
+  for (const account of accountList) {
+    const code = String(account.accountCode ?? "");
+    const accountEntries = entriesByAccount.get(code);
+    if (!accountEntries || accountEntries.length === 0) continue;
+    const group = String(account.group ?? "");
+
+    /** @type {Record<number, number|undefined>} */
+    const actuals = {};
+    for (const year of actualYears) {
+      const entry = accountEntries.find((e) => Number(e.year) === year);
+      actuals[year] = entry && typeof entry.actualAmount === "number" ? entry.actualAmount : undefined;
+    }
+    let budget;
+    if (budgetYear !== null) {
+      const entry = accountEntries.find((e) => Number(e.year) === budgetYear);
+      budget = entry && typeof entry.budgetAmount === "number" ? entry.budgetAmount : undefined;
+    }
+    const notes = accountEntries.map((e) => toTrimmed(e.notes)).filter((n) => n !== "");
+
+    const rows = groupMap.get(group) ?? [];
+    rows.push({
+      accountCode: code,
+      name: String(account.name ?? ""),
+      actuals,
+      budget,
+      notes,
+      nature: account.nature,
+      controllability: account.controllability,
+    });
+    groupMap.set(group, rows);
+  }
+
+  const groups = [...groupMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([group, rows]) => {
+      const sortedRows = [...rows].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      /** @type {Record<number, number|undefined>} */
+      const actuals = {};
+      for (const year of actualYears) {
+        const values = sortedRows.map((r) => r.actuals[year]).filter((v) => v !== undefined);
+        actuals[year] = values.length > 0 ? values.reduce((s, v) => s + v, 0) : undefined;
+      }
+      let budget;
+      if (budgetYear !== null) {
+        const values = sortedRows.map((r) => r.budget).filter((v) => v !== undefined);
+        budget = values.length > 0 ? values.reduce((s, v) => s + v, 0) : undefined;
+      }
+
+      let changeAmount;
+      let changePercent;
+      if (changeYears) {
+        const previous = actuals[changeYears.previous];
+        const latest = actuals[changeYears.latest];
+        if (previous !== undefined && latest !== undefined) {
+          changeAmount = latest - previous;
+          changePercent = previous !== 0 ? (changeAmount / Math.abs(previous)) * 100 : undefined;
+        }
+      }
+
+      const notes = [...new Set(sortedRows.flatMap((r) => r.notes))].join("; ");
+
+      return {
+        group,
+        accountRows: sortedRows,
+        actuals,
+        budget,
+        changeAmount,
+        changePercent,
+        notes,
+      };
+    });
+
+  /** @type {Record<number, number|undefined>} */
+  const totalActuals = {};
+  for (const year of actualYears) {
+    const values = groups.map((g) => g.actuals[year]).filter((v) => v !== undefined);
+    totalActuals[year] = values.length > 0 ? values.reduce((s, v) => s + v, 0) : undefined;
+  }
+  let totalBudget;
+  if (budgetYear !== null) {
+    const values = groups.map((g) => g.budget).filter((v) => v !== undefined);
+    totalBudget = values.length > 0 ? values.reduce((s, v) => s + v, 0) : undefined;
+  }
+
+  return {
+    isEmpty: groups.length === 0,
+    actualYears,
+    budgetYear,
+    changeYears,
+    groups,
+    totals: { actuals: totalActuals, budget: totalBudget },
+  };
+}
+
+/**
+ * View model for "Tulot" (spec §6.1): income accounts grouped, with
+ * actual-year columns derived from data, only the latest budget year (never
+ * historical budgets — those belong to Budjetti vs. toteuma), the change
+ * between the two most recent actual years, and each group's share of total
+ * income for the latest actual year. Account-level breakdown lives on
+ * `group.accountRows` for the row-detail panel.
+ * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown}>} [accounts]
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   actualYears: number[],
+ *   budgetYear: number|null,
+ *   changeYears: { previous: number, latest: number }|null,
+ *   latestActualYear: number|null,
+ *   groups: Array<FinanceGroup & { sharePercent: number|undefined }>,
+ *   totals: { actuals: Record<number, number|undefined>, budget: number|undefined },
+ *   emptyMessage: string,
+ * }}
+ */
+export function buildIncomeViewModel(accounts, entries) {
+  const core = buildGroupedFinanceCore(accounts, entries, "income");
+  if (core.isEmpty) {
+    return {
+      isEmpty: true,
+      actualYears: [],
+      budgetYear: null,
+      changeYears: null,
+      latestActualYear: null,
+      groups: [],
+      totals: core.totals,
+      emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+    };
+  }
+  const latestActualYear = core.actualYears[core.actualYears.length - 1];
+  const totalLatestActual = core.groups
+    .map((g) => g.actuals[latestActualYear])
+    .filter((v) => v !== undefined)
+    .reduce((s, v) => s + v, 0);
+  const groups = core.groups.map((g) => {
+    const latest = g.actuals[latestActualYear];
+    const sharePercent = latest !== undefined && totalLatestActual !== 0
+      ? (latest / totalLatestActual) * 100
+      : undefined;
+    return { ...g, sharePercent };
+  });
+  return {
+    isEmpty: false,
+    actualYears: core.actualYears,
+    budgetYear: core.budgetYear,
+    changeYears: core.changeYears,
+    latestActualYear,
+    groups,
+    totals: core.totals,
+    emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+  };
+}
+
+/**
+ * View model for "Kulut ryhmittäin" (spec §6.2): expense accounts grouped,
+ * with nature/controllability composed to the group level. Decision
+ * (documented per handoff §3.2): when a group's accounts disagree, `nature`
+ * has no natural combined value so it becomes "—"; `controllability` has one
+ * ("mixed"/"sekä" is already a real domain value), so a conflict resolves to
+ * that. Historical budgets are excluded — only the latest budget year shows.
+ * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown, nature?: unknown, controllability?: unknown}>} [accounts]
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   actualYears: number[],
+ *   budgetYear: number|null,
+ *   changeYears: { previous: number, latest: number }|null,
+ *   groups: Array<FinanceGroup & { nature: string|undefined, controllability: string|undefined }>,
+ *   totals: { actuals: Record<number, number|undefined>, budget: number|undefined },
+ *   emptyMessage: string,
+ * }}
+ */
+export function buildExpenseGroupViewModel(accounts, entries) {
+  const core = buildGroupedFinanceCore(accounts, entries, "expense");
+  if (core.isEmpty) {
+    return {
+      isEmpty: true,
+      actualYears: [],
+      budgetYear: null,
+      changeYears: null,
+      groups: [],
+      totals: core.totals,
+      emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+    };
+  }
+  const groups = core.groups.map((g) => {
+    const natures = [...new Set(
+      g.accountRows.map((r) => r.nature).filter((v) => typeof v === "string" && v !== ""),
+    )];
+    const controllabilities = [...new Set(
+      g.accountRows.map((r) => r.controllability).filter((v) => typeof v === "string" && v !== ""),
+    )];
+    const nature = natures.length === 1 ? natures[0] : undefined;
+    const controllability = controllabilities.length === 0
+      ? undefined
+      : controllabilities.length === 1
+        ? controllabilities[0]
+        : "mixed";
+    return { ...g, nature, controllability };
+  });
+  return {
+    isEmpty: false,
+    actualYears: core.actualYears,
+    budgetYear: core.budgetYear,
+    changeYears: core.changeYears,
+    groups,
+    totals: core.totals,
+    emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+  };
+}
+
+/**
+ * View model for "Budjetti vs. toteuma" for one selected year (spec §6.4,
+ * the only view comparing historical budget to actual). Column order is
+ * fixed to Budjetti → Toteuma → Erotus (the "Budjetti näkyy ennen toteumaa"
+ * acceptance criterion). Rakeisuus (documented decision): grouped by
+ * kind (income/expense sections, since the same sign means opposite things)
+ * then by account group, composed; account-level rows live on
+ * `group.rows` for the detail panel. `favorable` is undefined when the
+ * difference cannot be computed, true/false otherwise, using the opposite
+ * sign convention for expense vs. income.
+ * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown}>} [accounts]
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
+ * @param {number|string} [year]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   year: number|null,
+ *   sections: Array<{ kind: "income"|"expense", groups: Array<{
+ *     group: string,
+ *     rows: Array<{ accountCode: string, name: string, budget: number|undefined, actual: number|undefined, diffAmount: number|undefined, diffPercent: number|undefined, notes: string }>,
+ *     budget: number|undefined,
+ *     actual: number|undefined,
+ *     diffAmount: number|undefined,
+ *     diffPercent: number|undefined,
+ *     favorable: boolean|undefined,
+ *     notes: string,
+ *   }> }>,
+ *   kpis: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined, avgAbsDeviation: number|undefined } | null,
+ *   emptyMessage: string,
+ * }}
+ */
+export function buildBudgetVsActualViewModel(accounts, entries, year) {
+  const accountList = Array.isArray(accounts) ? accounts : [];
+  const entryList = Array.isArray(entries) ? entries : [];
+  const accountsByCode = new Map(accountList.map((a) => [String(a.accountCode ?? ""), a]));
+
+  if (accountList.length === 0 || entryList.length === 0 || year === undefined || year === null || year === "") {
+    return { isEmpty: true, year: null, sections: [], kpis: null, emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE };
+  }
+
+  const selectedYear = Number(year);
+  const yearEntries = entryList.filter((e) => Number(e.year) === selectedYear);
+
+  /** @type {Map<string, Array<{accountCode: string, name: string, budget: number|undefined, actual: number|undefined, diffAmount: number|undefined, diffPercent: number|undefined, notes: string}>>} */
+  const rowsByKindGroup = new Map();
+  for (const entry of yearEntries) {
+    const code = String(entry.accountCode ?? "");
+    const account = accountsByCode.get(code);
+    if (!account) continue;
+    const kind = account.kind === "income" ? "income" : "expense";
+    const group = String(account.group ?? "");
+    const budget = typeof entry.budgetAmount === "number" ? entry.budgetAmount : undefined;
+    const actual = typeof entry.actualAmount === "number" ? entry.actualAmount : undefined;
+    let diffAmount;
+    let diffPercent;
+    if (budget !== undefined && actual !== undefined) {
+      diffAmount = actual - budget;
+      diffPercent = budget !== 0 ? (diffAmount / budget) * 100 : undefined;
+    }
+    const key = `${kind}::${group}`;
+    const list = rowsByKindGroup.get(key) ?? [];
+    list.push({
+      accountCode: code,
+      name: String(account.name ?? ""),
+      budget,
+      actual,
+      diffAmount,
+      diffPercent,
+      notes: toTrimmed(entry.notes),
+    });
+    rowsByKindGroup.set(key, list);
+  }
+
+  if (rowsByKindGroup.size === 0) {
+    return { isEmpty: true, year: selectedYear, sections: [], kpis: null, emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE };
+  }
+
+  /** @type {Map<"income"|"expense", Array<[string, typeof rowsByKindGroup extends Map<string, infer V> ? V : never]>>} */
+  const byKind = new Map();
+  for (const [key, rows] of rowsByKindGroup) {
+    const separatorIndex = key.indexOf("::");
+    const kind = /** @type {"income"|"expense"} */ (key.slice(0, separatorIndex));
+    const group = key.slice(separatorIndex + 2);
+    const list = byKind.get(kind) ?? [];
+    list.push([group, rows]);
+    byKind.set(kind, list);
+  }
+
+  const sections = ["income", "expense"]
+    .filter((kind) => byKind.has(kind))
+    .map((kind) => {
+      const groups = byKind.get(kind)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([group, rows]) => {
+          const sortedRows = [...rows].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+          const budgetValues = sortedRows.map((r) => r.budget).filter((v) => v !== undefined);
+          const actualValues = sortedRows.map((r) => r.actual).filter((v) => v !== undefined);
+          const budget = budgetValues.length > 0 ? budgetValues.reduce((s, v) => s + v, 0) : undefined;
+          const actual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+          let diffAmount;
+          let diffPercent;
+          if (budget !== undefined && actual !== undefined) {
+            diffAmount = actual - budget;
+            diffPercent = budget !== 0 ? (diffAmount / budget) * 100 : undefined;
+          }
+          const favorable = diffAmount === undefined
+            ? undefined
+            : kind === "expense" ? diffAmount <= 0 : diffAmount >= 0;
+          const notes = [...new Set(sortedRows.map((r) => r.notes).filter((n) => n !== ""))].join("; ");
+          return { group, rows: sortedRows, budget, actual, diffAmount, diffPercent, favorable, notes };
+        });
+      return { kind: /** @type {"income"|"expense"} */ (kind), groups };
+    });
+
+  const allRows = [...rowsByKindGroup.values()].flat();
+  const totalBudgetValues = allRows.map((r) => r.budget).filter((v) => v !== undefined);
+  const totalActualValues = allRows.map((r) => r.actual).filter((v) => v !== undefined);
+  const totalBudget = totalBudgetValues.length > 0 ? totalBudgetValues.reduce((s, v) => s + v, 0) : undefined;
+  const totalActual = totalActualValues.length > 0 ? totalActualValues.reduce((s, v) => s + v, 0) : undefined;
+  const netDiff = totalBudget !== undefined && totalActual !== undefined ? totalActual - totalBudget : undefined;
+  const allGroupDiffs = sections.flatMap((s) => s.groups.map((g) => g.diffAmount)).filter((v) => v !== undefined);
+  const avgAbsDeviation = allGroupDiffs.length > 0
+    ? allGroupDiffs.reduce((s, v) => s + Math.abs(v), 0) / allGroupDiffs.length
+    : undefined;
+
+  return {
+    isEmpty: false,
+    year: selectedYear,
+    sections,
+    kpis: { totalBudget, totalActual, netDiff, avgAbsDeviation },
+    emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+  };
+}
+
 /**
  * Interpretation of a failed admin save (decision 6). A 409 revision conflict
  * must surface a clear reload path, never a silent overwrite.
