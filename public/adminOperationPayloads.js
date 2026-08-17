@@ -2289,9 +2289,17 @@ export function buildBudgetVsActualViewModel(accounts, entries, year) {
             diffAmount = actual - budget;
             diffPercent = budget !== 0 ? (diffAmount / budget) * 100 : undefined;
           }
+          // Favorability uses magnitude, not the raw signed diff: paste-imported
+          // expense amounts often keep the source's negative sign (handoff
+          // §6/ohje-tilinpaatosdatan-syotto.md), so a literal actual-budget
+          // comparison would get the overrun direction backwards whenever costs
+          // are stored negative. |actual| > |budget| is an overrun regardless of
+          // which sign convention the data happens to use.
           const favorable = diffAmount === undefined
             ? undefined
-            : kind === "expense" ? diffAmount <= 0 : diffAmount >= 0;
+            : kind === "expense"
+              ? Math.abs(actual) <= Math.abs(budget)
+              : diffAmount >= 0;
           const notes = [...new Set(sortedRows.map((r) => r.notes).filter((n) => n !== ""))].join("; ");
           return { group, rows: sortedRows, budget, actual, diffAmount, diffPercent, favorable, notes };
         });

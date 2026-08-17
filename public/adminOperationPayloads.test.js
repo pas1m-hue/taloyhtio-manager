@@ -3,9 +3,12 @@ import { applyAdminBatch, createAdminDataSnapshot } from "../src/admin/applyAdmi
 import {
   buildAccountCostsViewModel,
   buildAssetListViewModel,
+  buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
+  buildExpenseGroupViewModel,
   buildFinancialImportOperations,
+  buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
   buildSaveBuildingEventOperation,
@@ -19,6 +22,7 @@ import {
   copyScheduleRowToAllScenarios,
   countActiveAssets,
   countObservationsWithoutEvent,
+  deriveComparableYears,
   deriveDataGapAssets,
   deriveEventYearOptions,
   groupScheduleByScenario,
@@ -1483,5 +1487,254 @@ describe("buildAccountCostsViewModel", () => {
   it("shows an empty-state message pointing at the import view", () => {
     const vm = buildAccountCostsViewModel([], []);
     expect(vm.emptyMessage).toBe("Ei vielä tilidataa. Tuo se Liitä-näkymästä.");
+  });
+});
+
+describe("deriveComparableYears", () => {
+  it("returns only years with both a budget and an actual figure somewhere in the data", () => {
+    const entries = [
+      { accountCode: "3000", year: 2024, actualAmount: 100 },
+      { accountCode: "3000", year: 2025, budgetAmount: 200, actualAmount: 210 },
+      { accountCode: "3001", year: 2026, budgetAmount: 300 },
+      { accountCode: "3001", year: 2027, budgetAmount: 50, actualAmount: 10 },
+    ];
+    expect(deriveComparableYears(entries)).toEqual([2025, 2027]);
+  });
+
+  it("matches budget on one account against actual on another for the same year", () => {
+    const entries = [
+      { accountCode: "3000", year: 2025, budgetAmount: 200 },
+      { accountCode: "3001", year: 2025, actualAmount: 210 },
+    ];
+    expect(deriveComparableYears(entries)).toEqual([2025]);
+  });
+
+  it("is empty with no entries", () => {
+    expect(deriveComparableYears([])).toEqual([]);
+    expect(deriveComparableYears(undefined)).toEqual([]);
+  });
+});
+
+const INCOME_ACCOUNTS = [
+  { accountCode: "3000", name: "Hoitovastikkeet, asunnot", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "3001", name: "Hoitovastikkeet, liiketilat", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "3100", name: "Vuokratulot", kind: "income", group: "Muut tulot" },
+];
+
+describe("buildIncomeViewModel", () => {
+  it("groups accounts, computes the 2024→2025 change and each group's share of total income", () => {
+    const entries = [
+      { accountCode: "3000", year: 2023, actualAmount: 900 },
+      { accountCode: "3000", year: 2024, actualAmount: 1000 },
+      { accountCode: "3000", year: 2025, actualAmount: 1100 },
+      { accountCode: "3000", year: 2026, budgetAmount: 1200 },
+      { accountCode: "3001", year: 2024, actualAmount: 200 },
+      { accountCode: "3001", year: 2025, actualAmount: 300 },
+      { accountCode: "3100", year: 2024, actualAmount: 500 },
+      { accountCode: "3100", year: 2025, actualAmount: 600 },
+    ];
+
+    const vm = buildIncomeViewModel(INCOME_ACCOUNTS, entries);
+
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.actualYears).toEqual([2023, 2024, 2025]);
+    expect(vm.budgetYear).toBe(2026);
+    expect(vm.changeYears).toEqual({ previous: 2024, latest: 2025 });
+    expect(vm.latestActualYear).toBe(2025);
+
+    const hoitovastikkeet = vm.groups.find((g) => g.group === "Hoitovastikkeet");
+    expect(hoitovastikkeet.actuals[2024]).toBe(1200);
+    expect(hoitovastikkeet.actuals[2025]).toBe(1400);
+    expect(hoitovastikkeet.changeAmount).toBe(200);
+    expect(hoitovastikkeet.changePercent).toBeCloseTo((200 / 1200) * 100);
+    expect(hoitovastikkeet.budget).toBe(1200);
+
+    const muutTulot = vm.groups.find((g) => g.group === "Muut tulot");
+    expect(muutTulot.actuals[2025]).toBe(600);
+
+    // Osuus tuloista sums to ~100% across groups for the latest actual year.
+    const totalShare = vm.groups.reduce((sum, g) => sum + (g.sharePercent ?? 0), 0);
+    expect(totalShare).toBeCloseTo(100, 5);
+    expect(hoitovastikkeet.sharePercent).toBeCloseTo((1400 / 2000) * 100);
+  });
+
+  it("excludes historical budget years, keeping only the latest", () => {
+    const entries = [
+      { accountCode: "3000", year: 2024, budgetAmount: 950, actualAmount: 1000 },
+      { accountCode: "3000", year: 2025, budgetAmount: 1050, actualAmount: 1100 },
+      { accountCode: "3000", year: 2026, budgetAmount: 1200 },
+    ];
+    const vm = buildIncomeViewModel(INCOME_ACCOUNTS, entries);
+    expect(vm.budgetYear).toBe(2026);
+    const group = vm.groups.find((g) => g.group === "Hoitovastikkeet");
+    expect(group.budget).toBe(1200);
+  });
+
+  it("leaves change figures undefined when fewer than two actual years exist", () => {
+    const entries = [{ accountCode: "3000", year: 2025, actualAmount: 1000 }];
+    const vm = buildIncomeViewModel(INCOME_ACCOUNTS, entries);
+    expect(vm.changeYears).toBeNull();
+    expect(vm.groups[0].changeAmount).toBeUndefined();
+    expect(vm.groups[0].changePercent).toBeUndefined();
+  });
+
+  it("is a first-class empty state pointing at the import view when there is no data", () => {
+    const vm = buildIncomeViewModel([], []);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.groups).toEqual([]);
+    expect(vm.emptyMessage).toBe("Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.");
+  });
+});
+
+const EXPENSE_ACCOUNTS = [
+  {
+    accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense",
+    group: "HALLINTOPALVELUT", nature: "maintenance", controllability: "fixed",
+  },
+  {
+    accountCode: "5301", name: "Isänn.kokouspalkkiot", kind: "expense",
+    group: "HALLINTOPALVELUT", nature: "maintenance", controllability: "variable",
+  },
+  {
+    accountCode: "6100", name: "Julkisivukorjaus", kind: "expense",
+    group: "KORJAUKSET", nature: "repair", controllability: "variable",
+  },
+];
+
+describe("buildExpenseGroupViewModel", () => {
+  it("groups accounts, computes the 2024→2025 change, and never shows historical budgets", () => {
+    const entries = [
+      { accountCode: "5300", year: 2024, budgetAmount: -5000, actualAmount: -5200 },
+      { accountCode: "5300", year: 2025, budgetAmount: -5100, actualAmount: -5500 },
+      { accountCode: "5300", year: 2026, budgetAmount: -5700 },
+      { accountCode: "5301", year: 2024, actualAmount: -900 },
+      { accountCode: "5301", year: 2025, actualAmount: -1000 },
+    ];
+    const vm = buildExpenseGroupViewModel(EXPENSE_ACCOUNTS, entries);
+
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.budgetYear).toBe(2026);
+    const group = vm.groups.find((g) => g.group === "HALLINTOPALVELUT");
+    expect(group.actuals[2024]).toBe(-6100);
+    expect(group.actuals[2025]).toBe(-6500);
+    expect(group.changeAmount).toBe(-400);
+    expect(group.budget).toBe(-5700);
+  });
+
+  it("shows \"—\" (undefined) for nature when accounts in a group disagree, and \"mixed\" for controllability", () => {
+    const accounts = [
+      { accountCode: "5300", name: "A", kind: "expense", group: "SEKARYHMÄ", nature: "maintenance", controllability: "fixed" },
+      { accountCode: "5301", name: "B", kind: "expense", group: "SEKARYHMÄ", nature: "repair", controllability: "variable" },
+    ];
+    const entries = [
+      { accountCode: "5300", year: 2025, actualAmount: -100 },
+      { accountCode: "5301", year: 2025, actualAmount: -200 },
+    ];
+    const vm = buildExpenseGroupViewModel(accounts, entries);
+    const group = vm.groups.find((g) => g.group === "SEKARYHMÄ");
+    expect(group.nature).toBeUndefined();
+    expect(group.controllability).toBe("mixed");
+  });
+
+  it("shows \"—\" (undefined) for nature/controllability when every account in the group leaves it blank", () => {
+    const accounts = [
+      { accountCode: "5400", name: "C", kind: "expense", group: "MUUT" },
+    ];
+    const entries = [{ accountCode: "5400", year: 2025, actualAmount: -50 }];
+    const vm = buildExpenseGroupViewModel(accounts, entries);
+    const group = vm.groups.find((g) => g.group === "MUUT");
+    expect(group.nature).toBeUndefined();
+    expect(group.controllability).toBeUndefined();
+  });
+
+  it("agrees on a single nature/controllability shared by every account in the group", () => {
+    const vm = buildExpenseGroupViewModel(EXPENSE_ACCOUNTS, [
+      { accountCode: "5300", year: 2025, actualAmount: -100 },
+      { accountCode: "5301", year: 2025, actualAmount: -200 },
+    ]);
+    const group = vm.groups.find((g) => g.group === "HALLINTOPALVELUT");
+    expect(group.nature).toBe("maintenance");
+    expect(group.controllability).toBe("mixed"); // fixed vs. variable disagree -> "sekä"
+  });
+
+  it("is a first-class empty state pointing at the import view when there is no data", () => {
+    const vm = buildExpenseGroupViewModel([], []);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.emptyMessage).toBe("Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.");
+  });
+});
+
+describe("buildBudgetVsActualViewModel", () => {
+  const accounts = [
+    ...EXPENSE_ACCOUNTS,
+    ...INCOME_ACCOUNTS,
+  ];
+
+  it("orders columns Budjetti before Toteuma and computes Erotus = Toteuma − Budjetti", () => {
+    const entries = [
+      { accountCode: "5300", year: 2025, budgetAmount: -5000, actualAmount: -5500 },
+      { accountCode: "3000", year: 2025, budgetAmount: 30000, actualAmount: 31000 },
+    ];
+    const vm = buildBudgetVsActualViewModel(accounts, entries, 2025);
+
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.year).toBe(2025);
+    const expenseSection = vm.sections.find((s) => s.kind === "expense");
+    const hallinto = expenseSection.groups.find((g) => g.group === "HALLINTOPALVELUT");
+    expect(hallinto.budget).toBe(-5000);
+    expect(hallinto.actual).toBe(-5500);
+    expect(hallinto.diffAmount).toBe(-500);
+    expect(hallinto.favorable).toBe(false); // expense: negative diff (more spent) = unfavorable
+
+    const incomeSection = vm.sections.find((s) => s.kind === "income");
+    const hoitovastikkeet = incomeSection.groups.find((g) => g.group === "Hoitovastikkeet");
+    expect(hoitovastikkeet.diffAmount).toBe(1000);
+    expect(hoitovastikkeet.favorable).toBe(true); // income: positive diff (more received) = favorable
+  });
+
+  it("leaves Erotus % empty (undefined) when the budget is 0, without NaN or Infinity", () => {
+    const entries = [{ accountCode: "5300", year: 2025, budgetAmount: 0, actualAmount: -200 }];
+    const vm = buildBudgetVsActualViewModel(accounts, entries, 2025);
+    const group = vm.sections[0].groups[0];
+    expect(group.budget).toBe(0);
+    expect(group.diffAmount).toBe(-200);
+    expect(group.diffPercent).toBeUndefined();
+  });
+
+  it("leaves Erotus and Erotus % empty when the budget is missing entirely", () => {
+    const entries = [{ accountCode: "5300", year: 2025, actualAmount: -200 }];
+    const vm = buildBudgetVsActualViewModel(accounts, entries, 2025);
+    const group = vm.sections[0].groups[0];
+    expect(group.budget).toBeUndefined();
+    expect(group.diffAmount).toBeUndefined();
+    expect(group.diffPercent).toBeUndefined();
+    expect(group.favorable).toBeUndefined();
+  });
+
+  it("computes KPI totals across both kinds for the selected year", () => {
+    const entries = [
+      { accountCode: "5300", year: 2025, budgetAmount: -5000, actualAmount: -5500 },
+      { accountCode: "3000", year: 2025, budgetAmount: 30000, actualAmount: 31000 },
+    ];
+    const vm = buildBudgetVsActualViewModel(accounts, entries, 2025);
+    expect(vm.kpis.totalBudget).toBe(25000);
+    expect(vm.kpis.totalActual).toBe(25500);
+    expect(vm.kpis.netDiff).toBe(500);
+    expect(vm.kpis.avgAbsDeviation).toBe((500 + 1000) / 2);
+  });
+
+  it("is a first-class empty state when the selected year has no data", () => {
+    const entries = [{ accountCode: "5300", year: 2024, budgetAmount: -100, actualAmount: -100 }];
+    const vm = buildBudgetVsActualViewModel(accounts, entries, 2025);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.sections).toEqual([]);
+    expect(vm.kpis).toBeNull();
+    expect(vm.emptyMessage).toBe("Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.");
+  });
+
+  it("is empty when no year is selected", () => {
+    const vm = buildBudgetVsActualViewModel(accounts, [{ accountCode: "5300", year: 2025, actualAmount: -1 }], undefined);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.year).toBeNull();
   });
 });
