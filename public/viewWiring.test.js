@@ -93,6 +93,8 @@ describe("static id cross-check (index.html <-> app.js)", () => {
       "finance-import-explanation", "finance-import-preview",
       "finance-import-feedback", "finance-import-submit",
       "finance-costs-account-body",
+      "finance-income-body", "finance-costs-group-body",
+      "finance-budget-filter-year", "finance-budget-kpis", "finance-budget-body",
     ]) {
       expect(defined.has(id), `expected #${id} to be defined`).toBe(true);
     }
@@ -204,5 +206,48 @@ describe("static view cross-check (KNOWN_VIEWS <-> data-view sections)", () => {
     for (const view of navLinkViews()) {
       expect(known.has(view), `nav-link data-view="${view}" is not in KNOWN_VIEWS`).toBe(true);
     }
+  });
+});
+
+// vaihe 3B: Tulot, Kulut ryhmittäin and Budjetti vs. toteuma reuse the shared
+// #detail-panel (same click-to-select pattern as assets/observations/events/
+// cost-evidence) for their account-level breakdown, so they must be in
+// DETAIL_PANEL_VIEWS and have a renderDetailPanel() branch. This only proves
+// the wiring exists, not the actual expand/select/close behavior in a
+// browser — verify that manually: open Tulot, click "Näytä" on a group row,
+// confirm the panel opens with that group's account rows; repeat for Kulut
+// ryhmittäin and Budjetti vs. toteuma; then switch the Budjetti vs. toteuma
+// year filter and confirm the table and any open detail panel update.
+describe("static finance detail-panel cross-check (vaihe 3B)", () => {
+  /** @returns {Set<string>} */
+  function detailPanelViews() {
+    const match = js.match(/const DETAIL_PANEL_VIEWS = new Set\(\[([\s\S]*?)\]\);/);
+    if (!match) throw new Error("DETAIL_PANEL_VIEWS declaration not found in app.js");
+    return new Set([...match[1].matchAll(/"([\w-]+)"/g)].map((m) => m[1]));
+  }
+
+  it("registers finance-income, finance-costs-group and finance-budget as detail-panel views", () => {
+    const views = detailPanelViews();
+    for (const view of ["finance-income", "finance-costs-group", "finance-budget"]) {
+      expect(views.has(view), `expected DETAIL_PANEL_VIEWS to contain "${view}"`).toBe(true);
+    }
+  });
+
+  it("has a renderDetailPanel() branch for each finance detail-panel view", () => {
+    for (const [view, renderFn] of [
+      ["finance-income", "renderIncomeGroupDetail"],
+      ["finance-costs-group", "renderExpenseGroupDetail"],
+      ["finance-budget", "renderBudgetVsActualDetail"],
+    ]) {
+      const pattern = new RegExp(
+        `state\\.selection\\.view === "${view}"\\)\\s*${renderFn}\\(\\)`,
+      );
+      expect(pattern.test(js), `expected a renderDetailPanel() branch calling ${renderFn}() for "${view}"`).toBe(true);
+    }
+  });
+
+  it("derives the Budjetti vs. toteuma year filter options from the data (deriveComparableYears)", () => {
+    expect(js).toContain("deriveComparableYears(entries)");
+    expect(js).toContain('$("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual)');
   });
 });
