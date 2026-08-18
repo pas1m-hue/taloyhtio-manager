@@ -321,19 +321,32 @@
           </section>
           <section class="view" data-view="finance-income" aria-labelledby="finance-income-title" hidden>
             <header class="view-head"><h2 id="finance-income-title">Talous · Tulot</h2></header>
-            <div class="finance-placeholder" data-finance></div>
+            <div id="finance-income-body"></div>
           </section>
           <section class="view" data-view="finance-costs-group" aria-labelledby="finance-costs-group-title" hidden>
             <header class="view-head"><h2 id="finance-costs-group-title">Talous · Kulut ryhmittäin</h2></header>
-            <div class="finance-placeholder" data-finance></div>
+            <div id="finance-costs-group-body"></div>
           </section>
           <section class="view" data-view="finance-costs-account" aria-labelledby="finance-costs-account-title" hidden>
             <header class="view-head"><h2 id="finance-costs-account-title">Talous · Kulut tileittäin</h2></header>
             <div id="finance-costs-account-body"></div>
           </section>
           <section class="view" data-view="finance-budget" aria-labelledby="finance-budget-title" hidden>
-            <header class="view-head"><h2 id="finance-budget-title">Talous · Budjetti vs. toteuma</h2></header>
-            <div class="finance-placeholder" data-finance></div>
+            <header class="view-head">
+              <div>
+                <h2 id="finance-budget-title">Talous · Budjetti vs. toteuma</h2>
+                <p class="view-lead muted">Ainoa näkymä jossa historiallista budjettia verrataan toteumaan.</p>
+              </div>
+            </header>
+            <div class="assets-filters">
+              <label>Vuosi
+                <select id="finance-budget-filter-year">
+                  <option value="">Valitse vuosi</option>
+                </select>
+              </label>
+            </div>
+            <div id="finance-budget-kpis" class="card-grid"></div>
+            <div id="finance-budget-body"></div>
           </section>
           <section class="view" data-view="finance-position" aria-labelledby="finance-position-title" hidden>
             <header class="view-head"><h2 id="finance-position-title">Talous · Taloudellinen asema</h2></header>

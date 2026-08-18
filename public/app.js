@@ -2,9 +2,12 @@ import {
   ASSET_CATEGORIES,
   buildAccountCostsViewModel,
   buildAssetListViewModel,
+  buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
+  buildExpenseGroupViewModel,
   buildFinancialImportOperations,
+  buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
   buildSaveBuildingEventOperation,
@@ -17,6 +20,7 @@ import {
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
   countObservationsWithoutEvent,
+  deriveComparableYears,
   deriveDataGapAssets,
   deriveEventYearOptions,
   EVENT_STATUSES,
@@ -39,7 +43,10 @@ const KNOWN_VIEWS = new Set([
 
 // Views that own the right-hand detail panel; navigating to any other view
 // closes it (decision: generalized from vaihe 1's assets-only behaviour).
-const DETAIL_PANEL_VIEWS = new Set(["assets", "observations", "cost-evidence", "events"]);
+const DETAIL_PANEL_VIEWS = new Set([
+  "assets", "observations", "cost-evidence", "events",
+  "finance-income", "finance-costs-group", "finance-budget",
+]);
 
 const CATEGORY_LABELS = {
   hvac: "LVI", envelope: "Vaippa", structures: "Rakenteet",
@@ -72,6 +79,10 @@ const EVENT_STATUS_LABELS = {
   cancelled: "Peruttu",
 };
 
+const FINANCE_NATURE_LABELS = { maintenance: "Hoito", repair: "Korjaus" };
+
+const FINANCE_CONTROLLABILITY_LABELS = { fixed: "Kiinteä", variable: "Muuttuva", mixed: "Sekä" };
+
 const SCENARIOS = ["optimistic", "base", "stress"];
 
 const SCENARIO_LABELS = {
@@ -84,7 +95,12 @@ const state = {
   mode: "admin",
   view: "overview",
   admin: null,
-  /** Detail-panel selection: null or { view: "assets"|"observations"|"cost-evidence"|"events", id }. */
+  /**
+   * Detail-panel selection: null or { view, id }. For finance-income/
+   * finance-costs-group, id is the group name; for finance-budget it is
+   * `${kind}::${group}` since a group name can appear in both sections.
+   * @type {null | { view: "assets"|"observations"|"cost-evidence"|"events"|"finance-income"|"finance-costs-group"|"finance-budget", id: string }}
+   */
   selection: null,
   selectedFiscalYear: null,
   cashpathScenario: "base",
@@ -95,6 +111,8 @@ const state = {
   staleWorkspace: false,
   /** Set once per admin load so the year filter defaults to the current year without fighting user edits. */
   eventsYearFilterInitialized: false,
+  /** Set once per admin load so the Budjetti vs. toteuma year filter defaults to the latest comparable year without fighting user edits. */
+  financeBudgetYearFilterInitialized: false,
   /** Last parseFinancialPasteInput() result for the finance-import form, or null before any input. */
   financeImportParsed: null,
 };
@@ -104,6 +122,21 @@ function selectionId(view) {
 }
 
 function selectionStillExists(selection, model) {
+  if (selection.view === "finance-income") {
+    return buildIncomeViewModel(model.financialAccounts, model.financialEntries)
+      .groups.some((g) => g.group === selection.id);
+  }
+  if (selection.view === "finance-costs-group") {
+    return buildExpenseGroupViewModel(model.financialAccounts, model.financialEntries)
+      .groups.some((g) => g.group === selection.id);
+  }
+  if (selection.view === "finance-budget") {
+    const year = $("#finance-budget-filter-year")?.value;
+    if (!year) return false;
+    const vm = buildBudgetVsActualViewModel(model.financialAccounts, model.financialEntries, year);
+    return vm.sections.some((section) =>
+      section.groups.some((g) => `${section.kind}::${g.group}` === selection.id));
+  }
   const lists = {
     assets: model.assets, observations: model.observations,
     "cost-evidence": model.costEvidence, events: model.events,
@@ -174,6 +207,7 @@ function wireStaticControls() {
   $("#detail-panel-close").addEventListener("click", closeDetailPanel);
   $("#finance-import-form").addEventListener("submit", submitFinanceImport);
   $("#finance-import-text").addEventListener("input", updateFinanceImportPreview);
+  $("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual);
 
   // Visitor
   $("#visitor-load-overview").addEventListener("click", loadPublished);
@@ -529,7 +563,10 @@ function renderWorkspace() {
   renderEvents();
   renderCostEvidence();
   renderFinancePlaceholders();
+  renderIncome();
+  renderExpenseGroups();
   renderAccountCosts();
+  renderBudgetVsActual();
   renderScenarios();
   renderCashpath();
   renderRequiredCollection();
@@ -548,9 +585,11 @@ function renderLoadPrompts() {
   $("#observations-kpis").innerHTML = "";
   $("#events-kpis").innerHTML = "";
   $("#cost-evidence-kpis").innerHTML = "";
+  $("#finance-budget-kpis").innerHTML = "";
   for (const id of [
     "#assets-list", "#observations-list", "#events-list", "#cost-evidence-list",
-    "#finance-costs-account-body",
+    "#finance-income-body", "#finance-costs-group-body", "#finance-costs-account-body",
+    "#finance-budget-body",
     "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary",
   ]) {
     $(id).innerHTML = prompt;
@@ -779,6 +818,9 @@ function renderDetailPanel() {
   else if (state.selection.view === "observations") renderObservationDetail();
   else if (state.selection.view === "cost-evidence") renderCostEvidenceDetail();
   else if (state.selection.view === "events") renderEventDetail();
+  else if (state.selection.view === "finance-income") renderIncomeGroupDetail();
+  else if (state.selection.view === "finance-costs-group") renderExpenseGroupDetail();
+  else if (state.selection.view === "finance-budget") renderBudgetVsActualDetail();
 }
 
 function renderAssetDetail() {
@@ -815,7 +857,7 @@ function openDetailPanel() { $("#detail-panel").hidden = false; }
 function closeDetailPanel() {
   $("#detail-panel").hidden = true;
   state.selection = null;
-  for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected, #events-list tr.is-selected")) {
+  for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected, #events-list tr.is-selected, #finance-income-body tr.is-selected, #finance-costs-group-body tr.is-selected, #finance-budget-body tr.is-selected")) {
     el.classList.remove("is-selected");
   }
 }
@@ -1858,7 +1900,7 @@ function renderFinancePlaceholders() {
     host.innerHTML = stateBlock({
       kind: "not-modelled",
       title: "Näkymä ei vielä käytä tilikohtaista dataa",
-      body: "Tuo tilikohtainen data Liitä tilidataa -näkymästä. Tämä näkymä (Tulot / Kulut ryhmittäin / Budjetti vs. toteuma / Taloudellinen asema) toteutetaan vaiheessa 3B/4. Kulut tileittäin -näkymä käyttää tuotua dataa jo nyt.",
+      body: "Taloudellinen asema toteutetaan vaiheessa 4 (eri tietomalli, tasesnapshotit). Tulot, Kulut ryhmittäin, Kulut tileittäin ja Budjetti vs. toteuma käyttävät jo tuotua dataa.",
     });
   }
 }
@@ -1897,6 +1939,281 @@ function renderAccountCosts() {
     ${groupBlocks}
     <tfoot><tr><td colspan="2">Kaikki yhteensä</td>${grandTotalCells}</tr></tfoot>
   </table>`;
+}
+
+/** Formats a "Muutos" cell: amount plus a parenthesised percentage, or "—" if not computable. */
+function formatChangeCell(amount, percentValue) {
+  if (amount === undefined) return "—";
+  const pct = percentValue === undefined ? "" : ` (${percent(percentValue)})`;
+  return `${money(amount)}${pct}`;
+}
+
+/**
+ * Selects a group row in one of the grouped finance views (Tulot, Kulut
+ * ryhmittäin, Budjetti vs. toteuma) and opens it in the shared detail panel —
+ * the same click-to-select-then-detail-panel pattern as assets/observations/
+ * events/cost-evidence (decision: consistency over inventing a new pattern).
+ * `id` is the group name for finance-income/finance-costs-group (unique per
+ * view), and `kind::group` for finance-budget (a group name can appear in
+ * both the income and expense sections there).
+ * @param {"finance-income"|"finance-costs-group"|"finance-budget"} view
+ * @param {string} id
+ */
+function selectFinanceGroup(view, id) {
+  state.selection = { view, id };
+  if (view === "finance-income") renderIncome();
+  else if (view === "finance-costs-group") renderExpenseGroups();
+  else renderBudgetVsActual();
+  renderDetailPanel();
+  openDetailPanel();
+}
+
+/** -------- Tulot (spec §6.1) -------- */
+
+function renderIncome() {
+  if (!state.admin) return;
+  const vm = buildIncomeViewModel(state.admin.financialAccounts, state.admin.financialEntries);
+  const host = $("#finance-income-body");
+  if (vm.isEmpty) {
+    host.innerHTML = stateBlock({ kind: "empty", title: "Ei vielä talousdataa", body: vm.emptyMessage });
+    return;
+  }
+  const changeLabel = vm.changeYears
+    ? `Muutos ${vm.changeYears.previous} → ${vm.changeYears.latest}`
+    : "Muutos";
+  const budgetLabel = vm.budgetYear !== null ? `Budjetti ${vm.budgetYear}` : "Budjetti";
+  const yearHeaderCells = vm.actualYears.map((year) => `<th>Toteuma ${year}</th>`).join("");
+  const selectedGroup = selectionId("finance-income");
+
+  const rows = vm.groups.map((group) => {
+    const actualCells = vm.actualYears
+      .map((year) => `<td>${group.actuals[year] === undefined ? "—" : money(group.actuals[year])}</td>`)
+      .join("");
+    const rowClass = group.group === selectedGroup ? "is-selected" : "";
+    return `<tr class="${rowClass}" data-group="${escapeHtml(group.group)}">
+      <td>${escapeHtml(group.group)}</td>
+      ${actualCells}
+      <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
+      <td>${formatChangeCell(group.changeAmount, group.changePercent)}</td>
+      <td>${group.sharePercent === undefined ? "—" : percent(group.sharePercent)}</td>
+      <td>${escapeHtml(group.notes || "—")}</td>
+      <td><button type="button" class="secondary row-select">Näytä</button></td>
+    </tr>`;
+  }).join("");
+
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Ryhmä</th>${yearHeaderCells}<th>${escapeHtml(budgetLabel)}</th>
+      <th>${escapeHtml(changeLabel)}</th><th>Osuus tuloista</th><th>Huomio</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  for (const row of host.querySelectorAll("tr[data-group]")) {
+    row.querySelector(".row-select")
+      .addEventListener("click", () => selectFinanceGroup("finance-income", row.dataset.group));
+  }
+}
+
+function renderIncomeGroupDetail() {
+  const model = state.admin;
+  const vm = buildIncomeViewModel(model.financialAccounts, model.financialEntries);
+  const group = vm.groups.find((g) => g.group === selectionId("finance-income"));
+  if (!group) { closeDetailPanel(); return; }
+  const yearHeaderCells = vm.actualYears.map((year) => `<th>Toteuma ${year}</th>`).join("");
+  const budgetLabel = vm.budgetYear !== null ? `Budjetti ${vm.budgetYear}` : "Budjetti";
+  const rows = group.accountRows.map((row) => {
+    const cells = vm.actualYears
+      .map((year) => `<td>${row.actuals[year] === undefined ? "—" : money(row.actuals[year])}</td>`)
+      .join("");
+    return `<tr><td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>${cells}` +
+      `<td>${row.budget === undefined ? "—" : money(row.budget)}</td></tr>`;
+  }).join("");
+  $("#detail-panel-title").textContent = group.group;
+  $("#detail-panel-body").innerHTML = `
+    <div class="detail-item"><span>Osuus tuloista</span><strong>${group.sharePercent === undefined ? "—" : percent(group.sharePercent)}</strong></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Tili</th><th>Nimi</th>${yearHeaderCells}<th>${escapeHtml(budgetLabel)}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+/** -------- Kulut ryhmittäin (spec §6.2) -------- */
+
+function renderExpenseGroups() {
+  if (!state.admin) return;
+  const vm = buildExpenseGroupViewModel(state.admin.financialAccounts, state.admin.financialEntries);
+  const host = $("#finance-costs-group-body");
+  if (vm.isEmpty) {
+    host.innerHTML = stateBlock({ kind: "empty", title: "Ei vielä talousdataa", body: vm.emptyMessage });
+    return;
+  }
+  const changeLabel = vm.changeYears
+    ? `Muutos ${vm.changeYears.previous} → ${vm.changeYears.latest}`
+    : "Muutos";
+  const budgetLabel = vm.budgetYear !== null ? `Budjetti ${vm.budgetYear}` : "Budjetti";
+  const yearHeaderCells = vm.actualYears.map((year) => `<th>Toteuma ${year}</th>`).join("");
+  const selectedGroup = selectionId("finance-costs-group");
+
+  const rows = vm.groups.map((group) => {
+    const actualCells = vm.actualYears
+      .map((year) => `<td>${group.actuals[year] === undefined ? "—" : money(group.actuals[year])}</td>`)
+      .join("");
+    const rowClass = group.group === selectedGroup ? "is-selected" : "";
+    return `<tr class="${rowClass}" data-group="${escapeHtml(group.group)}">
+      <td>${escapeHtml(group.group)}</td>
+      <td>${escapeHtml(FINANCE_NATURE_LABELS[group.nature] ?? "—")}</td>
+      <td>${escapeHtml(FINANCE_CONTROLLABILITY_LABELS[group.controllability] ?? "—")}</td>
+      ${actualCells}
+      <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
+      <td>${formatChangeCell(group.changeAmount, group.changePercent)}</td>
+      <td>${escapeHtml(group.notes || "—")}</td>
+      <td><button type="button" class="secondary row-select">Näytä</button></td>
+    </tr>`;
+  }).join("");
+
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Ryhmä</th><th>Luonne</th><th>Ohjattavuus</th>${yearHeaderCells}
+      <th>${escapeHtml(budgetLabel)}</th><th>${escapeHtml(changeLabel)}</th><th>Huomio</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  for (const row of host.querySelectorAll("tr[data-group]")) {
+    row.querySelector(".row-select")
+      .addEventListener("click", () => selectFinanceGroup("finance-costs-group", row.dataset.group));
+  }
+}
+
+function renderExpenseGroupDetail() {
+  const model = state.admin;
+  const vm = buildExpenseGroupViewModel(model.financialAccounts, model.financialEntries);
+  const group = vm.groups.find((g) => g.group === selectionId("finance-costs-group"));
+  if (!group) { closeDetailPanel(); return; }
+  const yearHeaderCells = vm.actualYears.map((year) => `<th>Toteuma ${year}</th>`).join("");
+  const budgetLabel = vm.budgetYear !== null ? `Budjetti ${vm.budgetYear}` : "Budjetti";
+  const rows = group.accountRows.map((row) => {
+    const cells = vm.actualYears
+      .map((year) => `<td>${row.actuals[year] === undefined ? "—" : money(row.actuals[year])}</td>`)
+      .join("");
+    const nature = FINANCE_NATURE_LABELS[row.nature] ?? "—";
+    const controllability = FINANCE_CONTROLLABILITY_LABELS[row.controllability] ?? "—";
+    return `<tr><td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>` +
+      `<td>${escapeHtml(nature)}</td><td>${escapeHtml(controllability)}</td>${cells}` +
+      `<td>${row.budget === undefined ? "—" : money(row.budget)}</td></tr>`;
+  }).join("");
+  $("#detail-panel-title").textContent = group.group;
+  $("#detail-panel-body").innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Tili</th><th>Nimi</th><th>Luonne</th><th>Ohjattavuus</th>${yearHeaderCells}<th>${escapeHtml(budgetLabel)}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+/** -------- Budjetti vs. toteuma (spec §6.4) -------- */
+
+function populateFinanceBudgetYearFilter(entries) {
+  const select = $("#finance-budget-filter-year");
+  const years = deriveComparableYears(entries);
+  const current = select.value;
+  select.innerHTML = `<option value="">Valitse vuosi</option>` +
+    years.map((year) => `<option value="${year}">${year}</option>`).join("");
+  if (!state.financeBudgetYearFilterInitialized && years.length > 0) {
+    state.financeBudgetYearFilterInitialized = true;
+    select.value = String(years[years.length - 1]);
+    return;
+  }
+  select.value = current !== "" && years.includes(Number(current)) ? current : "";
+}
+
+const FINANCE_SECTION_LABELS = { income: "Tulot", expense: "Kulut" };
+
+/** Builds the current `buildBudgetVsActualViewModel` result for the selected year filter, or null if none is selected. */
+function currentBudgetVsActualViewModel() {
+  if (!state.admin) return null;
+  const year = $("#finance-budget-filter-year").value;
+  if (year === "") return null;
+  return buildBudgetVsActualViewModel(state.admin.financialAccounts, state.admin.financialEntries, year);
+}
+
+function renderBudgetVsActual() {
+  if (!state.admin) return;
+  populateFinanceBudgetYearFilter(state.admin.financialEntries);
+  const vm = currentBudgetVsActualViewModel();
+  const kpiHost = $("#finance-budget-kpis");
+  const host = $("#finance-budget-body");
+
+  if (!vm || vm.isEmpty) {
+    kpiHost.innerHTML = "";
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: vm === null ? "Valitse vuosi" : "Ei vertailukelpoista dataa tälle vuodelle",
+      body: vm?.emptyMessage ?? "Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.",
+    });
+    return;
+  }
+
+  kpiHost.innerHTML = [
+    ["Kokonaisbudjetti", vm.kpis.totalBudget === undefined ? "—" : money(vm.kpis.totalBudget)],
+    ["Kokonaistoteuma", vm.kpis.totalActual === undefined ? "—" : money(vm.kpis.totalActual)],
+    ["Nettoerotus", vm.kpis.netDiff === undefined ? "—" : money(vm.kpis.netDiff)],
+    ["Keskim. abs. poikkeama", vm.kpis.avgAbsDeviation === undefined ? "—" : money(vm.kpis.avgAbsDeviation)],
+  ].map(kpiCard).join("");
+
+  const selected = selectionId("finance-budget");
+  const sectionBlocks = vm.sections.map((section) => {
+    const rows = section.groups.map((group) => {
+      const favorableClass = group.favorable === false ? " warning" : "";
+      const groupKey = `${section.kind}::${group.group}`;
+      const rowClass = `${groupKey === selected ? "is-selected" : ""}${favorableClass}`.trim();
+      return `<tr class="${rowClass}" data-group-key="${escapeHtml(groupKey)}">
+        <td>${escapeHtml(group.group)}</td>
+        <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
+        <td>${group.actual === undefined ? "—" : money(group.actual)}</td>
+        <td>${group.diffAmount === undefined ? "—" : money(group.diffAmount)}</td>
+        <td>${group.diffPercent === undefined ? "—" : percent(group.diffPercent)}</td>
+        <td>${escapeHtml(group.notes || "—")}</td>
+        <td><button type="button" class="secondary row-select">Näytä</button></td>
+      </tr>`;
+    }).join("");
+    return `<section class="card">
+      <h3>${escapeHtml(FINANCE_SECTION_LABELS[section.kind] ?? section.kind)}</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Huomio</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </section>`;
+  }).join("");
+
+  host.innerHTML = sectionBlocks;
+  for (const row of host.querySelectorAll("tr[data-group-key]")) {
+    row.querySelector(".row-select")
+      .addEventListener("click", () => selectFinanceGroup("finance-budget", row.dataset.groupKey));
+  }
+}
+
+function renderBudgetVsActualDetail() {
+  const vm = currentBudgetVsActualViewModel();
+  const selected = selectionId("finance-budget");
+  const group = vm?.sections
+    .flatMap((section) => section.groups.map((g) => ({ ...g, groupKey: `${section.kind}::${g.group}` })))
+    .find((g) => g.groupKey === selected);
+  if (!group) { closeDetailPanel(); return; }
+  const rows = group.rows.map((row) => `<tr>
+    <td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>
+    <td>${row.budget === undefined ? "—" : money(row.budget)}</td>
+    <td>${row.actual === undefined ? "—" : money(row.actual)}</td>
+    <td>${row.diffAmount === undefined ? "—" : money(row.diffAmount)}</td>
+    <td>${row.diffPercent === undefined ? "—" : percent(row.diffPercent)}</td>
+  </tr>`).join("");
+  $("#detail-panel-title").textContent = group.group;
+  $("#detail-panel-body").innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Tili</th><th>Nimi</th><th>Budjetti</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
 }
 
 /* -------- Finance import ("Liitä tilikohtainen data") -------- */
@@ -2446,6 +2763,9 @@ function compact(value) {
 }
 function money(value) {
   return new Intl.NumberFormat("fi-FI", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(value);
+}
+function percent(value) {
+  return `${new Intl.NumberFormat("fi-FI", { maximumFractionDigits: 1 }).format(value)} %`;
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
