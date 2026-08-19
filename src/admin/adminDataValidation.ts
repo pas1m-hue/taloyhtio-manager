@@ -1,5 +1,6 @@
 import {
   ASSET_CATEGORIES,
+  BALANCE_SECTIONS,
   COST_EVIDENCE_STATUSES,
   EVENT_ORIGINS,
   EVENT_STATUSES,
@@ -12,6 +13,7 @@ import {
   DomainValidationError,
   type AdminDataSnapshot,
   type Asset,
+  type BalanceSheetSnapshot,
   type BuildingEvent,
   type CostEvidence,
   type FinancialAccount,
@@ -49,6 +51,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
     (item) => `${item.accountCode}:${item.year}`,
     "financial entry",
   );
+  uniqueBy(state.balanceSheetSnapshots, (item) => item.id, "balance sheet snapshot");
 
   const assets = new Map(state.assets.map((item) => [item.id, item]));
   const events = new Map(state.events.map((item) => [item.id, item]));
@@ -72,6 +75,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   state.financialEntries.forEach((item) =>
     validateFinancialEntry(item, financialAccounts)
   );
+  state.balanceSheetSnapshots.forEach(validateBalanceSheetSnapshot);
 
   // projectEvents is the calculation boundary validator. Suggested events are
   // validated as approved copies here so manual drafts cannot retain broken
@@ -142,6 +146,27 @@ function validateFinancialEntry(
       `Financial entry ${value.accountCode || "<empty>"}:${value.year} is invalid`,
     );
   }
+}
+
+/**
+ * Reconciliation (VARAT − (OMA PÄÄOMA + VELAT) ≈ 0) is deliberately not a
+ * validation condition here (handoff vaihe-4A §4): the balance sheet may be
+ * out of balance due to a source-data entry error, and surfacing that is
+ * 4B's reconciliation check's job, not a reason to reject the snapshot.
+ */
+function validateBalanceSheetSnapshot(value: BalanceSheetSnapshot): void {
+  if (!isNonEmpty(value.id) || !validDate(value.asOfDate) ||
+      !validSources(value.sourceIds) || value.entries.length === 0) {
+    throw invalid(`Balance sheet snapshot ${value.id || "<empty>"} is invalid`);
+  }
+  value.entries.forEach((entry) => {
+    if (!BALANCE_SECTIONS.includes(entry.section) || !isNonEmpty(entry.key) ||
+        !isNonEmpty(entry.name) || !Number.isFinite(entry.amount)) {
+      throw invalid(
+        `Balance entry ${entry.key || "<empty>"} on snapshot ${value.id || "<empty>"} is invalid`,
+      );
+    }
+  });
 }
 
 function validateLiquidityBaseline(value: LiquidityBaselineRecord): void {

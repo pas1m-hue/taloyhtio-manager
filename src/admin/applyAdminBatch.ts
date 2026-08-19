@@ -9,6 +9,7 @@ import {
   type BuildingEvent,
   type FinancialAccount,
   type FinancialEntry,
+  type BalanceSheetSnapshot,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
 
@@ -23,6 +24,7 @@ export interface CreateAdminSnapshotInput {
   readonly events?: AdminDataSnapshot["events"];
   readonly financialAccounts?: AdminDataSnapshot["financialAccounts"];
   readonly financialEntries?: AdminDataSnapshot["financialEntries"];
+  readonly balanceSheetSnapshots?: AdminDataSnapshot["balanceSheetSnapshots"];
   readonly updatedAt: string;
   readonly updatedBy: string;
 }
@@ -43,6 +45,7 @@ export function createAdminDataSnapshot(
     events: clone(input.events ?? []),
     financialAccounts: clone(input.financialAccounts ?? []),
     financialEntries: clone(input.financialEntries ?? []),
+    balanceSheetSnapshots: clone(input.balanceSheetSnapshots ?? []),
     auditTrail: [],
     updatedAt: input.updatedAt,
     updatedBy: input.updatedBy,
@@ -127,6 +130,7 @@ interface MutableAdminState {
   events: BuildingEvent[];
   financialAccounts: FinancialAccount[];
   financialEntries: FinancialEntry[];
+  balanceSheetSnapshots: BalanceSheetSnapshot[];
   auditTrail: AdminAuditEntry[];
   updatedAt: string;
   updatedBy: string;
@@ -197,6 +201,8 @@ function describeOperation(operation: AdminDataOperation): {
         entityType: "financial_entry",
         entityKey: `${operation.value.accountCode}:${operation.value.year}`,
       };
+    case "save_balance_sheet_snapshot":
+      return { entityType: "balance_sheet_snapshot", entityKey: operation.value.id };
   }
 }
 
@@ -256,6 +262,9 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
         operation.value,
       );
       return;
+    case "save_balance_sheet_snapshot":
+      state.balanceSheetSnapshots = upsertById(state.balanceSheetSnapshots, operation.value);
+      return;
   }
 }
 
@@ -287,6 +296,8 @@ function findCurrent(
       return state.financialEntries.find(
         (item) => `${item.accountCode}:${item.year}` === key,
       );
+    case "balance_sheet_snapshot":
+      return state.balanceSheetSnapshots.find((item) => item.id === key);
   }
 }
 
@@ -313,6 +324,7 @@ function normalize(state: MutableAdminState): Omit<AdminDataSnapshot, "revision"
           : a.accountCode.localeCompare(b.accountCode)
       )
       .map(clone),
+    balanceSheetSnapshots: [...state.balanceSheetSnapshots].sort(byId).map(clone),
   };
 }
 
