@@ -2369,3 +2369,391 @@ export function countActiveAssets(assets) {
     (asset) => asset.active === true,
   ).length;
 }
+
+/* -------- Taloudellinen asema (balance sheet, handoff vaihe-4A) -------- */
+
+/** Mirrors BALANCE_SECTIONS in domain/types.ts. */
+export const BALANCE_SECTIONS = [
+  "fixed_assets",
+  "current_assets",
+  "restricted_equity",
+  "unrestricted_equity",
+  "liabilities",
+];
+const BALANCE_SECTION_SET = new Set(BALANCE_SECTIONS);
+
+/**
+ * Finnish section labels, per handoff vaihe-4A §4 (Excelin "Taloudellinen
+ * asema" -välilehden rakenne). Used both for display (buildBalanceSheetViewModel)
+ * and as the "Liitä tasedata" paste format's section column (handoff §5,
+ * decision: Finnish name over the raw enum key — matches what the source
+ * Excel already uses, no translation step for whoever pastes the data).
+ * @type {Record<string, string>}
+ */
+export const BALANCE_SECTION_LABELS_FI = {
+  fixed_assets: "Pysyvät vastaavat",
+  current_assets: "Vaihtuvat vastaavat",
+  restricted_equity: "Sidottu oma pääoma",
+  unrestricted_equity: "Vapaa oma pääoma",
+  liabilities: "Velat",
+};
+
+/** Finnish section name (lowercased) -> enum value, for parsing the paste format. */
+const BALANCE_SECTION_BY_FI_LABEL = new Map(
+  Object.entries(BALANCE_SECTION_LABELS_FI).map(([section, label]) => [label.toLowerCase(), section]),
+);
+
+/**
+ * Groups the five BalanceSection values into the balance sheet's top-level
+ * presentation groups (handoff §6): VARAT (assets), OMA PÄÄOMA (equity),
+ * VELAT (liabilities). The view totals VARAT against OMA PÄÄOMA + VELAT
+ * combined ("OMA PÄÄOMA JA VELAT YHTEENSÄ"), the standard balance-sheet
+ * equation — not against equity and liabilities as separate top totals.
+ */
+export const BALANCE_TOP_GROUPS = [
+  { key: "assets", label: "VARAT", sections: ["fixed_assets", "current_assets"] },
+  { key: "equity", label: "OMA PÄÄOMA", sections: ["restricted_equity", "unrestricted_equity"] },
+  { key: "liabilities", label: "VELAT", sections: ["liabilities"] },
+];
+
+/**
+ * @typedef {Object} BalanceEntryValue
+ * @property {string} section One of BALANCE_SECTIONS.
+ * @property {string} key
+ * @property {string} name
+ * @property {number} amount Stored as-is (sign preserved).
+ * @property {string} [notes]
+ */
+
+/**
+ * @typedef {Object} BalanceSheetSnapshotValue
+ * @property {string} id
+ * @property {string} asOfDate
+ * @property {string[]} sourceIds
+ * @property {BalanceEntryValue[]} entries
+ * @property {string} [notes]
+ */
+
+/**
+ * Mirrors validateBalanceSheetSnapshot in adminDataValidation.ts. Entries are
+ * expected already-structured (section as an enum value) — the Finnish-label
+ * mapping only applies to the paste format, parsed separately by
+ * parseBalanceSheetPasteInput. Reconciliation is intentionally not checked
+ * here either, matching the domain validator (that's a 4B concern).
+ * @param {Record<string, unknown>} raw
+ * @returns {ValidationResult<BalanceSheetSnapshotValue>}
+ */
+export function validateBalanceSheetSnapshotInput(raw) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+
+  const id = toTrimmed(raw.id);
+  if (id === "") errors.id = "Snapshotin tunniste (id) puuttuu.";
+
+  const asOfDate = toTrimmed(raw.asOfDate);
+  if (!isValidDate(asOfDate)) errors.asOfDate = "Anna kelvollinen tilinpäätöspäivä.";
+
+  const sourceIds = parseSourceIds(raw.sourceIds);
+  if (sourceIds.length === 0) {
+    errors.sourceIds = "Snapshotilla on oltava vähintään yksi lähdetunniste.";
+  }
+
+  const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
+  if (rawEntries.length === 0) {
+    errors.entries = "Snapshotilla on oltava vähintään yksi tase-erä.";
+  } else if (rawEntries.some((entry) =>
+    !BALANCE_SECTION_SET.has(entry.section) ||
+    toTrimmed(entry.key) === "" ||
+    toTrimmed(entry.name) === "" ||
+    !Number.isFinite(Number(entry.amount))
+  )) {
+    errors.entries = "Yksi tai useampi tase-erä on virheellinen.";
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  /** @type {BalanceEntryValue[]} */
+  const entries = rawEntries.map((entry) => {
+    /** @type {BalanceEntryValue} */
+    const value = {
+      section: entry.section,
+      key: toTrimmed(entry.key),
+      name: toTrimmed(entry.name),
+      amount: Number(entry.amount),
+    };
+    const notes = toTrimmed(entry.notes);
+    if (notes !== "") value.notes = notes;
+    return value;
+  });
+
+  /** @type {BalanceSheetSnapshotValue} */
+  const value = { id, asOfDate, sourceIds, entries };
+  const notes = toTrimmed(raw.notes);
+  if (notes !== "") value.notes = notes;
+  return { ok: true, value };
+}
+
+/**
+ * @param {Record<string, unknown>} raw
+ * @returns {OperationResult<{ type: "save_balance_sheet_snapshot", value: BalanceSheetSnapshotValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildSaveBalanceSheetSnapshotOperation(raw) {
+  const snapshot = validateBalanceSheetSnapshotInput(raw);
+  const meta = validateOperationMeta({
+    sourceIds: raw.operationSourceIds,
+    explanation: raw.explanation,
+  });
+  if (!snapshot.ok || !meta.ok) {
+    /** @type {Record<string, string>} */
+    const errors = { ...(snapshot.ok ? {} : snapshot.errors) };
+    if (!meta.ok) {
+      for (const [key, message] of Object.entries(meta.errors)) {
+        errors[key === "sourceIds" ? "operationSourceIds" : key] = message;
+      }
+    }
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    operation: {
+      type: "save_balance_sheet_snapshot",
+      value: snapshot.value,
+      sourceIds: meta.value.sourceIds,
+      explanation: meta.value.explanation,
+    },
+  };
+}
+
+/** Column headers recognized as the optional header row in a balance-sheet paste. */
+const BALANCE_PASTE_HEADER = ["section", "key", "name", "amount"];
+
+/**
+ * Parses one decimal cell for a balance-sheet amount, accepting "." or ","
+ * as the separator. Unlike parseFinancialAmountCell this field is required
+ * (a balance entry always has an amount), so blank is a distinct failure
+ * from non-numeric — both are just "invalid" to the caller, which reports
+ * one row-level error either way.
+ * @param {string} trimmed
+ * @returns {{ valid: boolean, value: number }}
+ */
+function parseBalanceAmountCell(trimmed) {
+  if (trimmed === "") return { valid: false, value: Number.NaN };
+  const value = Number(trimmed.replace(",", "."));
+  return { valid: Number.isFinite(value), value };
+}
+
+/**
+ * @typedef {Object} ParsedBalanceEntry
+ * @property {string} section One of BALANCE_SECTIONS.
+ * @property {string} key
+ * @property {string} name
+ * @property {number} amount
+ */
+
+/**
+ * @typedef {Object} ParsedBalanceError
+ * @property {number} row 1-indexed line number in the pasted text, or 0 for a snapshot-level (id/asOfDate) error.
+ * @property {string} message
+ */
+
+/**
+ * Strict, pure parser for the "Liitä tasedata" paste format (handoff
+ * vaihe-4A §5): one row per balance entry, tab-separated
+ * `section⇥key⇥name⇥amount`. `section` is the Finnish section name (e.g.
+ * "Vaihtuvat vastaavat"), matched case-insensitively and mapped to the
+ * BalanceSection enum — an unrecognized name is a row-level error, never
+ * guessed. `id`/`asOfDate` describe the whole snapshot and are supplied once
+ * via the second argument (one snapshot per paste, per the handoff's
+ * recommendation), not per row. The sign of `amount` is preserved as-is;
+ * display-time positivity is the view's responsibility
+ * (buildBalanceSheetViewModel). A first row matching the column headers
+ * (case-insensitively) is skipped as a header row. Every rejected row
+ * produces a named, row-numbered error — never a silent skip or a guessed
+ * value. The returned `snapshot` always reflects the successfully parsed
+ * entries (mirrors parseFinancialPasteInput); callers gate saving on
+ * `errors.length === 0`.
+ * @param {string} rawText
+ * @param {{ id: unknown, asOfDate: unknown }} meta
+ * @returns {{ snapshot: { id: string, asOfDate: string, entries: ParsedBalanceEntry[] }, errors: ParsedBalanceError[] }}
+ */
+export function parseBalanceSheetPasteInput(rawText, meta) {
+  const text = typeof rawText === "string" ? rawText : "";
+  const lines = text.split(/\r\n|\r|\n/);
+  /** @type {ParsedBalanceError[]} */
+  const errors = [];
+
+  const id = toTrimmed(meta && meta.id);
+  if (id === "") errors.push({ row: 0, message: "Snapshotin tunniste (id) puuttuu." });
+  const asOfDate = toTrimmed(meta && meta.asOfDate);
+  if (!isValidDate(asOfDate)) errors.push({ row: 0, message: "Anna kelvollinen tilinpäätöspäivä." });
+
+  let startIndex = 0;
+  const firstDataIndex = lines.findIndex((line) => line.trim() !== "");
+  if (firstDataIndex !== -1) {
+    const firstCols = lines[firstDataIndex].split("\t").map((cell) => cell.trim().toLowerCase());
+    const isHeader = firstCols.length === BALANCE_PASTE_HEADER.length &&
+      firstCols.every((cell, index) => cell === BALANCE_PASTE_HEADER[index]);
+    if (isHeader) startIndex = firstDataIndex + 1;
+  }
+
+  /** @type {ParsedBalanceEntry[]} */
+  const entries = [];
+  const seenKeys = new Set();
+
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const row = i + 1;
+    const cols = line.split("\t");
+    if (cols.length !== 4) {
+      errors.push({ row, message: `Rivi ${row}: odotettiin 4 saraketta, löytyi ${cols.length}.` });
+      continue;
+    }
+    const [sectionRaw, keyRaw, nameRaw, amountRaw] = cols.map((cell) => cell.trim());
+
+    const section = BALANCE_SECTION_BY_FI_LABEL.get(sectionRaw.toLowerCase());
+    if (!section) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: tuntematon osio "${sectionRaw}" (sallitut: ${Object.values(BALANCE_SECTION_LABELS_FI).join(", ")}).`,
+      });
+      continue;
+    }
+    if (keyRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: erän tunniste (key) puuttuu.` });
+      continue;
+    }
+    if (nameRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: erän nimi puuttuu.` });
+      continue;
+    }
+    const amount = parseBalanceAmountCell(amountRaw);
+    if (!amount.valid) {
+      errors.push({ row, message: `Rivi ${row}: euromäärä "${amountRaw}" ei ole luku.` });
+      continue;
+    }
+    if (seenKeys.has(keyRaw)) {
+      errors.push({ row, message: `Rivi ${row}: erän tunniste "${keyRaw}" esiintyy jo aiemmalla rivillä.` });
+      continue;
+    }
+    seenKeys.add(keyRaw);
+
+    entries.push({ section, key: keyRaw, name: nameRaw, amount: amount.value });
+  }
+
+  if (entries.length === 0) {
+    errors.push({ row: 0, message: "Liitetystä datasta ei löytynyt yhtään tase-erää." });
+  }
+
+  return { snapshot: { id, asOfDate, entries }, errors };
+}
+
+/**
+ * Builds the save_balance_sheet_snapshot operation for one successfully
+ * parsed "Liitä tasedata" import (handoff §5). One shared sourceIds +
+ * explanation applies both as the operation's own metadata and as the
+ * snapshot entity's own sourceIds field (mirrors buildFinancialImportOperations).
+ * @param {{ snapshot: { id: string, asOfDate: string, entries: ParsedBalanceEntry[] } }} parsed
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ * @returns {{ type: "save_balance_sheet_snapshot", value: BalanceSheetSnapshotValue, sourceIds: string[], explanation: string }}
+ */
+export function buildBalanceSheetImportOperation(parsed, opMeta) {
+  return {
+    type: "save_balance_sheet_snapshot",
+    value: { ...parsed.snapshot, sourceIds: opMeta.sourceIds },
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  };
+}
+
+/**
+ * @typedef {Object} BalanceSheetSectionViewModel
+ * @property {string} section One of BALANCE_SECTIONS.
+ * @property {string} label Finnish section label.
+ * @property {Array<{ key: string, name: string, amount: number, notes?: string }>} entries Positive amounts.
+ * @property {number} sectionTotal Positive.
+ */
+
+/**
+ * @typedef {Object} BalanceSheetTopGroupViewModel
+ * @property {"assets"|"equity"|"liabilities"} key
+ * @property {string} label VARAT / OMA PÄÄOMA / VELAT.
+ * @property {BalanceSheetSectionViewModel[]} sections
+ * @property {number} groupTotal Positive.
+ */
+
+/**
+ * View model for the Taloudellinen asema base view (handoff §6, vaihe 4A —
+ * single snapshot only; comparison/reconciliation/ratios are 4B). Groups the
+ * snapshot's entries into all five BALANCE_SECTIONS (always rendered, even
+ * empty, so the view's structure never depends on which sections happen to
+ * have data), nested under the three top-level groups, with section and
+ * top-level totals. All amounts are shown positive (`Math.abs`) regardless
+ * of the stored sign, per the spec's display rule (§6.5).
+ * @param {{ id?: unknown, asOfDate?: unknown, entries?: ReadonlyArray<{ section?: unknown, key?: unknown, name?: unknown, amount?: unknown, notes?: unknown }> } | null | undefined} snapshot
+ * @returns {{
+ *   isEmpty: boolean,
+ *   id: string,
+ *   asOfDate: string,
+ *   topGroups: BalanceSheetTopGroupViewModel[],
+ *   assetsTotal: number,
+ *   equityAndLiabilitiesTotal: number,
+ *   emptyMessage: string,
+ * }}
+ */
+export function buildBalanceSheetViewModel(snapshot) {
+  const emptyMessage = "Ei vielä tasedataa. Tuo se Liitä tasedata -näkymästä.";
+  const entryList = snapshot && Array.isArray(snapshot.entries) ? snapshot.entries : [];
+  if (!snapshot || entryList.length === 0) {
+    return {
+      isEmpty: true,
+      id: "",
+      asOfDate: "",
+      topGroups: [],
+      assetsTotal: 0,
+      equityAndLiabilitiesTotal: 0,
+      emptyMessage,
+    };
+  }
+
+  /** @type {Map<string, Array<{ key: string, name: string, amount: number, notes?: string }>>} */
+  const entriesBySection = new Map();
+  for (const entry of entryList) {
+    const section = String(entry.section ?? "");
+    const list = entriesBySection.get(section) ?? [];
+    /** @type {{ key: string, name: string, amount: number, notes?: string }} */
+    const row = {
+      key: String(entry.key ?? ""),
+      name: String(entry.name ?? ""),
+      amount: Math.abs(Number(entry.amount ?? 0)),
+    };
+    if (typeof entry.notes === "string" && entry.notes.trim() !== "") row.notes = entry.notes;
+    list.push(row);
+    entriesBySection.set(section, list);
+  }
+
+  const topGroups = BALANCE_TOP_GROUPS.map((topGroup) => {
+    const sections = topGroup.sections.map((section) => {
+      const entries = entriesBySection.get(section) ?? [];
+      const sectionTotal = entries.reduce((sum, entry) => sum + entry.amount, 0);
+      return { section, label: BALANCE_SECTION_LABELS_FI[section], entries, sectionTotal };
+    });
+    const groupTotal = sections.reduce((sum, section) => sum + section.sectionTotal, 0);
+    return { key: topGroup.key, label: topGroup.label, sections, groupTotal };
+  });
+
+  const assetsTotal = topGroups.find((group) => group.key === "assets")?.groupTotal ?? 0;
+  const equityAndLiabilitiesTotal = topGroups
+    .filter((group) => group.key !== "assets")
+    .reduce((sum, group) => sum + group.groupTotal, 0);
+
+  return {
+    isEmpty: false,
+    id: String(snapshot.id ?? ""),
+    asOfDate: String(snapshot.asOfDate ?? ""),
+    topGroups,
+    assetsTotal,
+    equityAndLiabilitiesTotal,
+    emptyMessage,
+  };
+}
