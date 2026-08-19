@@ -2641,7 +2641,7 @@ export function parseBalanceSheetPasteInput(rawText, meta) {
     entries.push({ section, key: keyRaw, name: nameRaw, amount: amount.value });
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && !errors.some((error) => error.row > 0)) {
     errors.push({ row: 0, message: "Liitetystä datasta ei löytynyt yhtään tase-erää." });
   }
 

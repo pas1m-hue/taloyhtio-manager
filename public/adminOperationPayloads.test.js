@@ -3,6 +3,8 @@ import { applyAdminBatch, createAdminDataSnapshot } from "../src/admin/applyAdmi
 import {
   buildAccountCostsViewModel,
   buildAssetListViewModel,
+  buildBalanceSheetImportOperation,
+  buildBalanceSheetViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
@@ -11,6 +13,7 @@ import {
   buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
+  buildSaveBalanceSheetSnapshotOperation,
   buildSaveBuildingEventOperation,
   buildSaveCostEvidenceOperation,
   buildSaveFinancialAccountOperation,
@@ -28,11 +31,13 @@ import {
   groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
+  parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
   parseSourceIds,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   validateAssetInput,
+  validateBalanceSheetSnapshotInput,
   validateBuildingEventInput,
   validateCompanyInput,
   validateCostEvidenceInput,
@@ -1429,6 +1434,328 @@ describe("buildFinancialImportOperations", () => {
     expect(next.financialAccounts).toHaveLength(2);
     expect(next.financialEntries).toHaveLength(3);
     expect(next.financialAccounts.map((a) => a.accountCode).sort()).toEqual(["3000", "5300"]);
+  });
+});
+
+describe("validateBalanceSheetSnapshotInput / buildSaveBalanceSheetSnapshotOperation", () => {
+  const validRaw = {
+    id: "balance_2025",
+    asOfDate: "2025-12-31",
+    sourceIds: "tase_2025",
+    entries: [
+      { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 12345.67 },
+      { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: -50000 },
+    ],
+    operationSourceIds: "tase_2025",
+    explanation: "Tilinpäätöksen liite.",
+  };
+
+  it("accepts a valid snapshot", () => {
+    const result = validateBalanceSheetSnapshotInput(validRaw);
+    expect(result.ok).toBe(true);
+    expect(result.value).toEqual({
+      id: "balance_2025",
+      asOfDate: "2025-12-31",
+      sourceIds: ["tase_2025"],
+      entries: [
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 12345.67 },
+        { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: -50000 },
+      ],
+    });
+  });
+
+  it("rejects an unknown section", () => {
+    const result = validateBalanceSheetSnapshotInput({
+      ...validRaw,
+      entries: [{ section: "not_a_section", key: "x", name: "X", amount: 1 }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.entries).toBeDefined();
+  });
+
+  it("rejects empty entries", () => {
+    const result = validateBalanceSheetSnapshotInput({ ...validRaw, entries: [] });
+    expect(result.ok).toBe(false);
+    expect(result.errors.entries).toBeDefined();
+  });
+
+  it("rejects a non-numeric amount", () => {
+    const result = validateBalanceSheetSnapshotInput({
+      ...validRaw,
+      entries: [{ section: "liabilities", key: "x", name: "X", amount: "abc" }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.entries).toBeDefined();
+  });
+
+  it("rejects an empty sourceIds list", () => {
+    const result = validateBalanceSheetSnapshotInput({ ...validRaw, sourceIds: "" });
+    expect(result.ok).toBe(false);
+    expect(result.errors.sourceIds).toBeDefined();
+  });
+
+  it("rejects a missing/invalid asOfDate", () => {
+    expect(validateBalanceSheetSnapshotInput({ ...validRaw, asOfDate: "" }).ok).toBe(false);
+    expect(validateBalanceSheetSnapshotInput({ ...validRaw, asOfDate: "not-a-date" }).ok).toBe(false);
+  });
+
+  it("builds an operation with the entity/operation sourceIds split", () => {
+    const result = buildSaveBalanceSheetSnapshotOperation(validRaw);
+    expect(result.ok).toBe(true);
+    expect(result.operation).toEqual({
+      type: "save_balance_sheet_snapshot",
+      value: validateBalanceSheetSnapshotInput(validRaw).value,
+      sourceIds: ["tase_2025"],
+      explanation: "Tilinpäätöksen liite.",
+    });
+  });
+
+  it("applyAdminBatch accepts a snapshot built this way, uniqueness by id enforced", () => {
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "housing_company_demo", name: "Testiyhtiö", apartmentCount: 12 },
+      updatedAt: "2026-07-17T15:00:00+03:00",
+      updatedBy: "admin:test",
+    });
+    const built = buildSaveBalanceSheetSnapshotOperation(validRaw);
+    const next = applyAdminBatch(snapshot, {
+      companyId: "housing_company_demo",
+      expectedRevision: 0,
+      actorId: "admin:test",
+      occurredAt: "2026-07-18T09:00:00+03:00",
+      operations: [built.operation],
+    });
+    expect(next.revision).toBe(1);
+    expect(next.balanceSheetSnapshots).toHaveLength(1);
+    expect(next.balanceSheetSnapshots[0].id).toBe("balance_2025");
+
+    // A second snapshot with the same id upserts (replaces) rather than duplicating.
+    const again = applyAdminBatch(next, {
+      companyId: "housing_company_demo",
+      expectedRevision: 1,
+      actorId: "admin:test",
+      occurredAt: "2026-07-19T09:00:00+03:00",
+      operations: [built.operation],
+    });
+    expect(again.balanceSheetSnapshots).toHaveLength(1);
+  });
+});
+
+describe("parseBalanceSheetPasteInput", () => {
+  function row(section, key, name, amount) {
+    return [section, key, name, amount].join("\t");
+  }
+
+  const meta = { id: "balance_2025", asOfDate: "2025-12-31" };
+
+  it("parses a valid multi-row paste with a header row", () => {
+    const text = [
+      row("section", "key", "name", "amount"),
+      row("Vaihtuvat vastaavat", "rahat", "Rahat ja pankkisaamiset", "12345,67"),
+      row("Velat", "lainat", "Pitkäaikaiset lainat", "-50000"),
+    ].join("\n");
+
+    const result = parseBalanceSheetPasteInput(text, meta);
+
+    expect(result.errors).toEqual([]);
+    expect(result.snapshot).toEqual({
+      id: "balance_2025",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 12345.67 },
+        { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: -50000 },
+      ],
+    });
+  });
+
+  it("parses correctly without a header row", () => {
+    const text = row("Velat", "lainat", "Pitkäaikaiset lainat", "50000.5");
+    const result = parseBalanceSheetPasteInput(text, meta);
+    expect(result.errors).toEqual([]);
+    expect(result.snapshot.entries).toEqual([
+      { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: 50000.5 },
+    ]);
+  });
+
+  it("matches the Finnish section label case-insensitively", () => {
+    const text = row("velat", "lainat", "Pitkäaikaiset lainat", "1000");
+    const result = parseBalanceSheetPasteInput(text, meta);
+    expect(result.errors).toEqual([]);
+    expect(result.snapshot.entries[0].section).toBe("liabilities");
+  });
+
+  it("reports an unknown section", () => {
+    const result = parseBalanceSheetPasteInput(row("Muu osio", "x", "X", "100"), meta);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, message: expect.stringContaining('tuntematon osio "Muu osio"') }),
+    ]);
+  });
+
+  it("reports the wrong column count with a row number", () => {
+    const result = parseBalanceSheetPasteInput("Velat\tlainat\tNimi", meta);
+    expect(result.errors).toEqual([
+      { row: 1, message: "Rivi 1: odotettiin 4 saraketta, löytyi 3." },
+    ]);
+  });
+
+  it("reports a non-numeric amount", () => {
+    const result = parseBalanceSheetPasteInput(row("Velat", "lainat", "Nimi", "abc"), meta);
+    expect(result.errors).toEqual([
+      { row: 1, message: 'Rivi 1: euromäärä "abc" ei ole luku.' },
+    ]);
+  });
+
+  it("rejects a duplicate key across rows", () => {
+    const text = [
+      row("Velat", "lainat", "Nimi 1", "100"),
+      row("Vaihtuvat vastaavat", "lainat", "Nimi 2", "200"),
+    ].join("\n");
+    const result = parseBalanceSheetPasteInput(text, meta);
+    expect(result.snapshot.entries).toHaveLength(1);
+    expect(result.errors).toEqual([
+      { row: 2, message: 'Rivi 2: erän tunniste "lainat" esiintyy jo aiemmalla rivillä.' },
+    ]);
+  });
+
+  it("reports missing id/asOfDate as row-0 errors, independent of the pasted rows", () => {
+    const result = parseBalanceSheetPasteInput(
+      row("Velat", "lainat", "Nimi", "100"),
+      { id: "", asOfDate: "not-a-date" },
+    );
+    expect(result.errors).toEqual([
+      { row: 0, message: "Snapshotin tunniste (id) puuttuu." },
+      { row: 0, message: "Anna kelvollinen tilinpäätöspäivä." },
+    ]);
+    expect(result.snapshot.entries).toHaveLength(1);
+  });
+
+  it("reports no rows found when only a header (or nothing) is pasted", () => {
+    const result = parseBalanceSheetPasteInput(row("section", "key", "name", "amount"), meta);
+    expect(result.snapshot.entries).toEqual([]);
+    expect(result.errors).toEqual([
+      { row: 0, message: "Liitetystä datasta ei löytynyt yhtään tase-erää." },
+    ]);
+  });
+
+  it("preserves a negative sign on amounts", () => {
+    const result = parseBalanceSheetPasteInput(row("Velat", "lainat", "Nimi", "-1234,5"), meta);
+    expect(result.snapshot.entries[0].amount).toBe(-1234.5);
+  });
+});
+
+describe("buildBalanceSheetImportOperation", () => {
+  it("builds a save_balance_sheet_snapshot operation from a successful parse", () => {
+    const parsed = parseBalanceSheetPasteInput(
+      "Velat\tlainat\tPitkäaikaiset lainat\t-50000",
+      { id: "balance_2025", asOfDate: "2025-12-31" },
+    );
+    const operation = buildBalanceSheetImportOperation(parsed, {
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+    expect(operation).toEqual({
+      type: "save_balance_sheet_snapshot",
+      value: {
+        id: "balance_2025",
+        asOfDate: "2025-12-31",
+        entries: [
+          { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: -50000 },
+        ],
+        sourceIds: ["initial_excel"],
+      },
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+  });
+
+  it("produces an operation applyAdminBatch accepts", () => {
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "housing_company_demo", name: "Testiyhtiö", apartmentCount: 12 },
+      updatedAt: "2026-07-17T15:00:00+03:00",
+      updatedBy: "admin:test",
+    });
+    const parsed = parseBalanceSheetPasteInput(
+      "Velat\tlainat\tPitkäaikaiset lainat\t-50000",
+      { id: "balance_2025", asOfDate: "2025-12-31" },
+    );
+    const operation = buildBalanceSheetImportOperation(parsed, {
+      sourceIds: ["initial_excel"],
+      explanation: "Tuonti Excelistä.",
+    });
+    const next = applyAdminBatch(snapshot, {
+      companyId: "housing_company_demo",
+      expectedRevision: 0,
+      actorId: "admin:test",
+      occurredAt: "2026-07-18T09:00:00+03:00",
+      operations: [operation],
+    });
+    expect(next.revision).toBe(1);
+    expect(next.balanceSheetSnapshots).toHaveLength(1);
+  });
+});
+
+describe("buildBalanceSheetViewModel", () => {
+  it("is empty with no snapshot or no entries", () => {
+    expect(buildBalanceSheetViewModel(undefined).isEmpty).toBe(true);
+    expect(buildBalanceSheetViewModel(null).isEmpty).toBe(true);
+    expect(buildBalanceSheetViewModel({ id: "x", asOfDate: "2025-12-31", entries: [] }).isEmpty).toBe(true);
+  });
+
+  it("groups entries under all five sections, nested under VARAT / OMA PÄÄOMA / VELAT", () => {
+    const vm = buildBalanceSheetViewModel({
+      id: "balance_2025",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1000000 },
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 50000 },
+        { section: "restricted_equity", key: "osakepaaoma", name: "Osakepääoma", amount: 100000 },
+        { section: "unrestricted_equity", key: "edellisten", name: "Edellisten tilikausien voitto", amount: 200000 },
+        { section: "liabilities", key: "lainat", name: "Pitkäaikaiset lainat", amount: 750000 },
+      ],
+    });
+
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.topGroups.map((g) => g.key)).toEqual(["assets", "equity", "liabilities"]);
+    expect(vm.topGroups.map((g) => g.label)).toEqual(["VARAT", "OMA PÄÄOMA", "VELAT"]);
+
+    const assetsGroup = vm.topGroups.find((g) => g.key === "assets");
+    expect(assetsGroup.sections.map((s) => s.section)).toEqual(["fixed_assets", "current_assets"]);
+    expect(assetsGroup.groupTotal).toBe(1050000);
+
+    const equityGroup = vm.topGroups.find((g) => g.key === "equity");
+    expect(equityGroup.groupTotal).toBe(300000);
+
+    const liabilitiesGroup = vm.topGroups.find((g) => g.key === "liabilities");
+    expect(liabilitiesGroup.groupTotal).toBe(750000);
+
+    expect(vm.assetsTotal).toBe(1050000);
+    expect(vm.equityAndLiabilitiesTotal).toBe(1050000);
+  });
+
+  it("always renders all five sections, even with zero entries", () => {
+    const vm = buildBalanceSheetViewModel({
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: 100 }],
+    });
+    const allSections = vm.topGroups.flatMap((g) => g.sections.map((s) => s.section));
+    expect(allSections).toEqual([
+      "fixed_assets", "current_assets", "restricted_equity", "unrestricted_equity", "liabilities",
+    ]);
+    const emptySection = vm.topGroups[0].sections.find((s) => s.section === "fixed_assets");
+    expect(emptySection.entries).toEqual([]);
+    expect(emptySection.sectionTotal).toBe(0);
+  });
+
+  it("displays amounts as positive even when the stored sign is negative", () => {
+    const vm = buildBalanceSheetViewModel({
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: -50000 }],
+    });
+    const liabilitiesGroup = vm.topGroups.find((g) => g.key === "liabilities");
+    expect(liabilitiesGroup.sections[0].entries[0].amount).toBe(50000);
+    expect(liabilitiesGroup.groupTotal).toBe(50000);
+    expect(vm.equityAndLiabilitiesTotal).toBe(50000);
   });
 });
 
