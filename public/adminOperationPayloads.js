@@ -2757,3 +2757,211 @@ export function buildBalanceSheetViewModel(snapshot) {
     emptyMessage,
   };
 }
+
+const BALANCE_RECONCILIATION_TOLERANCE = 0.01;
+
+/**
+ * Taseen täsmäytys (handoff vaihe-4B §3.2): VARAT − (OMA PÄÄOMA + VELAT).
+ * Built on top of buildBalanceSheetViewModel's totals (already Math.abs'd),
+ * so it reuses the same grouping rather than re-summing entries itself. A
+ * 0.01 € tolerance absorbs the rounding cents that show up in real
+ * tilinpäätös data.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} snapshot
+ * @returns {{ isEmpty: boolean, assets: number, equityPlusLiabilities: number, difference: number, balances: boolean }}
+ */
+export function computeBalanceReconciliation(snapshot) {
+  const vm = buildBalanceSheetViewModel(snapshot);
+  if (vm.isEmpty) {
+    return { isEmpty: true, assets: 0, equityPlusLiabilities: 0, difference: 0, balances: true };
+  }
+  const difference = vm.assetsTotal - vm.equityAndLiabilitiesTotal;
+  return {
+    isEmpty: false,
+    assets: vm.assetsTotal,
+    equityPlusLiabilities: vm.equityAndLiabilitiesTotal,
+    difference,
+    balances: Math.abs(difference) < BALANCE_RECONCILIATION_TOLERANCE,
+  };
+}
+
+/** Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio. */
+function isCashEntry(entry) {
+  if (entry.key === "rahat") return true;
+  return entry.name.toLowerCase().startsWith("rahat ja pankki");
+}
+
+/**
+ * Kolme tunnuslukua valitulle snapshotille (handoff vaihe-4B §3.3), kukin
+ * number tai null jos ei laskettavissa (nollalla jako / puuttuva lähtötieto):
+ *  - liquidity: vaihtuvat vastaavat / velat (koko liabilities-summa —
+ *    vahvistettu yksinkertaistus, mallissa on vain yksi velkaosio)
+ *  - monthsOfCash: rahat ja pankkisaamiset / (trailing12mOperatingCosts / 12)
+ *  - interestBearingDebt: koko liabilities-summa (sama yksinkertaistus)
+ *
+ * cashSource kertoo löytyikö erillinen "Rahat ja pankkisaamiset" -erä
+ * (`"entry"`) vai jouduttiinko käyttämään koko current_assets-summaa
+ * (`"section_total"`) — handoffin sallima fallback, dokumentoitu UI:ssa.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} snapshot
+ * @param {{ currentCash?: number, trailing12mOperatingCosts?: number, asOfDate?: string, notes?: string } | undefined} latestLiquidityBaseline
+ * @returns {{
+ *   liquidity: number | null,
+ *   monthsOfCash: number | null,
+ *   interestBearingDebt: number | null,
+ *   cashSource: "entry" | "section_total" | null,
+ * }}
+ */
+export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
+  const vm = buildBalanceSheetViewModel(snapshot);
+  if (vm.isEmpty) {
+    return { liquidity: null, monthsOfCash: null, interestBearingDebt: null, cashSource: null };
+  }
+
+  const currentAssetsSection = vm.topGroups
+    .find((group) => group.key === "assets")
+    ?.sections.find((section) => section.section === "current_assets");
+  const currentAssetsTotal = currentAssetsSection?.sectionTotal ?? 0;
+  const liabilitiesTotal = vm.topGroups.find((group) => group.key === "liabilities")?.groupTotal ?? 0;
+
+  const liquidity = liabilitiesTotal === 0 ? null : currentAssetsTotal / liabilitiesTotal;
+  const interestBearingDebt = liabilitiesTotal === 0 ? null : liabilitiesTotal;
+
+  const cashEntry = currentAssetsSection?.entries.find(isCashEntry);
+  const cashAmount = cashEntry ? cashEntry.amount : currentAssetsTotal;
+  const cashSource = cashEntry ? "entry" : "section_total";
+  const monthlyOperatingCosts = latestLiquidityBaseline?.trailing12mOperatingCosts
+    ? latestLiquidityBaseline.trailing12mOperatingCosts / 12
+    : 0;
+  const monthsOfCash = monthlyOperatingCosts === 0 ? null : cashAmount / monthlyOperatingCosts;
+
+  return { liquidity, monthsOfCash, interestBearingDebt, cashSource };
+}
+
+/**
+ * @typedef {Object} BalanceComparisonEntryViewModel
+ * @property {string} key
+ * @property {string} name
+ * @property {number|null} newerAmount Positive, or null if only in olderSnapshot.
+ * @property {number|null} olderAmount Positive, or null if only in newerSnapshot.
+ * @property {number} change newerAmount − olderAmount (missing side treated as 0).
+ */
+
+/**
+ * @typedef {Object} BalanceComparisonSectionViewModel
+ * @property {string} section One of BALANCE_SECTIONS.
+ * @property {string} label Finnish section label.
+ * @property {BalanceComparisonEntryViewModel[]} entries
+ * @property {number} newerTotal
+ * @property {number} olderTotal
+ * @property {number} totalChange
+ */
+
+/**
+ * Vertailu kahden tasesnapshotin välillä (handoff vaihe-4B §3.1). Rivit
+ * yhdistetään section+key -parilla; erä joka esiintyy vain toisessa
+ * snapshotissa saa null-arvon puuttuvalle puolelle, ja sen muutos on koko
+ * arvo (missing side treated as 0). Kun olderSnapshot puuttuu (vain yksi
+ * snapshotti olemassa), palautetaan hasComparison: false eikä kaadu — UI:n
+ * pitäisi tällöin näyttää 4A:n yhden snapshotin näkymä.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} newerSnapshot
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0] | null | undefined} olderSnapshot
+ * @returns {{
+ *   hasComparison: boolean,
+ *   isEmpty: boolean,
+ *   newer: ReturnType<typeof buildBalanceSheetViewModel>,
+ *   older: ReturnType<typeof buildBalanceSheetViewModel> | null,
+ *   topGroups: Array<{ key: string, label: string, sections: BalanceComparisonSectionViewModel[], newerGroupTotal: number, olderGroupTotal: number, groupChange: number }>,
+ *   assetsChange: number,
+ *   equityAndLiabilitiesChange: number,
+ * }}
+ */
+export function buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot) {
+  const newer = buildBalanceSheetViewModel(newerSnapshot);
+  const hasComparison = Boolean(olderSnapshot);
+  const older = hasComparison ? buildBalanceSheetViewModel(olderSnapshot) : null;
+
+  if (newer.isEmpty) {
+    return {
+      hasComparison: false,
+      isEmpty: true,
+      newer,
+      older,
+      topGroups: [],
+      assetsChange: 0,
+      equityAndLiabilitiesChange: 0,
+    };
+  }
+
+  if (!hasComparison || older.isEmpty) {
+    return {
+      hasComparison: false,
+      isEmpty: false,
+      newer,
+      older: null,
+      topGroups: [],
+      assetsChange: 0,
+      equityAndLiabilitiesChange: 0,
+    };
+  }
+
+  const topGroups = newer.topGroups.map((newerGroup) => {
+    const olderGroup = older.topGroups.find((group) => group.key === newerGroup.key);
+    const sections = newerGroup.sections.map((newerSection) => {
+      const olderSection = olderGroup?.sections.find((section) => section.section === newerSection.section);
+      const olderEntriesByKey = new Map((olderSection?.entries ?? []).map((entry) => [entry.key, entry]));
+      const seenOlderKeys = new Set();
+
+      const entries = newerSection.entries.map((newerEntry) => {
+        const olderEntry = olderEntriesByKey.get(newerEntry.key);
+        if (olderEntry) seenOlderKeys.add(newerEntry.key);
+        const olderAmount = olderEntry ? olderEntry.amount : null;
+        return {
+          key: newerEntry.key,
+          name: newerEntry.name,
+          newerAmount: newerEntry.amount,
+          olderAmount,
+          change: newerEntry.amount - (olderAmount ?? 0),
+        };
+      });
+
+      const onlyInOlder = (olderSection?.entries ?? [])
+        .filter((entry) => !seenOlderKeys.has(entry.key))
+        .map((olderEntry) => ({
+          key: olderEntry.key,
+          name: olderEntry.name,
+          newerAmount: null,
+          olderAmount: olderEntry.amount,
+          change: 0 - olderEntry.amount,
+        }));
+
+      const olderTotal = olderSection?.sectionTotal ?? 0;
+      return {
+        section: newerSection.section,
+        label: newerSection.label,
+        entries: [...entries, ...onlyInOlder],
+        newerTotal: newerSection.sectionTotal,
+        olderTotal,
+        totalChange: newerSection.sectionTotal - olderTotal,
+      };
+    });
+
+    const olderGroupTotal = olderGroup?.groupTotal ?? 0;
+    return {
+      key: newerGroup.key,
+      label: newerGroup.label,
+      sections,
+      newerGroupTotal: newerGroup.groupTotal,
+      olderGroupTotal,
+      groupChange: newerGroup.groupTotal - olderGroupTotal,
+    };
+  });
+
+  return {
+    hasComparison: true,
+    isEmpty: false,
+    newer,
+    older,
+    topGroups,
+    assetsChange: newer.assetsTotal - older.assetsTotal,
+    equityAndLiabilitiesChange: newer.equityAndLiabilitiesTotal - older.equityAndLiabilitiesTotal,
+  };
+}

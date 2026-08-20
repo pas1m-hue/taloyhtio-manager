@@ -149,6 +149,14 @@ legend { padding: 0 .4rem; }
 .state-block.is-unavailable { border-color: var(--warning); }
 .state-block ul { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--muted); }
 
+/* ---- Balance reconciliation card (Taloudellinen asema, vaihe 4B) ---- */
+.reconciliation-card { border: 1px solid var(--line); border-radius: .7rem; padding: 1rem 1.5rem; background: var(--panel); }
+.reconciliation-card.is-balanced { border-color: var(--ok); }
+.reconciliation-card.is-balanced .reconciliation-status { color: var(--ok); }
+.reconciliation-card.is-unbalanced { border-color: var(--danger); }
+.reconciliation-card.is-unbalanced .reconciliation-status { color: var(--danger); }
+.reconciliation-status { font-weight: 600; }
+
 /* ---- Forms ---- */
 .form-card { display: grid; gap: 1rem; max-width: 760px; }
 .form-card[hidden] { display: none; }
