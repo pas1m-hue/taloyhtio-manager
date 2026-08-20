@@ -2,6 +2,7 @@ import {
   ASSET_CATEGORIES,
   buildAccountCostsViewModel,
   buildAssetListViewModel,
+  buildBalanceComparisonViewModel,
   buildBalanceSheetImportOperation,
   buildBalanceSheetViewModel,
   buildBudgetVsActualViewModel,
@@ -18,6 +19,8 @@ import {
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
+  computeBalanceRatios,
+  computeBalanceReconciliation,
   copyScheduleRowToAllScenarios,
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
@@ -218,6 +221,7 @@ function wireStaticControls() {
   $("#balance-import-id").addEventListener("input", updateBalanceImportPreview);
   $("#balance-import-as-of-date").addEventListener("input", updateBalanceImportPreview);
   $("#finance-position-snapshot").addEventListener("change", renderBalancePosition);
+  $("#finance-position-compare").addEventListener("change", renderBalancePosition);
 
   // Visitor
   $("#visitor-load-overview").addEventListener("click", loadPublished);
@@ -2377,6 +2381,51 @@ function populateBalancePositionSelector(snapshots) {
   return sorted;
 }
 
+/**
+ * Populates the "vertaa snapshotiin" <select> with every other snapshot plus
+ * an "Ei vertailua" option, defaulting to the snapshot immediately before
+ * the selected one in date order (handoff §3.1: "toiseksi viimeisin
+ * snapshot jos useita" — since the primary selector defaults to the latest,
+ * that is simply its previous neighbour here).
+ * @returns {string} the selected compare id, or "" for no comparison
+ */
+function populateBalanceCompareSelector(sorted, selectedId) {
+  const select = $("#finance-position-compare");
+  const current = select.value;
+  const otherOptions = sorted
+    .filter((snapshot) => snapshot.id !== selectedId)
+    .map((snapshot) => `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(snapshot.asOfDate)} (${escapeHtml(snapshot.id)})</option>`)
+    .join("");
+  select.innerHTML = `<option value="">Ei vertailua</option>${otherOptions}`;
+
+  const stillExists = current !== "" && sorted.some((snapshot) => snapshot.id === current && snapshot.id !== selectedId);
+  if (stillExists) {
+    select.value = current;
+  } else {
+    const selectedIndex = sorted.findIndex((snapshot) => snapshot.id === selectedId);
+    const defaultOlder = selectedIndex > 0 ? sorted[selectedIndex - 1] : undefined;
+    select.value = defaultOlder ? defaultOlder.id : "";
+  }
+  return select.value;
+}
+
+/** "+1 234,56 €" for positive/zero, "-1 234,56 €" for negative (money() already signs negatives). */
+function moneyChange(value) {
+  return value > 0 ? `+${money(value)}` : money(value);
+}
+
+function renderReconciliationCard(reconciliation, label) {
+  const statusClass = reconciliation.balances ? "is-balanced" : "is-unbalanced";
+  const statusText = reconciliation.balances
+    ? "Tase täsmää"
+    : `Tase ei täsmää — erotus ${money(reconciliation.difference)}`;
+  return `<article class="reconciliation-card ${statusClass}">
+    <h4>Taseen täsmäytys${label ? ` — ${escapeHtml(label)}` : ""}</h4>
+    <p class="reconciliation-status">${escapeHtml(statusText)}</p>
+    <p class="muted">VARAT ${money(reconciliation.assets)} · OMA PÄÄOMA JA VELAT ${money(reconciliation.equityPlusLiabilities)}</p>
+  </article>`;
+}
+
 function renderBalancePosition() {
   if (!state.admin) return;
   const sorted = populateBalancePositionSelector(state.admin.balanceSheetSnapshots ?? []);
@@ -2386,35 +2435,106 @@ function renderBalancePosition() {
   const vm = buildBalanceSheetViewModel(snapshot);
 
   if (vm.isEmpty) {
+    $("#finance-position-compare").innerHTML = `<option value="">Ei vertailua</option>`;
     host.innerHTML = stateBlock({ kind: "empty", title: "Ei vielä tasedataa", body: vm.emptyMessage });
     return;
   }
 
-  const groupBlocks = vm.topGroups.map((group) => {
-    const sectionBlocks = group.sections
-      .filter((section) => section.entries.length > 0)
-      .map((section) => {
-        const rows = section.entries.map((entry) =>
-          `<tr><td>${escapeHtml(entry.name)}</td><td>${money(entry.amount)}</td></tr>`
-        ).join("");
-        return `<tbody>
-          <tr class="group-header"><td colspan="2">${escapeHtml(section.label)}</td></tr>
-          ${rows}
-          <tr class="group-total"><td>${escapeHtml(section.label)} yhteensä</td><td>${money(section.sectionTotal)}</td></tr>
-        </tbody>`;
-      }).join("");
-    return `<section class="card">
-      <h3>${escapeHtml(group.label)}</h3>
-      <div class="table-wrap"><table>${sectionBlocks}</table></div>
-      <p class="metric">${escapeHtml(group.label)} YHTEENSÄ: ${money(group.groupTotal)}</p>
-    </section>`;
-  }).join("");
+  const compareId = populateBalanceCompareSelector(sorted, selectedId);
+  const olderSnapshot = sorted.find((item) => item.id === compareId);
+  const comparison = buildBalanceComparisonViewModel(snapshot, olderSnapshot);
+
+  const reconciliation = computeBalanceReconciliation(snapshot);
+  const ratios = computeBalanceRatios(snapshot, state.admin.latestLiquidityBaseline);
+
+  const baseline = state.admin.latestLiquidityBaseline;
+  const baselineIsPlaceholder = typeof baseline?.notes === "string" && baseline.notes.includes("PLACEHOLDER");
+  const baselineDateMismatch = baseline && baseline.asOfDate !== snapshot.asOfDate;
+  const kpiNotes = [];
+  if (baselineIsPlaceholder) {
+    kpiNotes.push("Kassa kuukausina hoitokuluja perustuu paikkamerkki-arvoon (34 029,46 €) — vain suuntaa-antava kunnes oikea 12 kk hoitokulu on syötetty.");
+  }
+  if (baselineDateMismatch) {
+    kpiNotes.push(`Likviditeetin lähtötieto on päivätty ${escapeHtml(baseline.asOfDate)}, tase ${escapeHtml(snapshot.asOfDate)} — kassa kuukausina -tunnusluku yhdistää eri ajankohtien lukuja.`);
+  }
+
+  const kpis = `
+    <div class="card-grid">
+      ${kpiCard(["Maksuvalmius", ratios.liquidity === null ? "—" : ratios.liquidity.toFixed(2)])}
+      ${kpiCard(["Kassa kuukausina hoitokuluja", ratios.monthsOfCash === null ? "—" : ratios.monthsOfCash.toFixed(1)])}
+      ${kpiCard(["Korollinen vieras pääoma", ratios.interestBearingDebt === null ? "—" : money(ratios.interestBearingDebt)])}
+    </div>
+    ${kpiNotes.length > 0 ? `<p class="muted">${kpiNotes.map(escapeHtml).join(" ")}</p>` : ""}
+  `;
+
+  const reconciliationBlock = comparison.hasComparison
+    ? `<div class="card-grid">
+        ${renderReconciliationCard(reconciliation, snapshot.asOfDate)}
+        ${renderReconciliationCard(computeBalanceReconciliation(olderSnapshot), olderSnapshot.asOfDate)}
+      </div>`
+    : renderReconciliationCard(reconciliation, "");
+
+  let groupBlocks;
+  if (comparison.hasComparison) {
+    groupBlocks = comparison.topGroups.map((group) => {
+      const sectionBlocks = group.sections
+        .filter((section) => section.entries.length > 0)
+        .map((section) => {
+          const rows = section.entries.map((entry) => `<tr>
+            <td>${escapeHtml(entry.name)}</td>
+            <td>${entry.newerAmount === null ? "—" : money(entry.newerAmount)}</td>
+            <td>${entry.olderAmount === null ? "—" : money(entry.olderAmount)}</td>
+            <td>${moneyChange(entry.change)}</td>
+          </tr>`).join("");
+          return `<tbody>
+            <tr class="group-header"><td colspan="4">${escapeHtml(section.label)}</td></tr>
+            ${rows}
+            <tr class="group-total">
+              <td>${escapeHtml(section.label)} yhteensä</td>
+              <td>${money(section.newerTotal)}</td>
+              <td>${money(section.olderTotal)}</td>
+              <td>${moneyChange(section.totalChange)}</td>
+            </tr>
+          </tbody>`;
+        }).join("");
+      return `<section class="card">
+        <h3>${escapeHtml(group.label)}</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th></th><th>${escapeHtml(snapshot.asOfDate)}</th><th>${escapeHtml(olderSnapshot.asOfDate)}</th><th>Muutos €</th></tr></thead>
+          ${sectionBlocks}
+        </table></div>
+        <p class="metric">${escapeHtml(group.label)} YHTEENSÄ: ${money(group.newerGroupTotal)} (${moneyChange(group.groupChange)})</p>
+      </section>`;
+    }).join("");
+  } else {
+    groupBlocks = vm.topGroups.map((group) => {
+      const sectionBlocks = group.sections
+        .filter((section) => section.entries.length > 0)
+        .map((section) => {
+          const rows = section.entries.map((entry) =>
+            `<tr><td>${escapeHtml(entry.name)}</td><td>${money(entry.amount)}</td></tr>`
+          ).join("");
+          return `<tbody>
+            <tr class="group-header"><td colspan="2">${escapeHtml(section.label)}</td></tr>
+            ${rows}
+            <tr class="group-total"><td>${escapeHtml(section.label)} yhteensä</td><td>${money(section.sectionTotal)}</td></tr>
+          </tbody>`;
+        }).join("");
+      return `<section class="card">
+        <h3>${escapeHtml(group.label)}</h3>
+        <div class="table-wrap"><table>${sectionBlocks}</table></div>
+        <p class="metric">${escapeHtml(group.label)} YHTEENSÄ: ${money(group.groupTotal)}</p>
+      </section>`;
+    }).join("");
+  }
 
   host.innerHTML = `
     <div class="card-grid">
       ${kpiCard(["VARAT YHTEENSÄ", money(vm.assetsTotal)])}
       ${kpiCard(["OMA PÄÄOMA JA VELAT YHTEENSÄ", money(vm.equityAndLiabilitiesTotal)])}
     </div>
+    ${kpis}
+    ${reconciliationBlock}
     ${groupBlocks}
   `;
 }
