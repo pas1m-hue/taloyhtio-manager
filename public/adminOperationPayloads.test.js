@@ -7,6 +7,7 @@ import {
   buildBalanceSheetViewModel,
   computeBalanceReconciliation,
   computeBalanceRatios,
+  buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
@@ -1877,6 +1878,104 @@ describe("computeBalanceRatios", () => {
   it("computes interestBearingDebt as the whole liabilities total", () => {
     const result = computeBalanceRatios(snapshot, undefined);
     expect(result.interestBearingDebt).toBe(500000);
+  });
+});
+
+describe("buildBalanceComparisonViewModel", () => {
+  const newerSnapshot = {
+    id: "balance_2025",
+    asOfDate: "2025-12-31",
+    entries: [
+      { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1100000 },
+      { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 60000 },
+      { section: "current_assets", key: "uusi_saatava", name: "Uusi saatava", amount: 5000 },
+      { section: "liabilities", key: "lainat", name: "Lainat", amount: 700000 },
+    ],
+  };
+  const olderSnapshot = {
+    id: "balance_2024",
+    asOfDate: "2024-12-31",
+    entries: [
+      { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1000000 },
+      { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 50000 },
+      { section: "current_assets", key: "vanha_saatava", name: "Vanha saatava", amount: 8000 },
+      { section: "liabilities", key: "lainat", name: "Lainat", amount: 750000 },
+    ],
+  };
+
+  it("has no comparison when olderSnapshot is missing (single-snapshot edge case)", () => {
+    const vm = buildBalanceComparisonViewModel(newerSnapshot, undefined);
+    expect(vm.hasComparison).toBe(false);
+    expect(vm.isEmpty).toBe(false);
+    expect(vm.newer.isEmpty).toBe(false);
+    expect(vm.topGroups).toEqual([]);
+  });
+
+  it("is empty when the newer snapshot is empty, regardless of older", () => {
+    const vm = buildBalanceComparisonViewModel(undefined, olderSnapshot);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.hasComparison).toBe(false);
+  });
+
+  it("pairs entries present in both snapshots and computes change = newer - older", () => {
+    const vm = buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot);
+    expect(vm.hasComparison).toBe(true);
+
+    const assetsGroup = vm.topGroups.find((g) => g.key === "assets");
+    const currentAssets = assetsGroup.sections.find((s) => s.section === "current_assets");
+    const rahat = currentAssets.entries.find((e) => e.key === "rahat");
+    expect(rahat.newerAmount).toBe(60000);
+    expect(rahat.olderAmount).toBe(50000);
+    expect(rahat.change).toBe(10000);
+  });
+
+  it("shows null on the missing side for an entry present in only one snapshot, with change = whole value", () => {
+    const vm = buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot);
+    const currentAssets = vm.topGroups
+      .find((g) => g.key === "assets")
+      .sections.find((s) => s.section === "current_assets");
+
+    const onlyInNewer = currentAssets.entries.find((e) => e.key === "uusi_saatava");
+    expect(onlyInNewer.newerAmount).toBe(5000);
+    expect(onlyInNewer.olderAmount).toBeNull();
+    expect(onlyInNewer.change).toBe(5000);
+
+    const onlyInOlder = currentAssets.entries.find((e) => e.key === "vanha_saatava");
+    expect(onlyInOlder.newerAmount).toBeNull();
+    expect(onlyInOlder.olderAmount).toBe(8000);
+    expect(onlyInOlder.change).toBe(-8000);
+  });
+
+  it("computes section and group total changes", () => {
+    const vm = buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot);
+    const assetsGroup = vm.topGroups.find((g) => g.key === "assets");
+    const currentAssets = assetsGroup.sections.find((s) => s.section === "current_assets");
+    expect(currentAssets.newerTotal).toBe(65000);
+    expect(currentAssets.olderTotal).toBe(58000);
+    expect(currentAssets.totalChange).toBe(7000);
+
+    const liabilitiesGroup = vm.topGroups.find((g) => g.key === "liabilities");
+    expect(liabilitiesGroup.newerGroupTotal).toBe(700000);
+    expect(liabilitiesGroup.olderGroupTotal).toBe(750000);
+    expect(liabilitiesGroup.groupChange).toBe(-50000);
+
+    expect(vm.assetsChange).toBe(vm.newer.assetsTotal - vm.older.assetsTotal);
+  });
+
+  it("normalizes negative stored amounts to positive before comparing", () => {
+    const negNewer = {
+      id: "x", asOfDate: "2025-12-31",
+      entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: -700000 }],
+    };
+    const negOlder = {
+      id: "y", asOfDate: "2024-12-31",
+      entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: -750000 }],
+    };
+    const vm = buildBalanceComparisonViewModel(negNewer, negOlder);
+    const liabilities = vm.topGroups.find((g) => g.key === "liabilities").sections[0];
+    expect(liabilities.entries[0].newerAmount).toBe(700000);
+    expect(liabilities.entries[0].olderAmount).toBe(750000);
+    expect(liabilities.entries[0].change).toBe(-50000);
   });
 });
 

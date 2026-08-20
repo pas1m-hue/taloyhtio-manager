@@ -2835,3 +2835,133 @@ export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
 
   return { liquidity, monthsOfCash, interestBearingDebt, cashSource };
 }
+
+/**
+ * @typedef {Object} BalanceComparisonEntryViewModel
+ * @property {string} key
+ * @property {string} name
+ * @property {number|null} newerAmount Positive, or null if only in olderSnapshot.
+ * @property {number|null} olderAmount Positive, or null if only in newerSnapshot.
+ * @property {number} change newerAmount − olderAmount (missing side treated as 0).
+ */
+
+/**
+ * @typedef {Object} BalanceComparisonSectionViewModel
+ * @property {string} section One of BALANCE_SECTIONS.
+ * @property {string} label Finnish section label.
+ * @property {BalanceComparisonEntryViewModel[]} entries
+ * @property {number} newerTotal
+ * @property {number} olderTotal
+ * @property {number} totalChange
+ */
+
+/**
+ * Vertailu kahden tasesnapshotin välillä (handoff vaihe-4B §3.1). Rivit
+ * yhdistetään section+key -parilla; erä joka esiintyy vain toisessa
+ * snapshotissa saa null-arvon puuttuvalle puolelle, ja sen muutos on koko
+ * arvo (missing side treated as 0). Kun olderSnapshot puuttuu (vain yksi
+ * snapshotti olemassa), palautetaan hasComparison: false eikä kaadu — UI:n
+ * pitäisi tällöin näyttää 4A:n yhden snapshotin näkymä.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} newerSnapshot
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0] | null | undefined} olderSnapshot
+ * @returns {{
+ *   hasComparison: boolean,
+ *   isEmpty: boolean,
+ *   newer: ReturnType<typeof buildBalanceSheetViewModel>,
+ *   older: ReturnType<typeof buildBalanceSheetViewModel> | null,
+ *   topGroups: Array<{ key: string, label: string, sections: BalanceComparisonSectionViewModel[], newerGroupTotal: number, olderGroupTotal: number, groupChange: number }>,
+ *   assetsChange: number,
+ *   equityAndLiabilitiesChange: number,
+ * }}
+ */
+export function buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot) {
+  const newer = buildBalanceSheetViewModel(newerSnapshot);
+  const hasComparison = Boolean(olderSnapshot);
+  const older = hasComparison ? buildBalanceSheetViewModel(olderSnapshot) : null;
+
+  if (newer.isEmpty) {
+    return {
+      hasComparison: false,
+      isEmpty: true,
+      newer,
+      older,
+      topGroups: [],
+      assetsChange: 0,
+      equityAndLiabilitiesChange: 0,
+    };
+  }
+
+  if (!hasComparison || older.isEmpty) {
+    return {
+      hasComparison: false,
+      isEmpty: false,
+      newer,
+      older: null,
+      topGroups: [],
+      assetsChange: 0,
+      equityAndLiabilitiesChange: 0,
+    };
+  }
+
+  const topGroups = newer.topGroups.map((newerGroup) => {
+    const olderGroup = older.topGroups.find((group) => group.key === newerGroup.key);
+    const sections = newerGroup.sections.map((newerSection) => {
+      const olderSection = olderGroup?.sections.find((section) => section.section === newerSection.section);
+      const olderEntriesByKey = new Map((olderSection?.entries ?? []).map((entry) => [entry.key, entry]));
+      const seenOlderKeys = new Set();
+
+      const entries = newerSection.entries.map((newerEntry) => {
+        const olderEntry = olderEntriesByKey.get(newerEntry.key);
+        if (olderEntry) seenOlderKeys.add(newerEntry.key);
+        const olderAmount = olderEntry ? olderEntry.amount : null;
+        return {
+          key: newerEntry.key,
+          name: newerEntry.name,
+          newerAmount: newerEntry.amount,
+          olderAmount,
+          change: newerEntry.amount - (olderAmount ?? 0),
+        };
+      });
+
+      const onlyInOlder = (olderSection?.entries ?? [])
+        .filter((entry) => !seenOlderKeys.has(entry.key))
+        .map((olderEntry) => ({
+          key: olderEntry.key,
+          name: olderEntry.name,
+          newerAmount: null,
+          olderAmount: olderEntry.amount,
+          change: 0 - olderEntry.amount,
+        }));
+
+      const olderTotal = olderSection?.sectionTotal ?? 0;
+      return {
+        section: newerSection.section,
+        label: newerSection.label,
+        entries: [...entries, ...onlyInOlder],
+        newerTotal: newerSection.sectionTotal,
+        olderTotal,
+        totalChange: newerSection.sectionTotal - olderTotal,
+      };
+    });
+
+    const olderGroupTotal = olderGroup?.groupTotal ?? 0;
+    return {
+      key: newerGroup.key,
+      label: newerGroup.label,
+      sections,
+      newerGroupTotal: newerGroup.groupTotal,
+      olderGroupTotal,
+      groupChange: newerGroup.groupTotal - olderGroupTotal,
+    };
+  });
+
+  return {
+    hasComparison: true,
+    isEmpty: false,
+    newer,
+    older,
+    topGroups,
+    assetsChange: newer.assetsTotal - older.assetsTotal,
+    equityAndLiabilitiesChange: newer.equityAndLiabilitiesTotal - older.equityAndLiabilitiesTotal,
+  };
+}
