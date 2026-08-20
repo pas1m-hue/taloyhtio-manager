@@ -304,6 +304,26 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.financialAccounts).toEqual([]);
     expect(loaded!.financialEntries).toEqual([]);
   });
+
+  it("defaults balanceSheetSnapshots missing from a pre-existing stored row instead of throwing", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    // Same regression as above (handoff vaihe-4A §1), for the collection
+    // field added in this vaihe: a row written before balanceSheetSnapshots
+    // existed has no such JSONB key. Without withDefaultedAdminCollections()
+    // defaulting it to [], loading that row throws "values is not iterable"
+    // from validateAdminDataSnapshot's uniqueBy() call.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = payload - 'balanceSheetSnapshots'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.balanceSheetSnapshots).toEqual([]);
+  });
 });
 
 describe("V2.5 PostgreSQL visitor-session repository", () => {

@@ -2,6 +2,8 @@ import {
   ASSET_CATEGORIES,
   buildAccountCostsViewModel,
   buildAssetListViewModel,
+  buildBalanceSheetImportOperation,
+  buildBalanceSheetViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
@@ -28,6 +30,7 @@ import {
   groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
+  parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
@@ -37,7 +40,7 @@ import {
 const KNOWN_VIEWS = new Set([
   "overview", "company", "assets", "observations", "events", "cost-evidence",
   "finance-summary", "finance-import", "finance-income", "finance-costs-group",
-  "finance-costs-account", "finance-budget", "finance-position",
+  "finance-costs-account", "finance-budget", "balance-import", "finance-position",
   "scenarios", "cashpath", "required-collection", "publish", "developer",
 ]);
 
@@ -115,6 +118,8 @@ const state = {
   financeBudgetYearFilterInitialized: false,
   /** Last parseFinancialPasteInput() result for the finance-import form, or null before any input. */
   financeImportParsed: null,
+  /** Last parseBalanceSheetPasteInput() result for the balance-import form, or null before any input. */
+  balanceImportParsed: null,
 };
 
 function selectionId(view) {
@@ -208,6 +213,11 @@ function wireStaticControls() {
   $("#finance-import-form").addEventListener("submit", submitFinanceImport);
   $("#finance-import-text").addEventListener("input", updateFinanceImportPreview);
   $("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual);
+  $("#balance-import-form").addEventListener("submit", submitBalanceImport);
+  $("#balance-import-text").addEventListener("input", updateBalanceImportPreview);
+  $("#balance-import-id").addEventListener("input", updateBalanceImportPreview);
+  $("#balance-import-as-of-date").addEventListener("input", updateBalanceImportPreview);
+  $("#finance-position-snapshot").addEventListener("change", renderBalancePosition);
 
   // Visitor
   $("#visitor-load-overview").addEventListener("click", loadPublished);
@@ -567,6 +577,7 @@ function renderWorkspace() {
   renderExpenseGroups();
   renderAccountCosts();
   renderBudgetVsActual();
+  renderBalancePosition();
   renderScenarios();
   renderCashpath();
   renderRequiredCollection();
@@ -1900,7 +1911,7 @@ function renderFinancePlaceholders() {
     host.innerHTML = stateBlock({
       kind: "not-modelled",
       title: "Näkymä ei vielä käytä tilikohtaista dataa",
-      body: "Taloudellinen asema toteutetaan vaiheessa 4 (eri tietomalli, tasesnapshotit). Tulot, Kulut ryhmittäin, Kulut tileittäin ja Budjetti vs. toteuma käyttävät jo tuotua dataa.",
+      body: "Yhteenveto ei ole vielä oma laskettu näkymä. Tulot, Kulut ryhmittäin, Kulut tileittäin, Budjetti vs. toteuma ja Taloudellinen asema käyttävät jo tuotua dataa.",
     });
   }
 }
@@ -2274,6 +2285,138 @@ async function submitFinanceImport(event) {
   } else if (sent.conflict) {
     setFeedback("#finance-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
   }
+}
+
+/* -------- Balance import ("Liitä tasedata", handoff vaihe-4A §5) -------- */
+
+function currentBalanceImportMeta() {
+  return { id: fieldValue("balance-import-id"), asOfDate: fieldValue("balance-import-as-of-date") };
+}
+
+function updateBalanceImportPreview() {
+  const text = $("#balance-import-text").value;
+  const host = $("#balance-import-preview");
+  if (text.trim() === "") {
+    host.innerHTML = "";
+    state.balanceImportParsed = null;
+    $("#balance-import-submit").disabled = true;
+    return;
+  }
+  const parsed = parseBalanceSheetPasteInput(text, currentBalanceImportMeta());
+  state.balanceImportParsed = parsed;
+  const entryCount = parsed.snapshot.entries.length;
+  const summary = `${entryCount} tase-erää tunnistettu.`;
+  if (parsed.errors.length > 0) {
+    host.innerHTML = stateBlock({
+      kind: "error",
+      title: summary,
+      body: `${parsed.errors.length} virhettä. Tallennus on estetty, kunnes virheet on korjattu.`,
+      items: parsed.errors.map((error) => error.message),
+    });
+  } else {
+    const vm = buildBalanceSheetViewModel(parsed.snapshot);
+    const totals = vm.topGroups.map((group) => `${group.label} ${money(group.groupTotal)}`).join(" · ");
+    host.innerHTML = `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p><p class="muted">${escapeHtml(totals)}</p></article>`;
+  }
+  $("#balance-import-submit").disabled = entryCount === 0 || parsed.errors.length > 0;
+}
+
+async function submitBalanceImport(event) {
+  event.preventDefault();
+  clearFieldErrors("#balance-import-form");
+  const parsed = state.balanceImportParsed;
+  if (!parsed || parsed.errors.length > 0 || parsed.snapshot.entries.length === 0) {
+    setFeedback("#balance-import-feedback", "Korjaa virheet ennen tallennusta.", "error");
+    return;
+  }
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue("balance-import-source-ids"),
+    explanation: fieldValue("balance-import-explanation"),
+  });
+  if (!meta.ok) {
+    applyFieldErrors("#balance-import-form", {
+      sourceIds: "balance-import-source-ids",
+      explanation: "balance-import-explanation",
+    }, meta.errors);
+    setFeedback("#balance-import-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const operation = buildBalanceSheetImportOperation(parsed, meta.value);
+  const sent = await sendAdminOperations([operation], {
+    successMessage: `Tallennettu tasesnapshot ${parsed.snapshot.id} (${parsed.snapshot.entries.length} erää).`,
+  });
+  if (sent.ok) {
+    setFeedback("#balance-import-feedback", "Tallennettu.", "ok");
+    $("#balance-import-text").value = "";
+    updateBalanceImportPreview();
+  } else if (sent.conflict) {
+    setFeedback("#balance-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/* -------- Taloudellinen asema (spec §6.5, vaihe 4A: yksi snapshot kerrallaan) -------- */
+
+/**
+ * Populates the snapshot <select> from the loaded balanceSheetSnapshots,
+ * sorted by asOfDate, defaulting to the latest one on first load (mirrors
+ * populateFinanceBudgetYearFilter's "keep the user's choice if it still
+ * exists, otherwise default" behaviour) — the dropdown itself is only shown
+ * when there is more than one snapshot to choose from (handoff §6).
+ * @returns {ReturnType<typeof state.admin.balanceSheetSnapshots.slice>} snapshots sorted by asOfDate
+ */
+function populateBalancePositionSelector(snapshots) {
+  const select = $("#finance-position-snapshot");
+  const sorted = [...snapshots].sort((a, b) => String(a.asOfDate).localeCompare(String(b.asOfDate)));
+  const current = select.value;
+  select.innerHTML = sorted.map((snapshot) =>
+    `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(snapshot.asOfDate)} (${escapeHtml(snapshot.id)})</option>`
+  ).join("");
+  $("#finance-position-selector").hidden = sorted.length <= 1;
+  const stillExists = sorted.some((snapshot) => snapshot.id === current);
+  select.value = stillExists ? current : (sorted.length > 0 ? sorted[sorted.length - 1].id : "");
+  return sorted;
+}
+
+function renderBalancePosition() {
+  if (!state.admin) return;
+  const sorted = populateBalancePositionSelector(state.admin.balanceSheetSnapshots ?? []);
+  const host = $("#finance-position-body");
+  const selectedId = $("#finance-position-snapshot").value;
+  const snapshot = sorted.find((item) => item.id === selectedId);
+  const vm = buildBalanceSheetViewModel(snapshot);
+
+  if (vm.isEmpty) {
+    host.innerHTML = stateBlock({ kind: "empty", title: "Ei vielä tasedataa", body: vm.emptyMessage });
+    return;
+  }
+
+  const groupBlocks = vm.topGroups.map((group) => {
+    const sectionBlocks = group.sections
+      .filter((section) => section.entries.length > 0)
+      .map((section) => {
+        const rows = section.entries.map((entry) =>
+          `<tr><td>${escapeHtml(entry.name)}</td><td>${money(entry.amount)}</td></tr>`
+        ).join("");
+        return `<tbody>
+          <tr class="group-header"><td colspan="2">${escapeHtml(section.label)}</td></tr>
+          ${rows}
+          <tr class="group-total"><td>${escapeHtml(section.label)} yhteensä</td><td>${money(section.sectionTotal)}</td></tr>
+        </tbody>`;
+      }).join("");
+    return `<section class="card">
+      <h3>${escapeHtml(group.label)}</h3>
+      <div class="table-wrap"><table>${sectionBlocks}</table></div>
+      <p class="metric">${escapeHtml(group.label)} YHTEENSÄ: ${money(group.groupTotal)}</p>
+    </section>`;
+  }).join("");
+
+  host.innerHTML = `
+    <div class="card-grid">
+      ${kpiCard(["VARAT YHTEENSÄ", money(vm.assetsTotal)])}
+      ${kpiCard(["OMA PÄÄOMA JA VELAT YHTEENSÄ", money(vm.equityAndLiabilitiesTotal)])}
+    </div>
+    ${groupBlocks}
+  `;
 }
 
 /* -------- Scenarios / cashpath / required collection (decision 3.3) -------- */

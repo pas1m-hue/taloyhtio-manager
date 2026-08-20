@@ -120,6 +120,41 @@ export interface FinancialEntry {
   readonly notes?: string;
 }
 
+/**
+ * Balance-sheet section (spec §11, handoff vaihe-4A §4). Five enum values
+ * rather than the three top-level groups so 4B's liquidity ratios (which
+ * need "vaihtuvat vastaavat" specifically, not all assets) can be computed
+ * without re-deriving that split later. Grouped into VARAT / OMA PÄÄOMA /
+ * VELAT in the view layer.
+ */
+export const BALANCE_SECTIONS = [
+  "fixed_assets",
+  "current_assets",
+  "restricted_equity",
+  "unrestricted_equity",
+  "liabilities",
+] as const;
+export type BalanceSection = (typeof BALANCE_SECTIONS)[number];
+
+/** One line item on a balance-sheet snapshot. */
+export interface BalanceEntry {
+  readonly section: BalanceSection;
+  readonly key: string;
+  readonly name: string;
+  /** Stored as-is (sign preserved); display-time positivity is the view's responsibility. */
+  readonly amount: number;
+  readonly notes?: string;
+}
+
+/** The balance sheet as of one date. */
+export interface BalanceSheetSnapshot {
+  readonly id: string;
+  readonly asOfDate: string;
+  readonly sourceIds: readonly string[];
+  readonly entries: readonly BalanceEntry[];
+  readonly notes?: string;
+}
+
 /** Manually entered liquidity inputs captured at one named date. */
 export interface LiquidityBaselineRecord {
   readonly id: string;
@@ -421,6 +456,7 @@ export const ADMIN_ENTITY_TYPES = [
   "building_event",
   "financial_account",
   "financial_entry",
+  "balance_sheet_snapshot",
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
@@ -436,7 +472,8 @@ export type AdminEntitySnapshot =
   | PriceLevelConfirmation
   | BuildingEvent
   | FinancialAccount
-  | FinancialEntry;
+  | FinancialEntry
+  | BalanceSheetSnapshot;
 
 export interface AdminAuditEntry {
   readonly id: string;
@@ -465,6 +502,7 @@ export interface AdminDataSnapshot {
   readonly events: readonly BuildingEvent[];
   readonly financialAccounts: readonly FinancialAccount[];
   readonly financialEntries: readonly FinancialEntry[];
+  readonly balanceSheetSnapshots: readonly BalanceSheetSnapshot[];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly updatedAt: string;
   readonly updatedBy: string;
@@ -485,7 +523,8 @@ export type AdminDataOperation =
   | ({ readonly type: "save_price_level_confirmation"; readonly value: PriceLevelConfirmation } & AdminOperationMetadata)
   | ({ readonly type: "save_building_event"; readonly value: BuildingEvent } & AdminOperationMetadata)
   | ({ readonly type: "save_financial_account"; readonly value: FinancialAccount } & AdminOperationMetadata)
-  | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata);
+  | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata)
+  | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata);
 
 export interface AdminDataBatchCommand {
   readonly companyId: string;

@@ -63,6 +63,7 @@
             <li><a class="nav-link" href="#/finance-costs-group" data-view="finance-costs-group">Kulut ryhmittäin</a></li>
             <li><a class="nav-link" href="#/finance-costs-account" data-view="finance-costs-account">Kulut tileittäin</a></li>
             <li><a class="nav-link" href="#/finance-budget" data-view="finance-budget">Budjetti vs. toteuma</a></li>
+            <li><a class="nav-link" href="#/balance-import" data-view="balance-import">Liitä tasedata</a></li>
             <li><a class="nav-link" href="#/finance-position" data-view="finance-position">Taloudellinen asema</a></li>
           </ul>
         </li>
@@ -348,9 +349,52 @@
             <div id="finance-budget-kpis" class="card-grid"></div>
             <div id="finance-budget-body"></div>
           </section>
+          <section class="view" data-view="balance-import" aria-labelledby="balance-import-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="balance-import-title">Talous · Liitä tasedata</h2>
+                <p class="view-lead muted">Liitä tab-erotellut rivit muodossa section, key, name, amount. section on jokin: Pysyvät vastaavat, Vaihtuvat vastaavat, Sidottu oma pääoma, Vapaa oma pääoma, Velat. Otsikkorivi tunnistetaan ja ohitetaan automaattisesti. Yksi liitos vastaa yhtä tasesnapshotia — anna sen tunniste ja tilinpäätöspäivä alla.</p>
+              </div>
+            </header>
+            <form id="balance-import-form" class="card form-card wide-card" novalidate>
+              <fieldset class="form-grid">
+                <legend class="form-hint">Snapshotin tiedot</legend>
+                <label for="balance-import-id">Snapshotin tunniste
+                  <input id="balance-import-id" required aria-describedby="balance-import-id-error" autocomplete="off" placeholder="balance_2025">
+                  <span class="field-error" id="balance-import-id-error"></span>
+                </label>
+                <label for="balance-import-as-of-date">Tilinpäätöspäivä
+                  <input id="balance-import-as-of-date" type="date" required aria-describedby="balance-import-as-of-date-error">
+                  <span class="field-error" id="balance-import-as-of-date-error"></span>
+                </label>
+              </fieldset>
+              <label for="balance-import-text">Liitettävä data
+                <textarea id="balance-import-text" rows="12" spellcheck="false" placeholder="section&#9;key&#9;name&#9;amount"></textarea>
+              </label>
+              <fieldset class="form-grid">
+                <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+                <label for="balance-import-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                  <input id="balance-import-source-ids" required aria-describedby="balance-import-source-ids-error" autocomplete="off">
+                  <span class="field-error" id="balance-import-source-ids-error"></span>
+                </label>
+                <label for="balance-import-explanation">Muutoksen selitys
+                  <input id="balance-import-explanation" required aria-describedby="balance-import-explanation-error" autocomplete="off">
+                  <span class="field-error" id="balance-import-explanation-error"></span>
+                </label>
+              </fieldset>
+              <div id="balance-import-preview"></div>
+              <p id="balance-import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+              <div class="button-row"><button id="balance-import-submit" type="submit" disabled>Tallenna tuonti</button></div>
+            </form>
+          </section>
           <section class="view" data-view="finance-position" aria-labelledby="finance-position-title" hidden>
             <header class="view-head"><h2 id="finance-position-title">Talous · Taloudellinen asema</h2></header>
-            <div class="finance-placeholder" data-finance></div>
+            <div class="assets-filters" id="finance-position-selector">
+              <label>Snapshotti
+                <select id="finance-position-snapshot"></select>
+              </label>
+            </div>
+            <div id="finance-position-body"></div>
           </section>
 
           <!-- Skenaariot ja likviditeetti (oikea read-only) -->
