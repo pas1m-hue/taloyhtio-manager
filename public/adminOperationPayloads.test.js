@@ -5,6 +5,8 @@ import {
   buildAssetListViewModel,
   buildBalanceSheetImportOperation,
   buildBalanceSheetViewModel,
+  computeBalanceReconciliation,
+  computeBalanceRatios,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
   buildEventListViewModel,
@@ -1756,6 +1758,125 @@ describe("buildBalanceSheetViewModel", () => {
     expect(liabilitiesGroup.sections[0].entries[0].amount).toBe(50000);
     expect(liabilitiesGroup.groupTotal).toBe(50000);
     expect(vm.equityAndLiabilitiesTotal).toBe(50000);
+  });
+});
+
+describe("computeBalanceReconciliation", () => {
+  it("is empty with no snapshot", () => {
+    expect(computeBalanceReconciliation(undefined).isEmpty).toBe(true);
+  });
+
+  it("balances when assets equal equity + liabilities", () => {
+    const result = computeBalanceReconciliation({
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1000000 },
+        { section: "restricted_equity", key: "osakepaaoma", name: "Osakepääoma", amount: 250000 },
+        { section: "liabilities", key: "lainat", name: "Lainat", amount: 750000 },
+      ],
+    });
+    expect(result.assets).toBe(1000000);
+    expect(result.equityPlusLiabilities).toBe(1000000);
+    expect(result.difference).toBe(0);
+    expect(result.balances).toBe(true);
+  });
+
+  it("does not balance and reports the difference when off by more than the tolerance", () => {
+    const result = computeBalanceReconciliation({
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1000000 },
+        { section: "liabilities", key: "lainat", name: "Lainat", amount: 750000 },
+      ],
+    });
+    expect(result.difference).toBe(250000);
+    expect(result.balances).toBe(false);
+  });
+
+  it("treats a rounding-cent difference (0.005) as balanced", () => {
+    const result = computeBalanceReconciliation({
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1000.005 },
+        { section: "liabilities", key: "lainat", name: "Lainat", amount: 1000 },
+      ],
+    });
+    expect(result.difference).toBeCloseTo(0.005, 5);
+    expect(result.balances).toBe(true);
+  });
+});
+
+describe("computeBalanceRatios", () => {
+  const snapshot = {
+    id: "x",
+    asOfDate: "2025-12-31",
+    entries: [
+      { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 60000 },
+      { section: "current_assets", key: "muut", name: "Muut saamiset", amount: 15000 },
+      { section: "liabilities", key: "lainat", name: "Lainat", amount: 500000 },
+    ],
+  };
+
+  it("is empty with no snapshot", () => {
+    const result = computeBalanceRatios(undefined, undefined);
+    expect(result.liquidity).toBeNull();
+    expect(result.monthsOfCash).toBeNull();
+    expect(result.interestBearingDebt).toBeNull();
+    expect(result.cashSource).toBeNull();
+  });
+
+  it("computes liquidity as current assets / liabilities", () => {
+    const result = computeBalanceRatios(snapshot, undefined);
+    expect(result.liquidity).toBeCloseTo(75000 / 500000, 6);
+  });
+
+  it("returns null liquidity and interestBearingDebt when liabilities are zero (no division by zero)", () => {
+    const noLiabilities = {
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [{ section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 60000 }],
+    };
+    const result = computeBalanceRatios(noLiabilities, undefined);
+    expect(result.liquidity).toBeNull();
+    expect(result.interestBearingDebt).toBeNull();
+  });
+
+  it("computes monthsOfCash as rahat / (trailing12mOperatingCosts / 12), using the named cash entry", () => {
+    const result = computeBalanceRatios(snapshot, { trailing12mOperatingCosts: 120000 });
+    expect(result.monthsOfCash).toBeCloseTo(60000 / 10000, 6);
+    expect(result.cashSource).toBe("entry");
+  });
+
+  it("returns null monthsOfCash when latestLiquidityBaseline is missing", () => {
+    const result = computeBalanceRatios(snapshot, undefined);
+    expect(result.monthsOfCash).toBeNull();
+  });
+
+  it("returns null monthsOfCash when trailing12mOperatingCosts is zero", () => {
+    const result = computeBalanceRatios(snapshot, { trailing12mOperatingCosts: 0 });
+    expect(result.monthsOfCash).toBeNull();
+  });
+
+  it("falls back to the current_assets section total when no named cash entry exists", () => {
+    const noNamedCash = {
+      id: "x",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "current_assets", key: "muut", name: "Muut saamiset", amount: 15000 },
+        { section: "liabilities", key: "lainat", name: "Lainat", amount: 500000 },
+      ],
+    };
+    const result = computeBalanceRatios(noNamedCash, { trailing12mOperatingCosts: 120000 });
+    expect(result.cashSource).toBe("section_total");
+    expect(result.monthsOfCash).toBeCloseTo(15000 / 10000, 6);
+  });
+
+  it("computes interestBearingDebt as the whole liabilities total", () => {
+    const result = computeBalanceRatios(snapshot, undefined);
+    expect(result.interestBearingDebt).toBe(500000);
   });
 });
 

@@ -2757,3 +2757,81 @@ export function buildBalanceSheetViewModel(snapshot) {
     emptyMessage,
   };
 }
+
+const BALANCE_RECONCILIATION_TOLERANCE = 0.01;
+
+/**
+ * Taseen täsmäytys (handoff vaihe-4B §3.2): VARAT − (OMA PÄÄOMA + VELAT).
+ * Built on top of buildBalanceSheetViewModel's totals (already Math.abs'd),
+ * so it reuses the same grouping rather than re-summing entries itself. A
+ * 0.01 € tolerance absorbs the rounding cents that show up in real
+ * tilinpäätös data.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} snapshot
+ * @returns {{ isEmpty: boolean, assets: number, equityPlusLiabilities: number, difference: number, balances: boolean }}
+ */
+export function computeBalanceReconciliation(snapshot) {
+  const vm = buildBalanceSheetViewModel(snapshot);
+  if (vm.isEmpty) {
+    return { isEmpty: true, assets: 0, equityPlusLiabilities: 0, difference: 0, balances: true };
+  }
+  const difference = vm.assetsTotal - vm.equityAndLiabilitiesTotal;
+  return {
+    isEmpty: false,
+    assets: vm.assetsTotal,
+    equityPlusLiabilities: vm.equityAndLiabilitiesTotal,
+    difference,
+    balances: Math.abs(difference) < BALANCE_RECONCILIATION_TOLERANCE,
+  };
+}
+
+/** Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio. */
+function isCashEntry(entry) {
+  if (entry.key === "rahat") return true;
+  return entry.name.toLowerCase().startsWith("rahat ja pankki");
+}
+
+/**
+ * Kolme tunnuslukua valitulle snapshotille (handoff vaihe-4B §3.3), kukin
+ * number tai null jos ei laskettavissa (nollalla jako / puuttuva lähtötieto):
+ *  - liquidity: vaihtuvat vastaavat / velat (koko liabilities-summa —
+ *    vahvistettu yksinkertaistus, mallissa on vain yksi velkaosio)
+ *  - monthsOfCash: rahat ja pankkisaamiset / (trailing12mOperatingCosts / 12)
+ *  - interestBearingDebt: koko liabilities-summa (sama yksinkertaistus)
+ *
+ * cashSource kertoo löytyikö erillinen "Rahat ja pankkisaamiset" -erä
+ * (`"entry"`) vai jouduttiinko käyttämään koko current_assets-summaa
+ * (`"section_total"`) — handoffin sallima fallback, dokumentoitu UI:ssa.
+ * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} snapshot
+ * @param {{ currentCash?: number, trailing12mOperatingCosts?: number, asOfDate?: string, notes?: string } | undefined} latestLiquidityBaseline
+ * @returns {{
+ *   liquidity: number | null,
+ *   monthsOfCash: number | null,
+ *   interestBearingDebt: number | null,
+ *   cashSource: "entry" | "section_total" | null,
+ * }}
+ */
+export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
+  const vm = buildBalanceSheetViewModel(snapshot);
+  if (vm.isEmpty) {
+    return { liquidity: null, monthsOfCash: null, interestBearingDebt: null, cashSource: null };
+  }
+
+  const currentAssetsSection = vm.topGroups
+    .find((group) => group.key === "assets")
+    ?.sections.find((section) => section.section === "current_assets");
+  const currentAssetsTotal = currentAssetsSection?.sectionTotal ?? 0;
+  const liabilitiesTotal = vm.topGroups.find((group) => group.key === "liabilities")?.groupTotal ?? 0;
+
+  const liquidity = liabilitiesTotal === 0 ? null : currentAssetsTotal / liabilitiesTotal;
+  const interestBearingDebt = liabilitiesTotal === 0 ? null : liabilitiesTotal;
+
+  const cashEntry = currentAssetsSection?.entries.find(isCashEntry);
+  const cashAmount = cashEntry ? cashEntry.amount : currentAssetsTotal;
+  const cashSource = cashEntry ? "entry" : "section_total";
+  const monthlyOperatingCosts = latestLiquidityBaseline?.trailing12mOperatingCosts
+    ? latestLiquidityBaseline.trailing12mOperatingCosts / 12
+    : 0;
+  const monthsOfCash = monthlyOperatingCosts === 0 ? null : cashAmount / monthlyOperatingCosts;
+
+  return { liquidity, monthsOfCash, interestBearingDebt, cashSource };
+}
