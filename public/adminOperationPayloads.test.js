@@ -2218,6 +2218,31 @@ describe("buildIncomeViewModel", () => {
     expect(vm.groups).toEqual([]);
     expect(vm.emptyMessage).toBe("Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.");
   });
+
+  it("sets showAccountRowsInline when there is exactly one group", () => {
+    const oneGroupAccounts = INCOME_ACCOUNTS.filter((a) => a.group === "Hoitovastikkeet");
+    const entries = [
+      { accountCode: "3000", year: 2025, actualAmount: 1000 },
+      { accountCode: "3001", year: 2025, actualAmount: 300 },
+    ];
+    const vm = buildIncomeViewModel(oneGroupAccounts, entries);
+    expect(vm.groups.length).toBe(1);
+    expect(vm.showAccountRowsInline).toBe(true);
+  });
+
+  it("leaves showAccountRowsInline false when there is more than one group", () => {
+    const entries = [
+      { accountCode: "3000", year: 2025, actualAmount: 1000 },
+      { accountCode: "3100", year: 2025, actualAmount: 500 },
+    ];
+    const vm = buildIncomeViewModel(INCOME_ACCOUNTS, entries);
+    expect(vm.groups.length).toBeGreaterThan(1);
+    expect(vm.showAccountRowsInline).toBe(false);
+  });
+
+  it("leaves showAccountRowsInline false on the empty state", () => {
+    expect(buildIncomeViewModel([], []).showAccountRowsInline).toBe(false);
+  });
 });
 
 const EXPENSE_ACCOUNTS = [

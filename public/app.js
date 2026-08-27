@@ -2025,7 +2025,7 @@ function renderIncome() {
       .map((year) => `<td>${group.actuals[year] === undefined ? "—" : money(group.actuals[year])}</td>`)
       .join("");
     const rowClass = group.group === selectedGroup ? "is-selected" : "";
-    return `<tr class="${rowClass}" data-group="${escapeHtml(group.group)}">
+    const groupRow = `<tr class="${rowClass}" data-group="${escapeHtml(group.group)}">
       <td>${escapeHtml(group.group)}</td>
       ${actualCells}
       <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
@@ -2034,6 +2034,25 @@ function renderIncome() {
       <td>${escapeHtml(group.notes || "—")}</td>
       <td><button type="button" class="secondary row-select">Näytä</button></td>
     </tr>`;
+    if (!vm.showAccountRowsInline) return groupRow;
+    // Muutos/Osuus tuloista are group-level metrics with no account-level
+    // equivalent, so those cells stay genuinely empty rather than "—" (which
+    // means DATA GAP in this app, not "not applicable").
+    const accountRows = group.accountRows.map((row) => {
+      const accountActualCells = vm.actualYears
+        .map((year) => `<td>${row.actuals[year] === undefined ? "—" : money(row.actuals[year])}</td>`)
+        .join("");
+      return `<tr class="account-row">
+        <td class="indent">${escapeHtml(row.accountCode)} ${escapeHtml(row.name)}</td>
+        ${accountActualCells}
+        <td>${row.budget === undefined ? "—" : money(row.budget)}</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+      </tr>`;
+    }).join("");
+    return groupRow + accountRows;
   }).join("");
 
   host.innerHTML = `<div class="table-wrap"><table>

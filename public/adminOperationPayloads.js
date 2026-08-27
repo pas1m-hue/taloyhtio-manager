@@ -2075,7 +2075,15 @@ function buildGroupedFinanceCore(accounts, entries, kind) {
  * historical budgets — those belong to Budjetti vs. toteuma), the change
  * between the two most recent actual years, and each group's share of total
  * income for the latest actual year. Account-level breakdown lives on
- * `group.accountRows` for the row-detail panel.
+ * `group.accountRows` for the row-detail panel. `showAccountRowsInline` is
+ * true when there is exactly one group — a degenerate case (spec §6.1's
+ * columns like "Muutos" and "Osuus tuloista" are meaningful per group, so
+ * this stays a derived display flag rather than changing the row shape)
+ * where the group-level table would otherwise be a single uninformative
+ * row and the account breakdown (already on `accountRows`) is the
+ * interesting data; the spec allows the breakdown "omassa alataulukossa"
+ * (§6.1). With more than one group the existing group-row + detail-panel
+ * behavior is unchanged.
  * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown}>} [accounts]
  * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
  * @returns {{
@@ -2085,6 +2093,7 @@ function buildGroupedFinanceCore(accounts, entries, kind) {
  *   changeYears: { previous: number, latest: number }|null,
  *   latestActualYear: number|null,
  *   groups: Array<FinanceGroup & { sharePercent: number|undefined }>,
+ *   showAccountRowsInline: boolean,
  *   totals: { actuals: Record<number, number|undefined>, budget: number|undefined },
  *   emptyMessage: string,
  * }}
@@ -2099,6 +2108,7 @@ export function buildIncomeViewModel(accounts, entries) {
       changeYears: null,
       latestActualYear: null,
       groups: [],
+      showAccountRowsInline: false,
       totals: core.totals,
       emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
     };
@@ -2122,6 +2132,7 @@ export function buildIncomeViewModel(accounts, entries) {
     changeYears: core.changeYears,
     latestActualYear,
     groups,
+    showAccountRowsInline: groups.length === 1,
     totals: core.totals,
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
   };
