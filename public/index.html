@@ -553,13 +553,15 @@
       </div>
     </main>
 
-    <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-panel-title" hidden>
-      <div class="detail-panel-head">
-        <h2 id="detail-panel-title">Tiedot</h2>
-        <button id="detail-panel-close" class="icon-button" type="button" aria-label="Sulje paneeli">✕</button>
+    <div id="detail-panel" class="detail-modal" hidden>
+      <div class="detail-modal-panel" role="dialog" aria-modal="true" aria-labelledby="detail-panel-title" tabindex="-1">
+        <div class="detail-panel-head">
+          <h2 id="detail-panel-title">Tiedot</h2>
+          <button id="detail-panel-close" class="icon-button" type="button" aria-label="Sulje paneeli">✕</button>
+        </div>
+        <div id="detail-panel-body" class="detail-panel-body"></div>
       </div>
-      <div id="detail-panel-body" class="detail-panel-body"></div>
-    </aside>
+    </div>
   </div>
 
   <div id="toast" role="status" aria-live="polite"></div>

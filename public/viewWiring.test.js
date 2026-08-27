@@ -213,6 +213,18 @@ describe("static view cross-check (KNOWN_VIEWS <-> data-view sections)", () => {
   });
 });
 
+// UI-parannukset: #detail-panel is a centered overlay modal rather than a side
+// panel (the previous 360px column couldn't fit wide multi-year tables). This
+// only checks the static markup contract — the actual open/close/Esc/overlay-
+// click/focus behavior needs a browser and is covered by the PR's manual test
+// paths instead, not a jsdom simulation of listener wiring.
+describe("static detail-panel modal markup", () => {
+  it("has a dialog role and aria-modal on the modal panel", () => {
+    expect(html).toMatch(/detail-modal-panel[^>]*role="dialog"/);
+    expect(html).toMatch(/detail-modal-panel[^>]*aria-modal="true"/);
+  });
+});
+
 // vaihe 3B: Tulot, Kulut ryhmittäin and Budjetti vs. toteuma reuse the shared
 // #detail-panel (same click-to-select pattern as assets/observations/events/
 // cost-evidence) for their account-level breakdown, so they must be in

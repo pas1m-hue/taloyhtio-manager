@@ -119,7 +119,7 @@ Normaalikäyttäjältä piilotettu alue:
   - suodattimet
   - KPI-kortit
   - taulukko, aikajana tai lomake
-  - valitun rivin detaljipaneeli oikealla
+  - valitun rivin detaljit keskitetyssä modaalissa (leveämpi kuin sivupaneeli, jotta myös monivuotiset tilikohtaiset taulukot mahtuvat ilman vaakavieritystä; sulkeutuu X-napista, Esc-näppäimestä tai taustaa klikkaamalla)
 
 ### Mobiili
 
