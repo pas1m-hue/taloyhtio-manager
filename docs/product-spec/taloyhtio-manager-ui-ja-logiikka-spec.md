@@ -222,34 +222,39 @@ Toiminnot:
 
 ### 6.4 Budjetti vs. toteuma
 
-Tämä on ainoa näkymä, jossa historiallista budjettia verrataan toteumaan.
+Tämä on ainoa näkymä, jossa historiallista budjettia verrataan toteumaan. Näkymä on **ryhmätasoinen** (feature/group-budget): rivi on aina yksi tiliryhmä, ei yksittäinen tili. Toteuma johdetaan aina ryhmän tilien toteumasummasta. Budjetti tulee jommastakummasta lähteestä:
+
+- **ryhmäbudjetista** (GroupBudget-entiteetti, yhtiökokouksen hyväksymä ryhmätason budjetti), jos sellainen on olemassa aktiivisena kyseiselle ryhmälle ja vuodelle — tämä voittaa aina kun se on olemassa;
+- muuten **tileistä summattuna** ryhmän tilien budjettisummasta (FinancialEntry.budgetAmount).
+
+Sääntö on rivikohtainen, ei vuosikohtainen: sama vuosi voi näyttää eri ryhmille eri lähteen. Lähde näkyy näkymässä omassa **Budjetin lähde** -sarakkeessa ("Ryhmäbudjetti" / "Tileistä summattu") — sääntöä ei piilotettu laskentaan. Jos molemmat lähteet ovat olemassa samalle riville, ohitettu tilisumma näytetään Huomio-sarakkeessa ja rivin detaljissa, ei hävitetä hiljaa.
 
 Luonnollinen lukusuunta:
 
-1. Budjetti
-2. Toteuma
-3. Erotus €
-4. Erotus %
-5. Huomio
+1. Ryhmä
+2. Budjetti
+3. Budjetin lähde
+4. Toteuma
+5. Erotus €
+6. Erotus %
+7. Huomio
 
-Vuosi valitaan suodattimella, eikä kaikkia vuosia näytetä yhdessä erittäin leveässä taulukossa.
+Vuosi valitaan suodattimella, eikä kaikkia vuosia näytetä yhdessä erittäin leveässä taulukossa. Vuosi on valittavissa jos jollakin ryhmällä on sekä toteuma että budjetti (kummasta lähteestä tahansa) kyseiselle vuodelle. Rivi näytetään myös silloin kun ryhmällä on vain toinen puoli (esim. budjetoitiin mutta ei tullut kuluja, tai päinvastoin) — puuttuva puoli näytetään "—" eikä sitä lasketa nollaa vasten.
 
 Kaava:
 
-`Erotus = Toteuma − Budjetti`
+`Erotus € = Toteuma − Budjetti`
 
-Tulkinta:
+Tulkinta (ohjaa rivin korostuksen — epäedullinen rivi saa varoitusvärin — eikä ole oma sarake, koska luku itsessään jo kertoo saman asian):
 
-- kulut: positiivinen erotus = ylitys = epäedullinen
-- tulot: positiivinen erotus = budjetin ylitys = suotuisa
-- jos budjetti on 0, erotusprosentti jätetään tyhjäksi
+- **kulut tallentuvat lähtökohtaisesti negatiivisina** (ks. ohje-tilinpaatosdatan-syotto.md), joten Erotus €:n raakaa etumerkkiä ei pidä lukea suoraan ylitys/alitus-suunnaksi: alitus (vähemmän kuluja kuin budjetoitu) näkyy **positiivisena** Erotus €:na, koska pienempi itseisarvo miinuksesta on aritmeettisesti suurempi luku. Rivin edullisuus lasketaan itseisarvoista: `|toteuma| ≤ |budjetti|` → suotuisa (alitus tai budjetin mukainen), muuten epäedullinen.
+- tulot: positiivinen erotus = budjetin ylitys = suotuisa (tulot eivät tallennu negatiivisina, joten raaka etumerkki riittää).
+- jos budjetti on 0, erotusprosentti jätetään tyhjäksi.
 
-Yläosan KPI:t:
+KPI:t:
 
-- kokonaisbudjetti
-- kokonaistoteuma
-- nettoerotus
-- kategorioiden keskimääräinen absoluuttinen poikkeama
+- **Keskim. abs. poikkeama** näytetään kerran koko näkymän yläosassa, **prosenttina** (ryhmäkohtaisten |Erotus %| -arvojen keskiarvo, kuten lähde-Excelin "Budjettitarkkuus"-mittari). Prosentti on vertailukelpoinen sekä kulu- että tuloryhmien ja vuosien välillä, joten se ei jakaudu tulot/kulut-osioihin toisin kuin alla olevat euromääräiset KPI:t.
+- **Budjetti / Toteuma / Nettoerotus** näytetään omana KPI-rivinä kummankin osion (Tulot, Kulut) taulukon yllä, **erikseen kullekin kind:lle**. Näitä ei summata tulojen ja kulujen yli: kulujen ja tulojen budjetti-/toteumasummat ovat eri etumerkkikonventiolla (kulut negatiivisina) ja eri suuruusluokkaa, joten yhteenlaskettu luku ei tarkoittaisi mitään taloudellista suuretta.
 
 ### 6.5 Taloudellinen asema
 

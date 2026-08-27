@@ -121,6 +121,30 @@ export interface FinancialEntry {
 }
 
 /**
+ * A group-level budget figure (handoff feature/group-budget §1): budgets are
+ * approved by the yhtiökokous at the account group level (e.g. "Sähkö"), not
+ * per account, but actuals are recorded per account. `id` is derived
+ * deterministically from kind/group/year (see buildGroupBudgetId in
+ * adminOperationPayloads.js) so re-importing the same group+year updates the
+ * existing row instead of duplicating it. `group` must match a
+ * FinancialAccount.group string for the actual side of the comparison to
+ * resolve — the parser warns, but does not block, on a non-matching name.
+ * `active: false` retires a row (e.g. a typo'd group name whose id can never
+ * be corrected by re-import) without deleting it, mirroring Asset.active —
+ * this system has no delete operation, only create/update.
+ */
+export interface GroupBudget {
+  readonly id: string;
+  readonly group: string;
+  readonly kind: FinancialAccountKind;
+  readonly year: number;
+  readonly budgetAmount: number;
+  readonly active: boolean;
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
+/**
  * Balance-sheet section (spec §11, handoff vaihe-4A §4). Five enum values
  * rather than the three top-level groups so 4B's liquidity ratios (which
  * need "vaihtuvat vastaavat" specifically, not all assets) can be computed
@@ -457,6 +481,7 @@ export const ADMIN_ENTITY_TYPES = [
   "financial_account",
   "financial_entry",
   "balance_sheet_snapshot",
+  "group_budget",
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
@@ -473,7 +498,8 @@ export type AdminEntitySnapshot =
   | BuildingEvent
   | FinancialAccount
   | FinancialEntry
-  | BalanceSheetSnapshot;
+  | BalanceSheetSnapshot
+  | GroupBudget;
 
 export interface AdminAuditEntry {
   readonly id: string;
@@ -503,6 +529,7 @@ export interface AdminDataSnapshot {
   readonly financialAccounts: readonly FinancialAccount[];
   readonly financialEntries: readonly FinancialEntry[];
   readonly balanceSheetSnapshots: readonly BalanceSheetSnapshot[];
+  readonly groupBudgets: readonly GroupBudget[];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly updatedAt: string;
   readonly updatedBy: string;
@@ -524,7 +551,8 @@ export type AdminDataOperation =
   | ({ readonly type: "save_building_event"; readonly value: BuildingEvent } & AdminOperationMetadata)
   | ({ readonly type: "save_financial_account"; readonly value: FinancialAccount } & AdminOperationMetadata)
   | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata)
-  | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata);
+  | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata)
+  | ({ readonly type: "save_group_budget"; readonly value: GroupBudget } & AdminOperationMetadata);
 
 export interface AdminDataBatchCommand {
   readonly companyId: string;

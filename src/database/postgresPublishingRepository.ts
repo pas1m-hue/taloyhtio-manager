@@ -317,6 +317,7 @@ function withDefaultedAdminCollections(
     financialAccounts: payload.financialAccounts ?? [],
     financialEntries: payload.financialEntries ?? [],
     balanceSheetSnapshots: payload.balanceSheetSnapshots ?? [],
+    groupBudgets: payload.groupBudgets ?? [],
     auditTrail: payload.auditTrail ?? [],
   };
 }

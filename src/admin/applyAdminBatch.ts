@@ -10,6 +10,7 @@ import {
   type FinancialAccount,
   type FinancialEntry,
   type BalanceSheetSnapshot,
+  type GroupBudget,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
 
@@ -25,6 +26,7 @@ export interface CreateAdminSnapshotInput {
   readonly financialAccounts?: AdminDataSnapshot["financialAccounts"];
   readonly financialEntries?: AdminDataSnapshot["financialEntries"];
   readonly balanceSheetSnapshots?: AdminDataSnapshot["balanceSheetSnapshots"];
+  readonly groupBudgets?: AdminDataSnapshot["groupBudgets"];
   readonly updatedAt: string;
   readonly updatedBy: string;
 }
@@ -46,6 +48,7 @@ export function createAdminDataSnapshot(
     financialAccounts: clone(input.financialAccounts ?? []),
     financialEntries: clone(input.financialEntries ?? []),
     balanceSheetSnapshots: clone(input.balanceSheetSnapshots ?? []),
+    groupBudgets: clone(input.groupBudgets ?? []),
     auditTrail: [],
     updatedAt: input.updatedAt,
     updatedBy: input.updatedBy,
@@ -131,6 +134,7 @@ interface MutableAdminState {
   financialAccounts: FinancialAccount[];
   financialEntries: FinancialEntry[];
   balanceSheetSnapshots: BalanceSheetSnapshot[];
+  groupBudgets: GroupBudget[];
   auditTrail: AdminAuditEntry[];
   updatedAt: string;
   updatedBy: string;
@@ -203,6 +207,8 @@ function describeOperation(operation: AdminDataOperation): {
       };
     case "save_balance_sheet_snapshot":
       return { entityType: "balance_sheet_snapshot", entityKey: operation.value.id };
+    case "save_group_budget":
+      return { entityType: "group_budget", entityKey: operation.value.id };
   }
 }
 
@@ -265,6 +271,9 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
     case "save_balance_sheet_snapshot":
       state.balanceSheetSnapshots = upsertById(state.balanceSheetSnapshots, operation.value);
       return;
+    case "save_group_budget":
+      state.groupBudgets = upsertById(state.groupBudgets, operation.value);
+      return;
   }
 }
 
@@ -298,6 +307,8 @@ function findCurrent(
       );
     case "balance_sheet_snapshot":
       return state.balanceSheetSnapshots.find((item) => item.id === key);
+    case "group_budget":
+      return state.groupBudgets.find((item) => item.id === key);
   }
 }
 
@@ -325,6 +336,7 @@ function normalize(state: MutableAdminState): Omit<AdminDataSnapshot, "revision"
       )
       .map(clone),
     balanceSheetSnapshots: [...state.balanceSheetSnapshots].sort(byId).map(clone),
+    groupBudgets: [...state.groupBudgets].sort(byId).map(clone),
   };
 }
 

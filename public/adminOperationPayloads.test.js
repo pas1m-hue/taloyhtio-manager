@@ -10,9 +10,13 @@ import {
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
+  buildDeactivateGroupBudgetOperation,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
+  buildGroupBudgetId,
+  buildGroupBudgetImportOperations,
+  buildGroupBudgetVsActualViewModel,
   buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
@@ -32,10 +36,12 @@ import {
   deriveDataGapAssets,
   deriveEventYearOptions,
   groupScheduleByScenario,
+  deriveComparableGroupBudgetYears,
   interpretRevisionConflict,
   isCostEvidenceExpired,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
+  parseGroupBudgetPasteInput,
   parseSourceIds,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
@@ -2395,5 +2401,286 @@ describe("buildBudgetVsActualViewModel", () => {
     const vm = buildBudgetVsActualViewModel(accounts, [{ accountCode: "5300", year: 2025, actualAmount: -1 }], undefined);
     expect(vm.isEmpty).toBe(true);
     expect(vm.year).toBeNull();
+  });
+});
+
+describe("buildGroupBudgetId", () => {
+  it("is a deterministic kind::group::year composite", () => {
+    expect(buildGroupBudgetId("expense", "Sähkö", 2024)).toBe("expense::Sähkö::2024");
+    expect(buildGroupBudgetId("expense", "Sähkö", 2024)).toBe(buildGroupBudgetId("expense", "Sähkö", 2024));
+    expect(buildGroupBudgetId("income", "Sähkö", 2024)).not.toBe(buildGroupBudgetId("expense", "Sähkö", 2024));
+  });
+});
+
+describe("parseGroupBudgetPasteInput", () => {
+  const accounts = [
+    { accountCode: "5400", kind: "expense", group: "Sähkö" },
+    { accountCode: "3000", kind: "income", group: "Hoitovastikkeet" },
+  ];
+
+  it("parses valid rows and skips a recognized header row", () => {
+    const text = [
+      "kind\tryhmä\tvuosi\tbudjetti",
+      "kulu\tSähkö\t2024\t-10000",
+      "tulo\tHoitovastikkeet\t2024\t30000",
+    ].join("\n");
+    const parsed = parseGroupBudgetPasteInput(text, accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual([]);
+    expect(parsed.groupBudgets).toEqual([
+      { id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000 },
+      { id: "income::Hoitovastikkeet::2024", kind: "income", group: "Hoitovastikkeet", year: 2024, budgetAmount: 30000 },
+    ]);
+  });
+
+  it("rejects an unknown kind", () => {
+    const parsed = parseGroupBudgetPasteInput("meno\tSähkö\t2024\t-10000", accounts);
+    expect(parsed.groupBudgets).toEqual([]);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].message).toMatch(/tuntematon kind/);
+  });
+
+  it("rejects a missing group", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\t\t2024\t-10000", accounts);
+    expect(parsed.errors[0].message).toMatch(/ryhmä puuttuu/);
+  });
+
+  it("rejects a non-integer year", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\tSähkö\t2024.5\t-10000", accounts);
+    expect(parsed.errors[0].message).toMatch(/vuosi/);
+  });
+
+  it("rejects a missing budget", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\tSähkö\t2024\t", accounts);
+    expect(parsed.errors[0].message).toMatch(/budjetti puuttuu/);
+  });
+
+  it("rejects a non-numeric budget", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\tSähkö\t2024\tabc", accounts);
+    expect(parsed.errors[0].message).toMatch(/ei ole luku/);
+  });
+
+  it("rejects a duplicate kind+group+year", () => {
+    const text = "kulu\tSähkö\t2024\t-10000\nkulu\tSähkö\t2024\t-11000";
+    const parsed = parseGroupBudgetPasteInput(text, accounts);
+    expect(parsed.groupBudgets).toHaveLength(1);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].message).toMatch(/esiintyy jo aiemmalla rivillä/);
+  });
+
+  it("warns but does not block on a group name that matches no account (typo case)", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\tSähkö- ja vesi\t2024\t-10000", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupBudgets).toHaveLength(1);
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0].message).toMatch(/ei täsmää mihinkään tiliryhmään/);
+  });
+
+  it("rejects a row with the wrong column count", () => {
+    const parsed = parseGroupBudgetPasteInput("kulu\tSähkö\t2024", accounts);
+    expect(parsed.errors[0].message).toMatch(/saraketta/);
+  });
+});
+
+describe("buildGroupBudgetImportOperations / buildDeactivateGroupBudgetOperation", () => {
+  it("builds save_group_budget operations defaulting active: true", () => {
+    const parsed = { groupBudgets: [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000 }] };
+    const ops = buildGroupBudgetImportOperations(parsed, { sourceIds: ["src1"], explanation: "Tuonti" });
+    expect(ops).toEqual([{
+      type: "save_group_budget",
+      value: { id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true, sourceIds: ["src1"] },
+      sourceIds: ["src1"],
+      explanation: "Tuonti",
+    }]);
+  });
+
+  it("builds a save_group_budget operation that retires a row with active: false", () => {
+    const existing = { id: "expense::Sähkö- ja vesi::2024", kind: "expense", group: "Sähkö- ja vesi", year: 2024, budgetAmount: -10000, active: true, sourceIds: ["old"] };
+    const op = buildDeactivateGroupBudgetOperation(existing, { sourceIds: ["src2"], explanation: "Korjaus: kirjoitusvirhe ryhmän nimessä" });
+    expect(op.value.active).toBe(false);
+    expect(op.value.id).toBe("expense::Sähkö- ja vesi::2024");
+    expect(op.value.budgetAmount).toBe(-10000);
+    expect(op.sourceIds).toEqual(["src2"]);
+  });
+});
+
+const GROUP_BUDGET_ACCOUNTS = [
+  { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö" },
+  { accountCode: "5401", name: "Sähkösopimus", kind: "expense", group: "Sähkö" },
+  { accountCode: "5500", name: "Korjaus", kind: "expense", group: "Korjaukset" },
+  { accountCode: "3200", name: "Autopaikkavuokrat", kind: "income", group: "Vuokrat" },
+];
+
+describe("deriveComparableGroupBudgetYears", () => {
+  it("includes a year when a group has both actual and an active GroupBudget", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets)).toEqual([2024]);
+  });
+
+  it("includes a year when a group has both actual and a tili-summed budget (no GroupBudget)", () => {
+    const entries = [{ accountCode: "5400", year: 2025, actualAmount: -9000, budgetAmount: -10000 }];
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [])).toEqual([2025]);
+  });
+
+  it("excludes a year when only actual exists (no budget from either source)", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [])).toEqual([]);
+  });
+
+  it("excludes a year when only a GroupBudget exists with no actual anywhere in the group", () => {
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, [], groupBudgets)).toEqual([]);
+  });
+
+  it("ignores an inactive GroupBudget", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: false }];
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets)).toEqual([]);
+  });
+});
+
+describe("buildGroupBudgetVsActualViewModel", () => {
+  it("is empty with no accounts or no year selected", () => {
+    expect(buildGroupBudgetVsActualViewModel([], [], [], 2024).isEmpty).toBe(true);
+    expect(buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, [], [], undefined).isEmpty).toBe(true);
+  });
+
+  it("is empty when the selected year has no data from either source", () => {
+    const entries = [{ accountCode: "5400", year: 2023, actualAmount: -9000 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.year).toBe(2024);
+  });
+
+  it("prefers an active GroupBudget over the tili-summed budget and surfaces the overridden figure (budgetSource etusijasääntö)", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 },
+      { accountCode: "5401", year: 2024, actualAmount: -3000, budgetAmount: -4000 },
+    ];
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
+    expect(sahko.budget).toBe(-10000);
+    expect(sahko.budgetSource).toBe("group");
+    expect(sahko.overriddenAccountsBudget).toBe(-9000); // -5000 + -4000, the tili-summed budget that lost
+    expect(sahko.actual).toBe(-9000); // -6000 + -3000
+  });
+
+  it("falls back to the tili-summed budget when no active GroupBudget exists for the row", () => {
+    const entries = [{ accountCode: "5500", year: 2024, actualAmount: -1500, budgetAmount: -2000 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
+    expect(korjaukset.budget).toBe(-2000);
+    expect(korjaukset.budgetSource).toBe("accounts");
+    expect(korjaukset.overriddenAccountsBudget).toBeUndefined();
+  });
+
+  it("ignores an inactive GroupBudget and falls back to the tili-summed budget", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 }];
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: false }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
+    expect(sahko.budget).toBe(-5000);
+    expect(sahko.budgetSource).toBe("accounts");
+  });
+
+  it("includes a row budgeted with no actual (one-sided, handoff §3(b)) without treating the missing side as zero", () => {
+    const groupBudgets = [{ id: "expense::Korjaukset::2024", kind: "expense", group: "Korjaukset", year: 2024, budgetAmount: -5000, active: true }];
+    // Another group needs *some* actual data this year so the view isn't
+    // considered empty overall.
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -1000, budgetAmount: -1000 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
+    expect(korjaukset.budget).toBe(-5000);
+    expect(korjaukset.actual).toBeUndefined();
+    expect(korjaukset.diffAmount).toBeUndefined();
+    expect(korjaukset.diffPercent).toBeUndefined();
+    expect(korjaukset.favorable).toBeUndefined();
+  });
+
+  it("includes a row with actual but no budget from either source (one-sided, handoff §3(b))", () => {
+    const entries = [{ accountCode: "5500", year: 2024, actualAmount: -3200 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
+    expect(korjaukset.actual).toBe(-3200);
+    expect(korjaukset.budget).toBeUndefined();
+    expect(korjaukset.budgetSource).toBeUndefined();
+    expect(korjaukset.diffAmount).toBeUndefined();
+    expect(korjaukset.favorable).toBeUndefined();
+  });
+
+  it("sign convention: an expense group that came in under budget shows a positive diffAmount and favorable: true", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
+    const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
+    expect(sahko.diffAmount).toBe(1000); // -9000 - (-10000)
+    expect(sahko.favorable).toBe(true); // |−9000| <= |−10000|: alitus, edullinen
+  });
+
+  it("sign convention: an income group that came in under budget shows a negative diffAmount and favorable: false", () => {
+    const entries = [{ accountCode: "3200", year: 2024, actualAmount: 28000 }];
+    const groupBudgets = [{ id: "income::Vuokrat::2024", kind: "income", group: "Vuokrat", year: 2024, budgetAmount: 30000, active: true }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vuokrat = vm.sections.find((s) => s.kind === "income").groups.find((g) => g.group === "Vuokrat");
+    expect(vuokrat.diffAmount).toBe(-2000); // 28000 - 30000
+    expect(vuokrat.favorable).toBe(false); // tulot jäivät, epäedullinen
+  });
+
+  it("exposes the tili-level breakdown on rows for the detail panel", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
+    expect(sahko.rows).toEqual([{ accountCode: "5400", name: "Sähkölasku", budget: -5000, actual: -6000, diffAmount: -1000, diffPercent: 20 }]);
+  });
+
+  it("kpis are split by kind instead of summed together (mixing signed expense and income totals is meaningless)", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // expense
+      { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // income
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.expense).toEqual({ totalBudget: -10000, totalActual: -9000, netDiff: 1000 });
+    expect(vm.kpis.income).toEqual({ totalBudget: 30000, totalActual: 28000, netDiff: -2000 });
+  });
+
+  it("kpis.<kind> is null when that kind has no accounts at all (mirrors sections not having that kind)", () => {
+    const expenseOnlyAccounts = GROUP_BUDGET_ACCOUNTS.filter((a) => a.kind === "expense");
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }];
+    const vm = buildGroupBudgetVsActualViewModel(expenseOnlyAccounts, entries, [], 2024);
+    expect(vm.sections.some((s) => s.kind === "income")).toBe(false);
+    expect(vm.kpis.income).toBeNull();
+    expect(vm.kpis.expense).not.toBeNull();
+  });
+
+  it("avgAbsDeviationPercent averages |diffPercent| across both kinds, as a percentage not euros", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
+      { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // |diffPercent| = (2000/30000)*100 ≈ 6.6667
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo((10 + (2000 / 30000) * 100) / 2, 6);
+  });
+
+  it("avgAbsDeviationPercent excludes a row whose diffPercent is undefined (one-sided row, or budget of 0)", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
+      { accountCode: "5500", year: 2024, actualAmount: -3200 }, // one-sided: no budget, diffPercent undefined
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo(10, 6);
+  });
+});
+
+describe("group budget separation from account-level views (rajaus regression)", () => {
+  it("buildExpenseGroupViewModel totals are unaffected by the presence of groupBudgets", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 }];
+    // buildExpenseGroupViewModel takes no groupBudgets parameter at all — this
+    // test exists so a future signature change that accidentally wires it in
+    // would have to also break this call, not silently change the totals.
+    const vm = buildExpenseGroupViewModel(GROUP_BUDGET_ACCOUNTS, entries);
+    const sahko = vm.groups.find((g) => g.group === "Sähkö");
+    expect(sahko.actuals[2024]).toBe(-6000);
   });
 });

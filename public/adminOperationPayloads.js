@@ -2980,3 +2980,494 @@ export function buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot) {
     equityAndLiabilitiesChange: newer.equityAndLiabilitiesTotal - older.equityAndLiabilitiesTotal,
   };
 }
+
+/**
+ * Deterministic id for a GroupBudget: re-importing the same kind+group+year
+ * updates the existing row instead of creating a duplicate (feature/group-budget
+ * handoff §1). One consequence, addressed by `active` (see GroupBudget in
+ * src/domain/types.ts): a typo'd group name gets a *different* id from the
+ * correct one, so it can never be "fixed" by re-import — it has to be
+ * retired via `active: false` (buildDeactivateGroupBudgetOperation).
+ * @param {"income"|"expense"} kind
+ * @param {string} group
+ * @param {number} year
+ * @returns {string}
+ */
+export function buildGroupBudgetId(kind, group, year) {
+  return `${kind}::${group}::${year}`;
+}
+
+/**
+ * @typedef {Object} GroupBudgetValue
+ * @property {string} id
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {number} year
+ * @property {number} budgetAmount
+ * @property {boolean} active
+ * @property {string[]} sourceIds
+ * @property {string} [notes]
+ */
+
+const GROUP_BUDGET_PASTE_HEADER = ["kind", "ryhmä", "vuosi", "budjetti"];
+
+/**
+ * @typedef {Object} ParsedGroupBudget
+ * @property {string} id
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {number} year
+ * @property {number} budgetAmount
+ */
+
+/**
+ * @typedef {Object} ParsedGroupBudgetIssue
+ * @property {number} row
+ * @property {string} message
+ */
+
+/**
+ * Strict, pure parser for the "Liitä ryhmäbudjetti" paste format
+ * (feature/group-budget handoff §2): one row per (kind, group, year),
+ * tab-separated `kind, ryhmä, vuosi, budjetti`. Actuals are never entered
+ * here — they are always derived from FinancialEntry.actualAmount, summed
+ * per group by buildGroupBudgetVsActualViewModel, so this format only ever
+ * carries the approved budget figure.
+ *
+ * `accounts` (the currently loaded FinancialAccount list) is used only to
+ * *warn*, never to block: a ryhmä name that doesn't match any account's
+ * `group` for that kind produces a non-blocking warning, not an error — the
+ * row is still accepted, because import order is the user's choice (a group
+ * budget may legitimately arrive before its matching tilidata).
+ * @param {string} rawText
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown}>} [accounts]
+ * @returns {{ groupBudgets: ParsedGroupBudget[], errors: ParsedGroupBudgetIssue[], warnings: ParsedGroupBudgetIssue[] }}
+ */
+export function parseGroupBudgetPasteInput(rawText, accounts) {
+  const text = typeof rawText === "string" ? rawText : "";
+  const lines = text.split(/\r\n|\r|\n/);
+  const accountList = Array.isArray(accounts) ? accounts : [];
+
+  /** @type {Map<"income"|"expense", Set<string>>} */
+  const knownGroupsByKind = new Map();
+  for (const account of accountList) {
+    const kind = account.kind === "income" ? "income" : "expense";
+    const set = knownGroupsByKind.get(kind) ?? new Set();
+    set.add(String(account.group ?? ""));
+    knownGroupsByKind.set(kind, set);
+  }
+
+  let startIndex = 0;
+  const firstDataIndex = lines.findIndex((line) => line.trim() !== "");
+  if (firstDataIndex !== -1) {
+    const firstCols = lines[firstDataIndex].split("\t").map((cell) => cell.trim().toLowerCase());
+    const isHeader = firstCols.length === GROUP_BUDGET_PASTE_HEADER.length &&
+      firstCols.every((cell, index) => cell === GROUP_BUDGET_PASTE_HEADER[index]);
+    if (isHeader) startIndex = firstDataIndex + 1;
+  }
+
+  /** @type {ParsedGroupBudget[]} */
+  const groupBudgets = [];
+  /** @type {ParsedGroupBudgetIssue[]} */
+  const errors = [];
+  /** @type {ParsedGroupBudgetIssue[]} */
+  const warnings = [];
+  const seenIds = new Set();
+
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const row = i + 1;
+    const cols = line.split("\t");
+    if (cols.length !== GROUP_BUDGET_PASTE_HEADER.length) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: odotettiin ${GROUP_BUDGET_PASTE_HEADER.length} saraketta, löytyi ${cols.length}.`,
+      });
+      continue;
+    }
+    const [kindRaw, groupRaw, yearRaw, budgetRaw] = cols.map((cell) => cell.trim());
+
+    const kind = FINANCIAL_PASTE_KIND_MAP[kindRaw.toLowerCase()];
+    if (!kind) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: tuntematon kind "${kindRaw}" (odotettiin "kulu" tai "tulo").`,
+      });
+      continue;
+    }
+    if (groupRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: ryhmä puuttuu.` });
+      continue;
+    }
+    const year = Number(yearRaw);
+    if (!Number.isInteger(year)) {
+      errors.push({ row, message: `Rivi ${row}: vuosi "${yearRaw}" ei ole kokonaisluku.` });
+      continue;
+    }
+    const budget = parseFinancialAmountCell(budgetRaw);
+    if (!budget.present) {
+      errors.push({ row, message: `Rivi ${row}: budjetti puuttuu.` });
+      continue;
+    }
+    if (!budget.valid) {
+      errors.push({ row, message: `Rivi ${row}: budjetti "${budgetRaw}" ei ole luku.` });
+      continue;
+    }
+
+    const id = buildGroupBudgetId(kind, groupRaw, year);
+    if (seenIds.has(id)) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: ryhmä "${groupRaw}" (${kindRaw}) vuodelle ${year} esiintyy jo aiemmalla rivillä.`,
+      });
+      continue;
+    }
+    seenIds.add(id);
+
+    const knownGroups = knownGroupsByKind.get(kind);
+    if (!knownGroups || !knownGroups.has(groupRaw)) {
+      warnings.push({
+        row,
+        message: `Rivi ${row}: ryhmä "${groupRaw}" ei täsmää mihinkään tiliryhmään — toteuma jää tyhjäksi kunnes tilidata täsmää.`,
+      });
+    }
+
+    groupBudgets.push({ id, kind, group: groupRaw, year, budgetAmount: budget.value });
+  }
+
+  return { groupBudgets, errors, warnings };
+}
+
+/**
+ * Builds save_group_budget operations for one successfully parsed "Liitä
+ * ryhmäbudjetti" import. New rows default `active: true`.
+ * @param {{ groupBudgets: ParsedGroupBudget[] }} parsed
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ * @returns {Array<{ type: "save_group_budget", value: GroupBudgetValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildGroupBudgetImportOperations(parsed, opMeta) {
+  return parsed.groupBudgets.map((groupBudget) => ({
+    type: /** @type {const} */ ("save_group_budget"),
+    value: { ...groupBudget, active: true, sourceIds: opMeta.sourceIds },
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  }));
+}
+
+/**
+ * Builds the save_group_budget operation that retires one existing row by
+ * resaving it with `active: false` (feature/group-budget handoff §1
+ * clarification). This system has no delete operation — a typo'd group
+ * name's id can never be "fixed" by re-import, since the id is derived
+ * from the name itself (buildGroupBudgetId), so retiring the stale row is
+ * the only way to stop it from showing up forever with an empty actual.
+ * Mirrors FinancialAccount.active.
+ * @param {{ id: string, kind: "income"|"expense", group: string, year: number, budgetAmount: number, sourceIds: readonly string[], notes?: string }} groupBudget
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ * @returns {{ type: "save_group_budget", value: GroupBudgetValue, sourceIds: string[], explanation: string }}
+ */
+export function buildDeactivateGroupBudgetOperation(groupBudget, opMeta) {
+  return {
+    type: /** @type {const} */ ("save_group_budget"),
+    value: { ...groupBudget, active: false, sourceIds: opMeta.sourceIds },
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  };
+}
+
+/**
+ * Years for which at least one account group has both an actual (derived
+ * from FinancialEntry.actualAmount) and a budget — either an active
+ * GroupBudget or, absent that, a tili-summed FinancialEntry.budgetAmount —
+ * for the same year (feature/group-budget handoff §3(a), the year-selection
+ * half of "vuosi mukaan vain jos molemmat"; §3(b), the row-visibility half,
+ * is handled separately by buildGroupBudgetVsActualViewModel including
+ * one-sided rows rather than hiding them).
+ * @param {ReadonlyArray<{accountCode?: unknown, group?: unknown, kind?: unknown}>} [accounts]
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown}>} [entries]
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown, year?: unknown, active?: unknown}>} [groupBudgets]
+ * @returns {number[]}
+ */
+export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets) {
+  const accountList = Array.isArray(accounts) ? accounts : [];
+  const entryList = Array.isArray(entries) ? entries : [];
+  const groupBudgetList = Array.isArray(groupBudgets) ? groupBudgets : [];
+  const accountsByCode = new Map(accountList.map((a) => [String(a.accountCode ?? ""), a]));
+
+  /** @type {Map<string, Set<number>>} */
+  const actualYearsByGroup = new Map();
+  /** @type {Map<string, Set<number>>} */
+  const accountsBudgetYearsByGroup = new Map();
+  for (const entry of entryList) {
+    const account = accountsByCode.get(String(entry.accountCode ?? ""));
+    if (!account) continue;
+    const kind = account.kind === "income" ? "income" : "expense";
+    const key = `${kind}::${String(account.group ?? "")}`;
+    const year = Number(entry.year);
+    if (!Number.isFinite(year)) continue;
+    if (entry.actualAmount !== undefined) {
+      const set = actualYearsByGroup.get(key) ?? new Set();
+      set.add(year);
+      actualYearsByGroup.set(key, set);
+    }
+    if (entry.budgetAmount !== undefined) {
+      const set = accountsBudgetYearsByGroup.get(key) ?? new Set();
+      set.add(year);
+      accountsBudgetYearsByGroup.set(key, set);
+    }
+  }
+
+  /** @type {Map<string, Set<number>>} */
+  const groupBudgetYearsByGroup = new Map();
+  for (const groupBudget of groupBudgetList) {
+    if (groupBudget.active === false) continue;
+    const kind = groupBudget.kind === "income" ? "income" : "expense";
+    const key = `${kind}::${String(groupBudget.group ?? "")}`;
+    const year = Number(groupBudget.year);
+    if (!Number.isFinite(year)) continue;
+    const set = groupBudgetYearsByGroup.get(key) ?? new Set();
+    set.add(year);
+    groupBudgetYearsByGroup.set(key, set);
+  }
+
+  const comparableYears = new Set();
+  const allGroupKeys = new Set([
+    ...actualYearsByGroup.keys(),
+    ...accountsBudgetYearsByGroup.keys(),
+    ...groupBudgetYearsByGroup.keys(),
+  ]);
+  for (const key of allGroupKeys) {
+    const actualYears = actualYearsByGroup.get(key) ?? new Set();
+    const budgetYears = new Set([
+      ...(accountsBudgetYearsByGroup.get(key) ?? []),
+      ...(groupBudgetYearsByGroup.get(key) ?? []),
+    ]);
+    for (const year of budgetYears) {
+      if (actualYears.has(year)) comparableYears.add(year);
+    }
+  }
+  return [...comparableYears].sort((a, b) => a - b);
+}
+
+/**
+ * @typedef {Object} GroupBudgetVsActualRow
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {number|undefined} budget
+ * @property {"group"|"accounts"|undefined} budgetSource Which source won (feature/group-budget handoff §1): an active GroupBudget always wins over a tili-summed budget when both exist for the row.
+ * @property {number|undefined} overriddenAccountsBudget The tili-summed budget that was *not* used, only set when budgetSource is "group" and a tili-summed figure also existed — surfaced so the precedence rule is visible in the UI, not hidden in the calculation.
+ * @property {number|undefined} actual
+ * @property {number|undefined} diffAmount
+ * @property {number|undefined} diffPercent
+ * @property {boolean|undefined} favorable
+ * @property {string} notes
+ * @property {Array<{ accountCode: string, name: string, budget: number|undefined, actual: number|undefined, diffAmount: number|undefined, diffPercent: number|undefined }>} rows Tili-level breakdown for the detail panel.
+ */
+
+/**
+ * Ryhmätason "Budjetti vs. toteuma" (feature/group-budget handoff §1). The
+ * group's actual is always derived from FinancialEntry.actualAmount, summed
+ * per (kind, group, year) from the accounts belonging to that group. The
+ * group's budget prefers an active GroupBudget for that (kind, group, year)
+ * — the yhtiökokous-approved figure — and falls back to the tili-level
+ * FinancialEntry.budgetAmount summed per group when no GroupBudget exists
+ * for that row. This is a per-row rule, not a per-year rule: the same year
+ * can show budgetSource "group" for one group and "accounts" for another.
+ * `budgetSource` (and `overriddenAccountsBudget` when applicable) is
+ * exposed on every row rather than folded into the number, per the
+ * handoff's explicit requirement that the precedence rule stays visible to
+ * the user, not hidden in the calculation.
+ *
+ * A row is included whenever the group has *either* a budget or an actual
+ * for the year — not only when both are present (handoff §3 clarification:
+ * "vuosi mukaan vain jos molemmat" is a year-selection rule — see
+ * deriveComparableGroupBudgetYears — not a row-visibility rule). The
+ * missing side stays `undefined` (renders "—" in the UI), and
+ * diffAmount/diffPercent/favorable are never computed against an implied
+ * zero.
+ *
+ * Sign convention and column semantics are identical to
+ * buildBudgetVsActualViewModel (kept as a separate function rather than
+ * modified in place, so its existing tests and tili-level semantics stay
+ * untouched): diffAmount = actual - budget; favorable uses |actual| vs
+ * |budget| for expenses (source data often keeps costs negative) and the
+ * raw sign for income.
+ * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown}>} [accounts]
+ * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
+ * @param {ReadonlyArray<{id?: unknown, kind?: unknown, group?: unknown, year?: unknown, budgetAmount?: unknown, active?: unknown}>} [groupBudgets]
+ * @param {number|string} [year]
+ * KPI totals are split by kind (income vs. expense): summing budget or
+ * actual euros across both would add figures of opposite dominant sign
+ * (e.g. -44 000 € of expense budget + 42 187 € of income budget), producing
+ * a number close to zero that means nothing (confirmed against real 2024/
+ * 2025 production data during review). `avgAbsDeviationPercent` stays a
+ * single combined figure across both kinds — unlike the euro totals, a
+ * percentage deviation is already scale- and sign-normalized, so averaging
+ * it across groups regardless of kind is meaningful and matches the source
+ * Excel's "Budjettitarkkuus" metric.
+ * @returns {{
+ *   isEmpty: boolean,
+ *   year: number|null,
+ *   sections: Array<{ kind: "income"|"expense", groups: GroupBudgetVsActualRow[] }>,
+ *   kpis: {
+ *     income: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
+ *     expense: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
+ *     avgAbsDeviationPercent: number|undefined,
+ *   } | null,
+ *   emptyMessage: string,
+ * }}
+ */
+export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudgets, year) {
+  const accountList = Array.isArray(accounts) ? accounts : [];
+  const entryList = Array.isArray(entries) ? entries : [];
+  const groupBudgetList = Array.isArray(groupBudgets) ? groupBudgets : [];
+  const accountsByCode = new Map(accountList.map((a) => [String(a.accountCode ?? ""), a]));
+
+  if (accountList.length === 0 || year === undefined || year === null || year === "") {
+    return { isEmpty: true, year: null, sections: [], kpis: null, emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE };
+  }
+  const selectedYear = Number(year);
+
+  /** @type {Map<string, { kind: "income"|"expense", group: string }>} */
+  const groupKeys = new Map();
+  for (const account of accountList) {
+    const kind = account.kind === "income" ? "income" : "expense";
+    const group = String(account.group ?? "");
+    groupKeys.set(`${kind}::${group}`, { kind, group });
+  }
+  const activeGroupBudgetsThisYear = groupBudgetList.filter((groupBudget) =>
+    groupBudget.active !== false && Number(groupBudget.year) === selectedYear
+  );
+  for (const groupBudget of activeGroupBudgetsThisYear) {
+    const kind = groupBudget.kind === "income" ? "income" : "expense";
+    const group = String(groupBudget.group ?? "");
+    groupKeys.set(`${kind}::${group}`, { kind, group });
+  }
+  const groupBudgetByKey = new Map(
+    activeGroupBudgetsThisYear.map((groupBudget) => [
+      `${groupBudget.kind === "income" ? "income" : "expense"}::${String(groupBudget.group ?? "")}`,
+      groupBudget,
+    ])
+  );
+
+  const yearEntries = entryList.filter((e) => Number(e.year) === selectedYear);
+
+  /** @type {Map<string, GroupBudgetVsActualRow>} */
+  const rowsByKey = new Map();
+  for (const { kind, group } of groupKeys.values()) {
+    const key = `${kind}::${group}`;
+    const codesInGroup = new Set(
+      accountList
+        .filter((a) => (a.kind === "income" ? "income" : "expense") === kind && String(a.group ?? "") === group)
+        .map((a) => String(a.accountCode ?? ""))
+    );
+    const entriesInGroup = yearEntries.filter((e) => codesInGroup.has(String(e.accountCode ?? "")));
+
+    const accountRows = entriesInGroup
+      .map((entry) => {
+        const account = accountsByCode.get(String(entry.accountCode ?? ""));
+        const budget = typeof entry.budgetAmount === "number" ? entry.budgetAmount : undefined;
+        const actual = typeof entry.actualAmount === "number" ? entry.actualAmount : undefined;
+        let diffAmount;
+        let diffPercent;
+        if (budget !== undefined && actual !== undefined) {
+          diffAmount = actual - budget;
+          diffPercent = budget !== 0 ? (diffAmount / budget) * 100 : undefined;
+        }
+        return {
+          accountCode: String(entry.accountCode ?? ""),
+          name: String(account?.name ?? ""),
+          budget,
+          actual,
+          diffAmount,
+          diffPercent,
+        };
+      })
+      .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+    const actualValues = accountRows.map((r) => r.actual).filter((v) => v !== undefined);
+    const actual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+    const accountsBudgetValues = accountRows.map((r) => r.budget).filter((v) => v !== undefined);
+    const accountsBudget = accountsBudgetValues.length > 0
+      ? accountsBudgetValues.reduce((s, v) => s + v, 0)
+      : undefined;
+
+    const groupBudget = groupBudgetByKey.get(key);
+    const budget = groupBudget !== undefined ? groupBudget.budgetAmount : accountsBudget;
+    const budgetSource = groupBudget !== undefined
+      ? "group"
+      : (accountsBudget !== undefined ? "accounts" : undefined);
+    const overriddenAccountsBudget = groupBudget !== undefined ? accountsBudget : undefined;
+
+    let diffAmount;
+    let diffPercent;
+    if (budget !== undefined && actual !== undefined) {
+      diffAmount = actual - budget;
+      diffPercent = budget !== 0 ? (diffAmount / budget) * 100 : undefined;
+    }
+    const favorable = diffAmount === undefined
+      ? undefined
+      : kind === "expense"
+        ? Math.abs(actual) <= Math.abs(budget)
+        : diffAmount >= 0;
+
+    const notes = [...new Set(entriesInGroup.map((e) => toTrimmed(e.notes)).filter((n) => n !== ""))].join("; ");
+
+    rowsByKey.set(key, {
+      kind,
+      group,
+      budget,
+      budgetSource,
+      overriddenAccountsBudget,
+      actual,
+      diffAmount,
+      diffPercent,
+      favorable,
+      notes,
+      rows: accountRows,
+    });
+  }
+
+  const allRows = [...rowsByKey.values()];
+  const hasAnyData = allRows.some((r) => r.budget !== undefined || r.actual !== undefined);
+  if (!hasAnyData) {
+    return { isEmpty: true, year: selectedYear, sections: [], kpis: null, emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE };
+  }
+
+  const sections = (/** @type {Array<"income"|"expense">} */ (["income", "expense"]))
+    .filter((kind) => allRows.some((r) => r.kind === kind))
+    .map((kind) => ({
+      kind,
+      groups: allRows.filter((r) => r.kind === kind).sort((a, b) => a.group.localeCompare(b.group)),
+    }));
+
+  /** @param {"income"|"expense"} kind */
+  function kpisForKind(kind) {
+    const rows = allRows.filter((r) => r.kind === kind);
+    if (rows.length === 0) return null;
+    const budgetValues = rows.map((r) => r.budget).filter((v) => v !== undefined);
+    const actualValues = rows.map((r) => r.actual).filter((v) => v !== undefined);
+    const totalBudget = budgetValues.length > 0 ? budgetValues.reduce((s, v) => s + v, 0) : undefined;
+    const totalActual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+    const netDiff = totalBudget !== undefined && totalActual !== undefined ? totalActual - totalBudget : undefined;
+    return { totalBudget, totalActual, netDiff };
+  }
+
+  const allDiffPercents = allRows.map((r) => r.diffPercent).filter((v) => v !== undefined);
+  const avgAbsDeviationPercent = allDiffPercents.length > 0
+    ? allDiffPercents.reduce((s, v) => s + Math.abs(v), 0) / allDiffPercents.length
+    : undefined;
+
+  return {
+    isEmpty: false,
+    year: selectedYear,
+    sections,
+    kpis: {
+      income: kpisForKind("income"),
+      expense: kpisForKind("expense"),
+      avgAbsDeviationPercent,
+    },
+    emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+  };
+}
