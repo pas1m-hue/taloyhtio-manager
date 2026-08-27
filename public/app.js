@@ -212,7 +212,13 @@ function wireStaticControls() {
     state.selectedFiscalYear = Number(event.target.value);
     renderOverview();
   });
-  $("#detail-panel-close").addEventListener("click", closeDetailPanel);
+  $("#detail-panel-close").addEventListener("click", () => closeDetailPanel({ restoreFocus: true }));
+  $("#detail-panel").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeDetailPanel({ restoreFocus: true });
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#detail-panel").hidden) closeDetailPanel({ restoreFocus: true });
+  });
   $("#finance-import-form").addEventListener("submit", submitFinanceImport);
   $("#finance-import-text").addEventListener("input", updateFinanceImportPreview);
   $("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual);
@@ -868,13 +874,27 @@ function renderAssetDetail() {
   $("#detail-edit-asset").addEventListener("click", () => openAssetEditor("edit", asset.id));
 }
 
-function openDetailPanel() { $("#detail-panel").hidden = false; }
-function closeDetailPanel() {
+/** Element focused just before the detail modal opened, for restoring focus on user-initiated close. */
+let detailPanelOpenerElement = null;
+
+function openDetailPanel() {
+  const panel = $("#detail-panel");
+  // Guard against overwriting the saved opener on a re-render while already open
+  // (repeated openDetailPanel() calls should not clobber it with an element inside the modal).
+  if (panel.hidden) detailPanelOpenerElement = document.activeElement;
+  panel.hidden = false;
+  $(".detail-modal-panel").focus();
+}
+function closeDetailPanel({ restoreFocus = false } = {}) {
   $("#detail-panel").hidden = true;
   state.selection = null;
   for (const el of $$(".asset-card.is-selected, #observations-list tr.is-selected, #cost-evidence-list tr.is-selected, #events-list tr.is-selected, #finance-income-body tr.is-selected, #finance-costs-group-body tr.is-selected, #finance-budget-body tr.is-selected")) {
     el.classList.remove("is-selected");
   }
+  if (restoreFocus && detailPanelOpenerElement && document.contains(detailPanelOpenerElement)) {
+    detailPanelOpenerElement.focus();
+  }
+  detailPanelOpenerElement = null;
 }
 
 // Mirrors sourceField into opField as the user types, unless the user has typed into opField directly.
