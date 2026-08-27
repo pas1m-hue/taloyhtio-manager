@@ -5,11 +5,13 @@ import {
   buildBalanceComparisonViewModel,
   buildBalanceSheetImportOperation,
   buildBalanceSheetViewModel,
-  buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
+  buildDeactivateGroupBudgetOperation,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
+  buildGroupBudgetImportOperations,
+  buildGroupBudgetVsActualViewModel,
   buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
@@ -25,7 +27,7 @@ import {
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
   countObservationsWithoutEvent,
-  deriveComparableYears,
+  deriveComparableGroupBudgetYears,
   deriveDataGapAssets,
   deriveEventYearOptions,
   EVENT_STATUSES,
@@ -35,6 +37,7 @@ import {
   isCostEvidenceExpired,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
+  parseGroupBudgetPasteInput,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   validateOperationMeta,
@@ -43,7 +46,7 @@ import {
 const KNOWN_VIEWS = new Set([
   "overview", "company", "assets", "observations", "events", "cost-evidence",
   "finance-summary", "finance-import", "finance-income", "finance-costs-group",
-  "finance-costs-account", "finance-budget", "balance-import", "finance-position",
+  "finance-costs-account", "group-budget-import", "finance-budget", "balance-import", "finance-position",
   "scenarios", "cashpath", "required-collection", "publish", "developer",
 ]);
 
@@ -123,6 +126,7 @@ const state = {
   financeImportParsed: null,
   /** Last parseBalanceSheetPasteInput() result for the balance-import form, or null before any input. */
   balanceImportParsed: null,
+  groupBudgetImportParsed: null,
 };
 
 function selectionId(view) {
@@ -141,7 +145,7 @@ function selectionStillExists(selection, model) {
   if (selection.view === "finance-budget") {
     const year = $("#finance-budget-filter-year")?.value;
     if (!year) return false;
-    const vm = buildBudgetVsActualViewModel(model.financialAccounts, model.financialEntries, year);
+    const vm = buildGroupBudgetVsActualViewModel(model.financialAccounts, model.financialEntries, model.groupBudgets, year);
     return vm.sections.some((section) =>
       section.groups.some((g) => `${section.kind}::${g.group}` === selection.id));
   }
@@ -222,6 +226,8 @@ function wireStaticControls() {
   $("#finance-import-form").addEventListener("submit", submitFinanceImport);
   $("#finance-import-text").addEventListener("input", updateFinanceImportPreview);
   $("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual);
+  $("#group-budget-import-form").addEventListener("submit", submitGroupBudgetImport);
+  $("#group-budget-import-text").addEventListener("input", updateGroupBudgetImportPreview);
   $("#balance-import-form").addEventListener("submit", submitBalanceImport);
   $("#balance-import-text").addEventListener("input", updateBalanceImportPreview);
   $("#balance-import-id").addEventListener("input", updateBalanceImportPreview);
@@ -586,6 +592,7 @@ function renderWorkspace() {
   renderIncome();
   renderExpenseGroups();
   renderAccountCosts();
+  renderGroupBudgetList();
   renderBudgetVsActual();
   renderBalancePosition();
   renderScenarios();
@@ -2167,9 +2174,9 @@ function renderExpenseGroupDetail() {
 
 /** -------- Budjetti vs. toteuma (spec §6.4) -------- */
 
-function populateFinanceBudgetYearFilter(entries) {
+function populateFinanceBudgetYearFilter(accounts, entries, groupBudgets) {
   const select = $("#finance-budget-filter-year");
-  const years = deriveComparableYears(entries);
+  const years = deriveComparableGroupBudgetYears(accounts, entries, groupBudgets);
   const current = select.value;
   select.innerHTML = `<option value="">Valitse vuosi</option>` +
     years.map((year) => `<option value="${year}">${year}</option>`).join("");
@@ -2182,18 +2189,36 @@ function populateFinanceBudgetYearFilter(entries) {
 }
 
 const FINANCE_SECTION_LABELS = { income: "Tulot", expense: "Kulut" };
+const BUDGET_SOURCE_LABELS = { group: "Ryhmäbudjetti", accounts: "Tileistä summattu" };
 
-/** Builds the current `buildBudgetVsActualViewModel` result for the selected year filter, or null if none is selected. */
+function favorableLabel(favorable) {
+  if (favorable === undefined) return "";
+  return favorable ? `<span class="ok">Suotuisa</span>` : `<span class="warning">Epäsuotuisa</span>`;
+}
+
+/**
+ * Builds the current `buildGroupBudgetVsActualViewModel` result for the
+ * selected year filter, or null if none is selected. This view is
+ * ryhmätasoinen (feature/group-budget handoff §1): the group's budget
+ * prefers an active GroupBudget over the tili-summed FinancialEntry
+ * figure, with `budgetSource` shown per row so the precedence rule stays
+ * visible rather than hidden in the calculation.
+ */
 function currentBudgetVsActualViewModel() {
   if (!state.admin) return null;
   const year = $("#finance-budget-filter-year").value;
   if (year === "") return null;
-  return buildBudgetVsActualViewModel(state.admin.financialAccounts, state.admin.financialEntries, year);
+  return buildGroupBudgetVsActualViewModel(
+    state.admin.financialAccounts,
+    state.admin.financialEntries,
+    state.admin.groupBudgets,
+    year,
+  );
 }
 
 function renderBudgetVsActual() {
   if (!state.admin) return;
-  populateFinanceBudgetYearFilter(state.admin.financialEntries);
+  populateFinanceBudgetYearFilter(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupBudgets);
   const vm = currentBudgetVsActualViewModel();
   const kpiHost = $("#finance-budget-kpis");
   const host = $("#finance-budget-body");
@@ -2221,20 +2246,26 @@ function renderBudgetVsActual() {
       const favorableClass = group.favorable === false ? " warning" : "";
       const groupKey = `${section.kind}::${group.group}`;
       const rowClass = `${groupKey === selected ? "is-selected" : ""}${favorableClass}`.trim();
+      const overrideNote = group.budgetSource === "group" && group.overriddenAccountsBudget !== undefined
+        ? `Ohitettu tilisumma: ${money(group.overriddenAccountsBudget)}`
+        : "";
+      const notesText = [group.notes, overrideNote].filter((n) => n !== "").join(" · ");
       return `<tr class="${rowClass}" data-group-key="${escapeHtml(groupKey)}">
         <td>${escapeHtml(group.group)}</td>
         <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
+        <td>${escapeHtml(BUDGET_SOURCE_LABELS[group.budgetSource] ?? "—")}</td>
         <td>${group.actual === undefined ? "—" : money(group.actual)}</td>
         <td>${group.diffAmount === undefined ? "—" : money(group.diffAmount)}</td>
         <td>${group.diffPercent === undefined ? "—" : percent(group.diffPercent)}</td>
-        <td>${escapeHtml(group.notes || "—")}</td>
+        <td>${favorableLabel(group.favorable)}</td>
+        <td>${notesText === "" ? "—" : escapeHtml(notesText)}</td>
         <td><button type="button" class="secondary row-select">Näytä</button></td>
       </tr>`;
     }).join("");
     return `<section class="card">
       <h3>${escapeHtml(FINANCE_SECTION_LABELS[section.kind] ?? section.kind)}</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Huomio</th><th></th></tr></thead>
+        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Budjetin lähde</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Tulkinta</th><th>Huomio</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
     </section>`;
@@ -2261,13 +2292,155 @@ function renderBudgetVsActualDetail() {
     <td>${row.diffAmount === undefined ? "—" : money(row.diffAmount)}</td>
     <td>${row.diffPercent === undefined ? "—" : percent(row.diffPercent)}</td>
   </tr>`).join("");
+  const sourceNote = group.budgetSource === "group"
+    ? `<p class="muted">Ryhmän budjetti (${money(group.budget)}) tulee ryhmäbudjetista, ei tilien budjettisummasta.` +
+      (group.overriddenAccountsBudget === undefined ? "" : ` Tileistä summattu budjetti olisi ollut ${money(group.overriddenAccountsBudget)} — ohitettu.`) +
+      `</p>`
+    : "";
   $("#detail-panel-title").textContent = group.group;
   $("#detail-panel-body").innerHTML = `
+    ${sourceNote}
     <div class="table-wrap"><table>
       <thead><tr><th>Tili</th><th>Nimi</th><th>Budjetti</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   `;
+}
+
+/* -------- Group budget import ("Liitä ryhmäbudjetti", feature/group-budget handoff §2) -------- */
+
+function updateGroupBudgetImportPreview() {
+  const text = $("#group-budget-import-text").value;
+  const host = $("#group-budget-import-preview");
+  if (text.trim() === "") {
+    host.innerHTML = "";
+    state.groupBudgetImportParsed = null;
+    $("#group-budget-import-submit").disabled = true;
+    return;
+  }
+  const accounts = state.admin ? state.admin.financialAccounts : [];
+  const parsed = parseGroupBudgetPasteInput(text, accounts);
+  state.groupBudgetImportParsed = parsed;
+  const summary = `${parsed.groupBudgets.length} ryhmäbudjettiriviä tunnistettu.`;
+  const blocks = [];
+  blocks.push(parsed.errors.length > 0
+    ? stateBlock({
+      kind: "error",
+      title: summary,
+      body: `${parsed.errors.length} virhettä. Tallennus on estetty, kunnes virheet on korjattu.`,
+      items: parsed.errors.map((error) => error.message),
+    })
+    : `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p></article>`);
+  if (parsed.warnings.length > 0) {
+    blocks.push(`<article class="card"><p class="warning">${parsed.warnings.length} varoitus(ta) ryhmänimen täsmäyksestä tilidataan (rivi hyväksytään silti):</p>` +
+      `<ul>${parsed.warnings.map((warning) => `<li>${escapeHtml(warning.message)}</li>`).join("")}</ul></article>`);
+  }
+  host.innerHTML = blocks.join("");
+  $("#group-budget-import-submit").disabled = parsed.groupBudgets.length === 0 || parsed.errors.length > 0;
+}
+
+async function submitGroupBudgetImport(event) {
+  event.preventDefault();
+  clearFieldErrors("#group-budget-import-form");
+  const parsed = state.groupBudgetImportParsed;
+  if (!parsed || parsed.errors.length > 0 || parsed.groupBudgets.length === 0) {
+    setFeedback("#group-budget-import-feedback", "Korjaa virheet ennen tallennusta.", "error");
+    return;
+  }
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue("group-budget-import-source-ids"),
+    explanation: fieldValue("group-budget-import-explanation"),
+  });
+  if (!meta.ok) {
+    applyFieldErrors("#group-budget-import-form", {
+      sourceIds: "group-budget-import-source-ids",
+      explanation: "group-budget-import-explanation",
+    }, meta.errors);
+    setFeedback("#group-budget-import-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const operations = buildGroupBudgetImportOperations(parsed, meta.value);
+  const sent = await sendAdminOperations(operations, {
+    successMessage: `Tuotu ${parsed.groupBudgets.length} ryhmäbudjettiriviä.`,
+  });
+  if (sent.ok) {
+    setFeedback("#group-budget-import-feedback", "Tallennettu.", "ok");
+    $("#group-budget-import-text").value = "";
+    updateGroupBudgetImportPreview();
+    renderGroupBudgetList();
+    renderBudgetVsActual();
+  } else if (sent.conflict) {
+    setFeedback("#group-budget-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/**
+ * Lists every GroupBudget row (active and retired) so a typo'd group name —
+ * whose id can never be corrected by re-import, since the id is derived
+ * from the name itself — can be retired via "Poista käytöstä" (handoff §1
+ * clarification). Reuses the import form's own sourceIds/explanation
+ * fields for the deactivate operation's metadata rather than a separate
+ * dialog, since it's the same kind of change to the same entity.
+ */
+function renderGroupBudgetList() {
+  if (!state.admin) return;
+  const host = $("#group-budget-list");
+  const groupBudgets = state.admin.groupBudgets ?? [];
+  if (groupBudgets.length === 0) {
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: "Ei vielä ryhmäbudjetteja",
+      body: "Liitä ryhmäbudjettidata yllä olevalla lomakkeella.",
+    });
+    return;
+  }
+  const sorted = [...groupBudgets].sort((a, b) => (a.year === b.year ? a.group.localeCompare(b.group) : b.year - a.year));
+  const rows = sorted.map((groupBudget) => `<tr class="${groupBudget.active ? "" : "is-gap"}">
+    <td>${escapeHtml(groupBudget.kind === "income" ? "Tulo" : "Kulu")}</td>
+    <td>${escapeHtml(groupBudget.group)}</td>
+    <td>${groupBudget.year}</td>
+    <td>${money(groupBudget.budgetAmount)}</td>
+    <td>${groupBudget.active ? "Aktiivinen" : "Poistettu käytöstä"}</td>
+    <td>${groupBudget.active
+      ? `<button type="button" class="secondary deactivate-group-budget" data-id="${escapeHtml(groupBudget.id)}">Poista käytöstä</button>`
+      : "—"}</td>
+  </tr>`).join("");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Kind</th><th>Ryhmä</th><th>Vuosi</th><th>Budjetti</th><th>Tila</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  for (const button of host.querySelectorAll(".deactivate-group-budget")) {
+    button.addEventListener("click", () => deactivateGroupBudget(button.dataset.id));
+  }
+}
+
+async function deactivateGroupBudget(id) {
+  const groupBudget = (state.admin.groupBudgets ?? []).find((item) => item.id === id);
+  if (!groupBudget) return;
+  clearFieldErrors("#group-budget-import-form");
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue("group-budget-import-source-ids"),
+    explanation: fieldValue("group-budget-import-explanation"),
+  });
+  if (!meta.ok) {
+    applyFieldErrors("#group-budget-import-form", {
+      sourceIds: "group-budget-import-source-ids",
+      explanation: "group-budget-import-explanation",
+    }, meta.errors);
+    setFeedback("#group-budget-import-feedback", "Täytä lähdetunnisteet ja selitys ennen poistoa käytöstä.", "error");
+    return;
+  }
+  const operation = buildDeactivateGroupBudgetOperation(groupBudget, meta.value);
+  const sent = await sendAdminOperations([operation], {
+    successMessage: `Ryhmäbudjetti ${groupBudget.group} (${groupBudget.year}) poistettu käytöstä.`,
+  });
+  if (sent.ok) {
+    setFeedback("#group-budget-import-feedback", "Tallennettu.", "ok");
+    renderGroupBudgetList();
+    renderBudgetVsActual();
+  } else if (sent.conflict) {
+    setFeedback("#group-budget-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
 }
 
 /* -------- Finance import ("Liitä tilikohtainen data") -------- */

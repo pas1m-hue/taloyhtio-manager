@@ -62,6 +62,7 @@
             <li><a class="nav-link" href="#/finance-income" data-view="finance-income">Tulot</a></li>
             <li><a class="nav-link" href="#/finance-costs-group" data-view="finance-costs-group">Kulut ryhmittäin</a></li>
             <li><a class="nav-link" href="#/finance-costs-account" data-view="finance-costs-account">Kulut tileittäin</a></li>
+            <li><a class="nav-link" href="#/group-budget-import" data-view="group-budget-import">Liitä ryhmäbudjetti</a></li>
             <li><a class="nav-link" href="#/finance-budget" data-view="finance-budget">Budjetti vs. toteuma</a></li>
             <li><a class="nav-link" href="#/balance-import" data-view="balance-import">Liitä tasedata</a></li>
             <li><a class="nav-link" href="#/finance-position" data-view="finance-position">Taloudellinen asema</a></li>
@@ -331,6 +332,38 @@
           <section class="view" data-view="finance-costs-account" aria-labelledby="finance-costs-account-title" hidden>
             <header class="view-head"><h2 id="finance-costs-account-title">Talous · Kulut tileittäin</h2></header>
             <div id="finance-costs-account-body"></div>
+          </section>
+          <section class="view" data-view="group-budget-import" aria-labelledby="group-budget-import-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="group-budget-import-title">Talous · Liitä ryhmäbudjetti</h2>
+                <p class="view-lead muted">Liitä tab-erotellut rivit muodossa kind, ryhmä, vuosi, budjetti. kind on "kulu" tai "tulo". Toteuma ei tule tästä — se johdetaan tilikohtaisesta datasta. Ryhmän nimen on täsmättävä tilidatan ryhmänimeen jotta toteuma yhdistyy; täsmäämätön nimi hyväksytään mutta merkitään varoituksella. Otsikkorivi tunnistetaan ja ohitetaan automaattisesti.</p>
+              </div>
+            </header>
+            <form id="group-budget-import-form" class="card form-card wide-card" novalidate>
+              <label for="group-budget-import-text">Liitettävä data
+                <textarea id="group-budget-import-text" rows="12" spellcheck="false" placeholder="kind&#9;ryhmä&#9;vuosi&#9;budjetti"></textarea>
+              </label>
+              <fieldset class="form-grid">
+                <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+                <label for="group-budget-import-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                  <input id="group-budget-import-source-ids" required aria-describedby="group-budget-import-source-ids-error" autocomplete="off">
+                  <span class="field-error" id="group-budget-import-source-ids-error"></span>
+                </label>
+                <label for="group-budget-import-explanation">Muutoksen selitys
+                  <input id="group-budget-import-explanation" required aria-describedby="group-budget-import-explanation-error" autocomplete="off">
+                  <span class="field-error" id="group-budget-import-explanation-error"></span>
+                </label>
+              </fieldset>
+              <div id="group-budget-import-preview"></div>
+              <p id="group-budget-import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+              <div class="button-row"><button id="group-budget-import-submit" type="submit" disabled>Tallenna tuonti</button></div>
+            </form>
+            <section class="card">
+              <h3>Nykyiset ryhmäbudjetit</h3>
+              <p class="muted">Väärin kirjoitettu ryhmänimi ei koskaan saa toteumaa eikä sitä voi korjata uudelleentuonnilla (nimi on osa rivin tunnistetta) — poista se käytöstä alla ja tuo oikea nimi uudelleen. Poisto käyttää yllä olevan lomakkeen lähdetunnisteita ja selitystä.</p>
+              <div id="group-budget-list"></div>
+            </section>
           </section>
           <section class="view" data-view="finance-budget" aria-labelledby="finance-budget-title" hidden>
             <header class="view-head">
