@@ -2670,8 +2670,8 @@ export function buildBalanceSheetImportOperation(parsed, opMeta) {
  * @typedef {Object} BalanceSheetSectionViewModel
  * @property {string} section One of BALANCE_SECTIONS.
  * @property {string} label Finnish section label.
- * @property {Array<{ key: string, name: string, amount: number, notes?: string }>} entries Positive amounts.
- * @property {number} sectionTotal Positive.
+ * @property {Array<{ key: string, name: string, amount: number, notes?: string }>} entries Sign preserved as stored — positive on real data, but a genuinely negative entry (e.g. an accrued loss) stays negative.
+ * @property {number} sectionTotal Sign preserved (see entries).
  */
 
 /**
@@ -2679,7 +2679,7 @@ export function buildBalanceSheetImportOperation(parsed, opMeta) {
  * @property {"assets"|"equity"|"liabilities"} key
  * @property {string} label VARAT / OMA PÄÄOMA / VELAT.
  * @property {BalanceSheetSectionViewModel[]} sections
- * @property {number} groupTotal Positive.
+ * @property {number} groupTotal Sign preserved (see BalanceSheetSectionViewModel.entries).
  */
 
 /**
@@ -2688,8 +2688,12 @@ export function buildBalanceSheetImportOperation(parsed, opMeta) {
  * snapshot's entries into all five BALANCE_SECTIONS (always rendered, even
  * empty, so the view's structure never depends on which sections happen to
  * have data), nested under the three top-level groups, with section and
- * top-level totals. All amounts are shown positive (`Math.abs`) regardless
- * of the stored sign, per the spec's display rule (§6.5).
+ * top-level totals. Amounts keep the sign they were stored with — the
+ * spec's display rule (§6.5, "summat esitetään positiivisina") describes
+ * the normal case where the source data has no sign quirks, not a
+ * Math.abs: a genuinely negative entry (e.g. an accrued loss in Kertyneet
+ * voittovarat) must stay negative, or section/group totals and everything
+ * built on them (reconciliation, ratios, comparison) come out wrong.
  * @param {{ id?: unknown, asOfDate?: unknown, entries?: ReadonlyArray<{ section?: unknown, key?: unknown, name?: unknown, amount?: unknown, notes?: unknown }> } | null | undefined} snapshot
  * @returns {{
  *   isEmpty: boolean,
@@ -2725,7 +2729,7 @@ export function buildBalanceSheetViewModel(snapshot) {
     const row = {
       key: String(entry.key ?? ""),
       name: String(entry.name ?? ""),
-      amount: Math.abs(Number(entry.amount ?? 0)),
+      amount: Number(entry.amount ?? 0),
     };
     if (typeof entry.notes === "string" && entry.notes.trim() !== "") row.notes = entry.notes;
     list.push(row);
@@ -2762,7 +2766,7 @@ const BALANCE_RECONCILIATION_TOLERANCE = 0.01;
 
 /**
  * Taseen täsmäytys (handoff vaihe-4B §3.2): VARAT − (OMA PÄÄOMA + VELAT).
- * Built on top of buildBalanceSheetViewModel's totals (already Math.abs'd),
+ * Built on top of buildBalanceSheetViewModel's totals (sign preserved),
  * so it reuses the same grouping rather than re-summing entries itself. A
  * 0.01 € tolerance absorbs the rounding cents that show up in real
  * tilinpäätös data.
@@ -2840,8 +2844,8 @@ export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
  * @typedef {Object} BalanceComparisonEntryViewModel
  * @property {string} key
  * @property {string} name
- * @property {number|null} newerAmount Positive, or null if only in olderSnapshot.
- * @property {number|null} olderAmount Positive, or null if only in newerSnapshot.
+ * @property {number|null} newerAmount Sign preserved, or null if only in olderSnapshot.
+ * @property {number|null} olderAmount Sign preserved, or null if only in newerSnapshot.
  * @property {number} change newerAmount − olderAmount (missing side treated as 0).
  */
 
