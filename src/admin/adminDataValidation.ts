@@ -19,6 +19,7 @@ import {
   type FinancialAccount,
   type FinancialEntry,
   type FinancialYear,
+  type GroupBudget,
   type HousingCompany,
   type LiquidityBaselineRecord,
   type Observation,
@@ -52,6 +53,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
     "financial entry",
   );
   uniqueBy(state.balanceSheetSnapshots, (item) => item.id, "balance sheet snapshot");
+  uniqueBy(state.groupBudgets, (item) => item.id, "group budget");
 
   const assets = new Map(state.assets.map((item) => [item.id, item]));
   const events = new Map(state.events.map((item) => [item.id, item]));
@@ -76,6 +78,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
     validateFinancialEntry(item, financialAccounts)
   );
   state.balanceSheetSnapshots.forEach(validateBalanceSheetSnapshot);
+  state.groupBudgets.forEach(validateGroupBudget);
 
   // projectEvents is the calculation boundary validator. Suggested events are
   // validated as approved copies here so manual drafts cannot retain broken
@@ -167,6 +170,15 @@ function validateBalanceSheetSnapshot(value: BalanceSheetSnapshot): void {
       );
     }
   });
+}
+
+function validateGroupBudget(value: GroupBudget): void {
+  if (!isNonEmpty(value.id) || !isNonEmpty(value.group) ||
+      !FINANCIAL_ACCOUNT_KINDS.includes(value.kind) ||
+      !Number.isInteger(value.year) || !Number.isFinite(value.budgetAmount) ||
+      typeof value.active !== "boolean" || !validSources(value.sourceIds)) {
+    throw invalid(`Group budget ${value.id || "<empty>"} is invalid`);
+  }
 }
 
 function validateLiquidityBaseline(value: LiquidityBaselineRecord): void {
