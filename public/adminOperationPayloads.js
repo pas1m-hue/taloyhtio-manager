@@ -3297,11 +3297,24 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
  * @param {ReadonlyArray<{id?: unknown, kind?: unknown, group?: unknown, year?: unknown, budgetAmount?: unknown, active?: unknown}>} [groupBudgets]
  * @param {number|string} [year]
+ * KPI totals are split by kind (income vs. expense): summing budget or
+ * actual euros across both would add figures of opposite dominant sign
+ * (e.g. -44 000 € of expense budget + 42 187 € of income budget), producing
+ * a number close to zero that means nothing (confirmed against real 2024/
+ * 2025 production data during review). `avgAbsDeviationPercent` stays a
+ * single combined figure across both kinds — unlike the euro totals, a
+ * percentage deviation is already scale- and sign-normalized, so averaging
+ * it across groups regardless of kind is meaningful and matches the source
+ * Excel's "Budjettitarkkuus" metric.
  * @returns {{
  *   isEmpty: boolean,
  *   year: number|null,
  *   sections: Array<{ kind: "income"|"expense", groups: GroupBudgetVsActualRow[] }>,
- *   kpis: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined, avgAbsDeviation: number|undefined } | null,
+ *   kpis: {
+ *     income: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
+ *     expense: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
+ *     avgAbsDeviationPercent: number|undefined,
+ *   } | null,
  *   emptyMessage: string,
  * }}
  */
@@ -3429,21 +3442,32 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
       groups: allRows.filter((r) => r.kind === kind).sort((a, b) => a.group.localeCompare(b.group)),
     }));
 
-  const totalBudgetValues = allRows.map((r) => r.budget).filter((v) => v !== undefined);
-  const totalActualValues = allRows.map((r) => r.actual).filter((v) => v !== undefined);
-  const totalBudget = totalBudgetValues.length > 0 ? totalBudgetValues.reduce((s, v) => s + v, 0) : undefined;
-  const totalActual = totalActualValues.length > 0 ? totalActualValues.reduce((s, v) => s + v, 0) : undefined;
-  const netDiff = totalBudget !== undefined && totalActual !== undefined ? totalActual - totalBudget : undefined;
-  const allDiffs = allRows.map((r) => r.diffAmount).filter((v) => v !== undefined);
-  const avgAbsDeviation = allDiffs.length > 0
-    ? allDiffs.reduce((s, v) => s + Math.abs(v), 0) / allDiffs.length
+  /** @param {"income"|"expense"} kind */
+  function kpisForKind(kind) {
+    const rows = allRows.filter((r) => r.kind === kind);
+    if (rows.length === 0) return null;
+    const budgetValues = rows.map((r) => r.budget).filter((v) => v !== undefined);
+    const actualValues = rows.map((r) => r.actual).filter((v) => v !== undefined);
+    const totalBudget = budgetValues.length > 0 ? budgetValues.reduce((s, v) => s + v, 0) : undefined;
+    const totalActual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+    const netDiff = totalBudget !== undefined && totalActual !== undefined ? totalActual - totalBudget : undefined;
+    return { totalBudget, totalActual, netDiff };
+  }
+
+  const allDiffPercents = allRows.map((r) => r.diffPercent).filter((v) => v !== undefined);
+  const avgAbsDeviationPercent = allDiffPercents.length > 0
+    ? allDiffPercents.reduce((s, v) => s + Math.abs(v), 0) / allDiffPercents.length
     : undefined;
 
   return {
     isEmpty: false,
     year: selectedYear,
     sections,
-    kpis: { totalBudget, totalActual, netDiff, avgAbsDeviation },
+    kpis: {
+      income: kpisForKind("income"),
+      expense: kpisForKind("expense"),
+      avgAbsDeviationPercent,
+    },
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
   };
 }

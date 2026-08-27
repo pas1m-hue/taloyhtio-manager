@@ -2634,6 +2634,43 @@ describe("buildGroupBudgetVsActualViewModel", () => {
     const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
     expect(sahko.rows).toEqual([{ accountCode: "5400", name: "Sähkölasku", budget: -5000, actual: -6000, diffAmount: -1000, diffPercent: 20 }]);
   });
+
+  it("kpis are split by kind instead of summed together (mixing signed expense and income totals is meaningless)", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // expense
+      { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // income
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.expense).toEqual({ totalBudget: -10000, totalActual: -9000, netDiff: 1000 });
+    expect(vm.kpis.income).toEqual({ totalBudget: 30000, totalActual: 28000, netDiff: -2000 });
+  });
+
+  it("kpis.<kind> is null when that kind has no accounts at all (mirrors sections not having that kind)", () => {
+    const expenseOnlyAccounts = GROUP_BUDGET_ACCOUNTS.filter((a) => a.kind === "expense");
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }];
+    const vm = buildGroupBudgetVsActualViewModel(expenseOnlyAccounts, entries, [], 2024);
+    expect(vm.sections.some((s) => s.kind === "income")).toBe(false);
+    expect(vm.kpis.income).toBeNull();
+    expect(vm.kpis.expense).not.toBeNull();
+  });
+
+  it("avgAbsDeviationPercent averages |diffPercent| across both kinds, as a percentage not euros", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
+      { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // |diffPercent| = (2000/30000)*100 ≈ 6.6667
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo((10 + (2000 / 30000) * 100) / 2, 6);
+  });
+
+  it("avgAbsDeviationPercent excludes a row whose diffPercent is undefined (one-sided row, or budget of 0)", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
+      { accountCode: "5500", year: 2024, actualAmount: -3200 }, // one-sided: no budget, diffPercent undefined
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo(10, 6);
+  });
 });
 
 describe("group budget separation from account-level views (rajaus regression)", () => {

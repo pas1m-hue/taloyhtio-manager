@@ -2191,11 +2191,6 @@ function populateFinanceBudgetYearFilter(accounts, entries, groupBudgets) {
 const FINANCE_SECTION_LABELS = { income: "Tulot", expense: "Kulut" };
 const BUDGET_SOURCE_LABELS = { group: "Ryhmäbudjetti", accounts: "Tileistä summattu" };
 
-function favorableLabel(favorable) {
-  if (favorable === undefined) return "";
-  return favorable ? `<span class="ok">Suotuisa</span>` : `<span class="warning">Epäsuotuisa</span>`;
-}
-
 /**
  * Builds the current `buildGroupBudgetVsActualViewModel` result for the
  * selected year filter, or null if none is selected. This view is
@@ -2234,14 +2229,19 @@ function renderBudgetVsActual() {
   }
 
   kpiHost.innerHTML = [
-    ["Kokonaisbudjetti", vm.kpis.totalBudget === undefined ? "—" : money(vm.kpis.totalBudget)],
-    ["Kokonaistoteuma", vm.kpis.totalActual === undefined ? "—" : money(vm.kpis.totalActual)],
-    ["Nettoerotus", vm.kpis.netDiff === undefined ? "—" : money(vm.kpis.netDiff)],
-    ["Keskim. abs. poikkeama", vm.kpis.avgAbsDeviation === undefined ? "—" : money(vm.kpis.avgAbsDeviation)],
+    ["Keskim. abs. poikkeama", vm.kpis.avgAbsDeviationPercent === undefined ? "—" : percent(vm.kpis.avgAbsDeviationPercent)],
   ].map(kpiCard).join("");
 
   const selected = selectionId("finance-budget");
   const sectionBlocks = vm.sections.map((section) => {
+    const sectionKpis = vm.kpis[section.kind];
+    const kpiRow = sectionKpis === null ? "" : `<div class="card-grid">
+      ${[
+        ["Budjetti", sectionKpis.totalBudget === undefined ? "—" : money(sectionKpis.totalBudget)],
+        ["Toteuma", sectionKpis.totalActual === undefined ? "—" : money(sectionKpis.totalActual)],
+        ["Nettoerotus", sectionKpis.netDiff === undefined ? "—" : money(sectionKpis.netDiff)],
+      ].map(kpiCard).join("")}
+    </div>`;
     const rows = section.groups.map((group) => {
       const favorableClass = group.favorable === false ? " warning" : "";
       const groupKey = `${section.kind}::${group.group}`;
@@ -2257,15 +2257,15 @@ function renderBudgetVsActual() {
         <td>${group.actual === undefined ? "—" : money(group.actual)}</td>
         <td>${group.diffAmount === undefined ? "—" : money(group.diffAmount)}</td>
         <td>${group.diffPercent === undefined ? "—" : percent(group.diffPercent)}</td>
-        <td>${favorableLabel(group.favorable)}</td>
         <td>${notesText === "" ? "—" : escapeHtml(notesText)}</td>
         <td><button type="button" class="secondary row-select">Näytä</button></td>
       </tr>`;
     }).join("");
     return `<section class="card">
       <h3>${escapeHtml(FINANCE_SECTION_LABELS[section.kind] ?? section.kind)}</h3>
+      ${kpiRow}
       <div class="table-wrap"><table>
-        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Budjetin lähde</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Tulkinta</th><th>Huomio</th><th></th></tr></thead>
+        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Budjetin lähde</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Huomio</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
     </section>`;
