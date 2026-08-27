@@ -1749,16 +1749,32 @@ describe("buildBalanceSheetViewModel", () => {
     expect(emptySection.sectionTotal).toBe(0);
   });
 
-  it("displays amounts as positive even when the stored sign is negative", () => {
+  it("preserves a genuinely negative entry's sign in its amount, section total, and group total", () => {
     const vm = buildBalanceSheetViewModel({
       id: "x",
       asOfDate: "2025-12-31",
-      entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: -50000 }],
+      entries: [{ section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: -4736.16 }],
     });
-    const liabilitiesGroup = vm.topGroups.find((g) => g.key === "liabilities");
-    expect(liabilitiesGroup.sections[0].entries[0].amount).toBe(50000);
-    expect(liabilitiesGroup.groupTotal).toBe(50000);
-    expect(vm.equityAndLiabilitiesTotal).toBe(50000);
+    const equityGroup = vm.topGroups.find((g) => g.key === "equity");
+    expect(equityGroup.sections.find((s) => s.section === "unrestricted_equity").entries[0].amount).toBe(-4736.16);
+    expect(equityGroup.groupTotal).toBe(-4736.16);
+    expect(vm.equityAndLiabilitiesTotal).toBe(-4736.16);
+  });
+
+  it("balances real 2024 tilinpäätös data (assets, equity with a negative accrued-loss entry, and liabilities)", () => {
+    const vm = buildBalanceSheetViewModel({
+      id: "balance_2024",
+      asOfDate: "2024-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1749678.88 - 5000 },
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 5000 },
+        { section: "restricted_equity", key: "osakepaaoma", name: "Osakepääoma", amount: 1751919.65 },
+        { section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: -4736.16 },
+        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2495.39 },
+      ],
+    });
+    expect(vm.assetsTotal).toBe(1749678.88);
+    expect(vm.equityAndLiabilitiesTotal).toBeCloseTo(1749678.88, 6);
   });
 });
 
@@ -1806,6 +1822,42 @@ describe("computeBalanceReconciliation", () => {
       ],
     });
     expect(result.difference).toBeCloseTo(0.005, 5);
+    expect(result.balances).toBe(true);
+  });
+
+  it("regression: real 2024 tilinpäätös balances even though Kertyneet voittovarat is negative (-4 736,16 €)", () => {
+    // Real 31.12.2024 data. Before the fix, Math.abs on the -4736.16 entry
+    // flipped it to +4736.16, inflating equity by 2x4736.16 = 9472.32 and
+    // making this reconciliation falsely report a mismatch of -9472.32 €.
+    const result = computeBalanceReconciliation({
+      id: "balance_2024",
+      asOfDate: "2024-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1744678.88 },
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 5000 },
+        { section: "restricted_equity", key: "osakepaaoma", name: "Osakepääoma", amount: 1751919.65 },
+        { section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: -4736.16 },
+        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2495.39 },
+      ],
+    });
+    expect(result.assets).toBeCloseTo(1749678.88, 6);
+    expect(result.equityPlusLiabilities).toBeCloseTo(1749678.88, 6);
+    expect(result.difference).toBeCloseTo(0, 6);
+    expect(result.balances).toBe(true);
+  });
+
+  it("still balances the real 2025 tilinpäätös (all-positive entries — no regression from the fix)", () => {
+    const result = computeBalanceReconciliation({
+      id: "balance_2025",
+      asOfDate: "2025-12-31",
+      entries: [
+        { section: "fixed_assets", key: "kiinteisto", name: "Kiinteistöt", amount: 1749852.62 },
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 5000 },
+        { section: "restricted_equity", key: "osakepaaoma", name: "Osakepääoma", amount: 1751919.65 },
+        { section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: 437.58 },
+        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2495.39 },
+      ],
+    });
     expect(result.balances).toBe(true);
   });
 });
@@ -1877,6 +1929,23 @@ describe("computeBalanceRatios", () => {
 
   it("computes interestBearingDebt as the whole liabilities total", () => {
     const result = computeBalanceRatios(snapshot, undefined);
+    expect(result.interestBearingDebt).toBe(500000);
+  });
+
+  it("keeps liquidity, monthsOfCash, and interestBearingDebt correct when an equity entry is negative", () => {
+    const snapshotWithNegativeEquity = {
+      id: "x",
+      asOfDate: "2024-12-31",
+      entries: [
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 60000 },
+        { section: "current_assets", key: "muut", name: "Muut saamiset", amount: 15000 },
+        { section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: -4736.16 },
+        { section: "liabilities", key: "lainat", name: "Lainat", amount: 500000 },
+      ],
+    };
+    const result = computeBalanceRatios(snapshotWithNegativeEquity, { trailing12mOperatingCosts: 120000 });
+    expect(result.liquidity).toBeCloseTo(75000 / 500000, 6);
+    expect(result.monthsOfCash).toBeCloseTo(60000 / 10000, 6);
     expect(result.interestBearingDebt).toBe(500000);
   });
 });
@@ -1962,7 +2031,7 @@ describe("buildBalanceComparisonViewModel", () => {
     expect(vm.assetsChange).toBe(vm.newer.assetsTotal - vm.older.assetsTotal);
   });
 
-  it("normalizes negative stored amounts to positive before comparing", () => {
+  it("preserves genuinely negative amounts (does not flip sign) when pairing entries", () => {
     const negNewer = {
       id: "x", asOfDate: "2025-12-31",
       entries: [{ section: "liabilities", key: "lainat", name: "Lainat", amount: -700000 }],
@@ -1973,9 +2042,27 @@ describe("buildBalanceComparisonViewModel", () => {
     };
     const vm = buildBalanceComparisonViewModel(negNewer, negOlder);
     const liabilities = vm.topGroups.find((g) => g.key === "liabilities").sections[0];
-    expect(liabilities.entries[0].newerAmount).toBe(700000);
-    expect(liabilities.entries[0].olderAmount).toBe(750000);
-    expect(liabilities.entries[0].change).toBe(-50000);
+    expect(liabilities.entries[0].newerAmount).toBe(-700000);
+    expect(liabilities.entries[0].olderAmount).toBe(-750000);
+    expect(liabilities.entries[0].change).toBe(50000);
+  });
+
+  it("regression: computes the change correctly across a sign flip (voittovarat -4736.16 -> +437.58)", () => {
+    const newer2025 = {
+      id: "balance_2025", asOfDate: "2025-12-31",
+      entries: [{ section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: 437.58 }],
+    };
+    const older2024 = {
+      id: "balance_2024", asOfDate: "2024-12-31",
+      entries: [{ section: "unrestricted_equity", key: "voittovarat", name: "Kertyneet voittovarat", amount: -4736.16 }],
+    };
+    const vm = buildBalanceComparisonViewModel(newer2025, older2024);
+    const voittovarat = vm.topGroups
+      .find((g) => g.key === "equity")
+      .sections.find((s) => s.section === "unrestricted_equity").entries[0];
+    expect(voittovarat.newerAmount).toBe(437.58);
+    expect(voittovarat.olderAmount).toBe(-4736.16);
+    expect(voittovarat.change).toBeCloseTo(5173.74, 6);
   });
 });
 

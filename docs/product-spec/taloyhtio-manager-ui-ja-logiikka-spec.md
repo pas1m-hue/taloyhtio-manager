@@ -266,7 +266,7 @@ Näytettävät kokonaisuudet:
 - kassa kuukausina hoitokuluja
 - korollinen vieras pääoma
 
-Taseen summat esitetään UI:ssa positiivisina, vaikka lähdejärjestelmän etumerkkikäytäntö poikkeaisi.
+Taseen erät ja summat näytetään UI:ssa todellisella etumerkillään, kuten tilinpäätöksessä. Tämä ei tarkoita itseisarvon ottamista: aidosti negatiivinen erä (esim. kertynyt tappio "Kertyneet voittovarat") näkyy miinuksena, koska etumerkki on siinä merkityksellistä tietoa. Sääntö "esitetään positiivisina" kuvaa normaalitapausta, jossa lähdedatassa ei ole etumerkkikummallisuuksia — ei ohjetta pakottaa kaikki erät positiivisiksi (`Math.abs`), sillä se vääristäisi täsmäytyksen ja tunnusluvut aidosti negatiivisilla erillä.
 
 ---
 
