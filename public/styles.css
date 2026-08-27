@@ -232,7 +232,7 @@ tbody tr.is-gap { background: #fdf3ea; }
 .detail-modal[hidden] { display: none; }
 .detail-modal-panel {
   flex: 0 0 auto;
-  width: min(1200px, calc(100vw - 3rem)); max-height: calc(100vh - 3rem);
+  width: min(92vw, 1800px); max-height: calc(100vh - 3rem);
   overflow-y: auto; overflow-x: hidden;
   background: var(--panel); border: 1px solid var(--line); border-radius: .7rem;
   box-shadow: 0 20px 60px rgba(0,0,0,.3);
@@ -240,7 +240,11 @@ tbody tr.is-gap { background: #fdf3ea; }
 }
 .detail-panel-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .8rem; }
 .detail-panel-head h2 { margin: 0; font-size: 1.15rem; }
-.detail-panel-body { display: grid; gap: 1rem; }
+/* grid-template-columns is required here: an undeclared single implicit
+   column sizes to content (auto), which leaves descendant width: 100%
+   (the table below) with no definite size to resolve against, so it
+   falls back to content width instead of actually filling the panel. */
+.detail-panel-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .detail-modal-panel .table-wrap { width: 100%; }
 .detail-modal-panel .table-wrap table { width: 100%; }
 .detail-group h4 { margin: 0 0 .4rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
