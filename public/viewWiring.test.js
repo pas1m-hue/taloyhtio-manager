@@ -94,7 +94,7 @@ describe("static id cross-check (index.html <-> app.js)", () => {
       "finance-import-feedback", "finance-import-submit",
       "finance-costs-account-body",
       "finance-income-body", "finance-costs-group-body",
-      "finance-budget-filter-year", "finance-budget-kpis", "finance-budget-body",
+      "finance-budget-filter-year", "finance-budget-body",
       "balance-import-form", "balance-import-id", "balance-import-as-of-date",
       "balance-import-text", "balance-import-source-ids", "balance-import-explanation",
       "balance-import-preview", "balance-import-feedback", "balance-import-submit",

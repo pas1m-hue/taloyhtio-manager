@@ -2641,8 +2641,8 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // income
     ];
     const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
-    expect(vm.kpis.expense).toEqual({ totalBudget: -10000, totalActual: -9000, netDiff: 1000 });
-    expect(vm.kpis.income).toEqual({ totalBudget: 30000, totalActual: 28000, netDiff: -2000 });
+    expect(vm.kpis.expense).toEqual({ totalBudget: -10000, totalActual: -9000, netDiff: 1000, avgAbsDeviationPercent: 10 });
+    expect(vm.kpis.income).toEqual({ totalBudget: 30000, totalActual: 28000, netDiff: -2000, avgAbsDeviationPercent: (2000 / 30000) * 100 });
   });
 
   it("kpis.<kind> is null when that kind has no accounts at all (mirrors sections not having that kind)", () => {
@@ -2654,22 +2654,49 @@ describe("buildGroupBudgetVsActualViewModel", () => {
     expect(vm.kpis.expense).not.toBeNull();
   });
 
-  it("avgAbsDeviationPercent averages |diffPercent| across both kinds, as a percentage not euros", () => {
+  it("avgAbsDeviationPercent is computed per kind, not once across both (an income group would dilute the expense figure)", () => {
+    // Shaped after the source Excel's Budjettitarkkuus sheet, which reports the
+    // metric for expenses separately: with one income group at a near-zero
+    // deviation, a single combined average understates how far expense
+    // budgeting actually missed. Figures are synthetic but chosen to land on
+    // the production 2025 pair (kulut 37,3 %, tulot 2,3 %) so the split stays
+    // legible; the real dataset lives in the user's data, not in this repo.
     const entries = [
-      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
-      { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // |diffPercent| = (2000/30000)*100 ≈ 6.6667
+      { accountCode: "5400", year: 2025, actualAmount: -14000, budgetAmount: -10000 }, // Sähkö: |diffPercent| = 40
+      { accountCode: "5500", year: 2025, actualAmount: -6730, budgetAmount: -5000 }, // Korjaukset: |diffPercent| = 34.6
+      { accountCode: "3200", year: 2025, actualAmount: 30690, budgetAmount: 30000 }, // Vuokrat: |diffPercent| = 2.3
     ];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
-    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo((10 + (2000 / 30000) * 100) / 2, 6);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2025);
+    expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(37.3, 6);
+    expect(vm.kpis.income.avgAbsDeviationPercent).toBeCloseTo(2.3, 6);
+    // and not the combined (40 + 34.6 + 2.3) / 3 the old top-level KPI showed
+    expect(vm.kpis.expense.avgAbsDeviationPercent).not.toBeCloseTo((40 + 34.6 + 2.3) / 3, 6);
   });
 
   it("avgAbsDeviationPercent excludes a row whose diffPercent is undefined (one-sided row, or budget of 0)", () => {
     const entries = [
-      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // |diffPercent| = 10
-      { accountCode: "5500", year: 2024, actualAmount: -3200 }, // one-sided: no budget, diffPercent undefined
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // Sähkö: |diffPercent| = 10
+      { accountCode: "5500", year: 2024, actualAmount: -3200 }, // Korjaukset, one-sided: no budget, diffPercent undefined
     ];
     const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
-    expect(vm.kpis.avgAbsDeviationPercent).toBeCloseTo(10, 6);
+    expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(10, 6);
+  });
+
+  it("avgAbsDeviationPercent is undefined (rendered \u2014, not 0 %) for a kind with rows but no computable deviation", () => {
+    const entries = [
+      { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 },
+      { accountCode: "3200", year: 2024, actualAmount: 28000 }, // income, one-sided only
+    ];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.income.avgAbsDeviationPercent).toBeUndefined();
+    expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(10, 6);
+  });
+
+  it("kpis has no top-level avgAbsDeviationPercent any more (it lives on each kind)", () => {
+    const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }];
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    expect(vm.kpis.avgAbsDeviationPercent).toBeUndefined();
+    expect(Object.keys(vm.kpis).sort()).toEqual(["expense", "income"]);
   });
 });
 
