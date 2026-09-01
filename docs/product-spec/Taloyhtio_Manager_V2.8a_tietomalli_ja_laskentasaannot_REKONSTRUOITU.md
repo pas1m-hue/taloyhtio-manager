@@ -49,6 +49,8 @@ Tuntematon kustannus ei muutu hiljaisesti nollaksi. Puuttuva summa käsitellää
 
 Admin-data on versionoitu `revision`-arvolla. Jokainen hyväksytty muutos kasvattaa revisionia. Audit trail kertoo, mitä entiteettiä muutettiin, kuka muutti, milloin ja millä lähdeviitteillä.
 
+Audit trail ei ole append-only-este poistolle. Entiteetin voi poistaa (`delete_entity`), ja poistosta jää oma audit-rivi — mutta poistettu rivi ei jää dataan. Sovellus ei ole taloyhtiön virallinen järjestelmä eikä julkaise virallista aineistoa, ja syöttäjiä on yksi, joten täysi jäljitettävyys ei ole sen arvoinen että virheellistä dataa ei saisi pois. Aiemman rivin historia säilyy audit trailissa; itse rivi ei.
+
 \---
 
 ## 3\. Keskeiset domain-tyypit
@@ -267,12 +269,12 @@ Audit-riviltä vaaditaan:
 * `revision` > 0 ja enintään snapshotin revision
 * `entityType`
 * `entityKey`
-* `operation`
+* `operation` — `create`, `update` tai `delete`
 * `actorId`
 * `occurredAt`
 * `sourceIds`
 * `explanation`
-* `after`
+* `after` — paitsi kun `operation` on `delete`, jolloin entiteettiä ei enää ole ja `before` kantaa poistetun arvon
 
 \---
 

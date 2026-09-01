@@ -3044,3 +3044,59 @@ describe("re-import value drops", () => {
     expect(detectBalanceImportValueDrops(parsed, [{ id: "Tase-2025", entries: [{ key: "cash" }] }])).toEqual([]);
   });
 });
+
+describe("views after a deletion (regression)", () => {
+  it("recomputes every finance view over the surviving rows, with no orphan references", () => {
+    const accounts = [
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "Hallintopalvelut", active: true },
+      { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö", active: true },
+      { accountCode: "3000", name: "Hoitovastikkeet", kind: "income", group: "Vastiketulot", active: true },
+    ];
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "company_1", name: "As Oy Testi", apartmentCount: 12 },
+      financialAccounts: accounts,
+      financialEntries: [
+        { accountCode: "5300", year: 2025, budgetAmount: -13000, actualAmount: -12800, sourceIds: ["tp_2025"] },
+        { accountCode: "5400", year: 2025, budgetAmount: -10000, actualAmount: -9000, sourceIds: ["tp_2025"] },
+        { accountCode: "3000", year: 2025, budgetAmount: 500000, actualAmount: 495000, sourceIds: ["tp_2025"] },
+      ],
+      groupBudgets: [
+        { id: "expense::Sähkö::2025", kind: "expense", group: "Sähkö", year: 2025, budgetAmount: -10000, active: true, sourceIds: ["rb_2025"] },
+      ],
+      updatedAt: "2026-09-01T09:00:00Z",
+      updatedBy: "admin:pasi",
+    });
+
+    const plan = planEntityDeletion(snapshot, { entityType: "financial_account", entityKey: "5400" });
+    const next = applyAdminBatch(snapshot, {
+      companyId: "company_1",
+      expectedRevision: snapshot.revision,
+      actorId: "admin:pasi",
+      occurredAt: "2026-09-01T10:00:00Z",
+      operations: buildDeletionOperations(plan, { explanation: "Väärä tili." }),
+    });
+
+    const accountCosts = buildAccountCostsViewModel(next.financialAccounts, next.financialEntries);
+    expect(accountCosts.groups.some((group) => group.group === "Sähkö")).toBe(false);
+    expect(accountCosts.totals["actual-2025"]).toBe(-12800);
+
+    const expenseGroups = buildExpenseGroupViewModel(next.financialAccounts, next.financialEntries);
+    expect(expenseGroups.groups.map((group) => group.group)).toEqual(["Hallintopalvelut"]);
+
+    const income = buildIncomeViewModel(next.financialAccounts, next.financialEntries);
+    expect(income.isEmpty).toBe(false);
+
+    // The group budget for the deleted account's group survives — it is an
+    // independent row — and the comparison still renders it, now without an
+    // actual, rather than crashing on the missing account.
+    const budget = buildGroupBudgetVsActualViewModel(
+      next.financialAccounts, next.financialEntries, next.groupBudgets, 2025,
+    );
+    const sahko = budget.sections
+      .flatMap((section) => section.groups)
+      .find((group) => group.group === "Sähkö");
+    expect(sahko?.budget).toBe(-10000);
+    expect(sahko?.actual).toBeUndefined();
+    expect(sahko?.diffPercent).toBeUndefined();
+  });
+});
