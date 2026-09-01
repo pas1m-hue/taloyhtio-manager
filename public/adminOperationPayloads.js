@@ -3477,3 +3477,323 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
   };
 }
+
+/* ------------------------------------------------------------------ delete */
+
+/**
+ * Finnish label per entity type, singular and partitive-plural, for the
+ * confirmation summary ("1 havainto", "2 havaintoa").
+ */
+const DELETE_ENTITY_LABELS = {
+  asset: ["rakennusosa", "rakennusosaa"],
+  observation: ["havainto", "havaintoa"],
+  building_event: ["korjaustapahtuma", "korjaustapahtumaa"],
+  cost_evidence: ["kustannusnäyttö", "kustannusnäyttöä"],
+  price_level_confirmation: ["hintatasovahvistus", "hintatasovahvistusta"],
+  financial_account: ["tili", "tiliä"],
+  financial_entry: ["talousrivi", "talousriviä"],
+  balance_sheet_snapshot: ["tasesnapshot", "tasesnapshottia"],
+  group_budget: ["ryhmäbudjetti", "ryhmäbudjettia"],
+  financial_year: ["tilikausi", "tilikautta"],
+  liquidity_baseline: ["maksuvalmiuden lähtötieto", "maksuvalmiuden lähtötietoa"],
+};
+
+/** Order the confirmation lists things in — the deletion target's own kind first is handled by the caller. */
+const DELETE_ENTITY_ORDER = [
+  "asset",
+  "observation",
+  "building_event",
+  "cost_evidence",
+  "price_level_confirmation",
+  "financial_account",
+  "financial_entry",
+  "balance_sheet_snapshot",
+  "group_budget",
+  "financial_year",
+  "liquidity_baseline",
+];
+
+/** @param {{ entityType: string, entityKey: string }} ref */
+function deleteRefKey(ref) {
+  return `${ref.entityType}:${ref.entityKey}`;
+}
+
+/**
+ * Human label for one entity, used in the confirmation view. Falls back to the
+ * key, which is always meaningful (an id the user typed, or accountCode:year).
+ * @param {any} model
+ * @param {string} entityType
+ * @param {string} entityKey
+ */
+function describeDeleteTarget(model, entityType, entityKey) {
+  switch (entityType) {
+    case "asset":
+      return (model.assets ?? []).find((item) => item.id === entityKey)?.name ?? entityKey;
+    case "observation": {
+      const observation = (model.observations ?? []).find((item) => item.id === entityKey);
+      if (observation === undefined) return entityKey;
+      const description = String(observation.description ?? "");
+      return description.length > 60 ? `${description.slice(0, 57)}…` : description || entityKey;
+    }
+    case "building_event":
+      return (model.events ?? []).find((item) => item.id === entityKey)?.title ?? entityKey;
+    case "financial_entry": {
+      const [accountCode, year] = entityKey.split(":");
+      const account = (model.financialAccounts ?? []).find((item) => item.accountCode === accountCode);
+      return `${accountCode} ${account?.name ?? ""} · ${year}`.replace(/\s+/g, " ").trim();
+    }
+    case "financial_account": {
+      const account = (model.financialAccounts ?? []).find((item) => item.accountCode === entityKey);
+      return account === undefined ? entityKey : `${entityKey} ${account.name}`;
+    }
+    case "group_budget": {
+      const groupBudget = (model.groupBudgets ?? []).find((item) => item.id === entityKey);
+      return groupBudget === undefined ? entityKey : `${groupBudget.group} ${groupBudget.year}`;
+    }
+    default:
+      return entityKey;
+  }
+}
+
+/**
+ * Computes the complete cascade for deleting one entity: every other entity
+ * that must go with it, and every entity that must be rewritten because a
+ * reference to the deleted one is disappearing.
+ *
+ * The reference map this implements was read off the validators, not the
+ * spec — every edge below is one that validateAdminDataSnapshot or
+ * projectEvents actually enforces, so a missed edge fails the batch rather
+ * than corrupting the snapshot:
+ *
+ * - Observation.assetId, BuildingEvent.assetId, CostEvidence.assetId
+ *   → deleting an asset deletes its observations, events and evidence.
+ * - BuildingEvent.schedule[].costEvidenceId / actual.costEvidenceId are
+ *   required, and a non-cancelled future event may not have an empty
+ *   schedule → deleting cost evidence deletes every event citing it. This is
+ *   the one cascade that runs "upwards"; the alternative (refuse the delete
+ *   and ask the user to fix the event first) is a dead end, because schedule
+ *   rows cannot be edited away one by one in the UI.
+ * - PriceLevelConfirmation.costEvidenceId → deleted with its evidence.
+ * - FinancialEntry.accountCode → deleting an account deletes its entries.
+ *
+ * Two references are cleared instead of cascaded, because both targets are
+ * legal without them:
+ * - BuildingEvent.observationIds: the event is a real repair that happened;
+ *   losing its background observation does not unmake it.
+ * - CostEvidence.eventId (optional in the model): a contractor quote is
+ *   expensive to obtain and still says what the work costs after the planned
+ *   event is dropped. Clearing the back-reference leaves the evidence on its
+ *   asset, where the user can delete it separately if they want to.
+ *
+ * The walk is a fixed point because the graph has a cycle (event → evidence
+ * → event) and cascades are transitive.
+ *
+ * @param {any} model The admin dashboard read model (state.admin).
+ * @param {{ entityType: string, entityKey: string }} target
+ * @returns {{
+ *   target: { entityType: string, entityKey: string, label: string },
+ *   deletes: Array<{ entityType: string, entityKey: string, label: string }>,
+ *   updates: Array<{ entityType: string, entityKey: string, label: string, reason: string, value: any }>,
+ *   scheduleRowCount: number,
+ *   isEmpty: boolean,
+ * }}
+ */
+export function planEntityDeletion(model, target) {
+  const assets = model?.assets ?? [];
+  const observations = model?.observations ?? [];
+  const events = model?.events ?? [];
+  const costEvidence = model?.costEvidence ?? [];
+  const priceLevelConfirmations = model?.priceLevelConfirmations ?? [];
+  const financialEntries = model?.financialEntries ?? [];
+
+  /** @type {Map<string, { entityType: string, entityKey: string }>} */
+  const deletes = new Map();
+  /** @type {Array<{ entityType: string, entityKey: string }>} */
+  const queue = [{ entityType: target.entityType, entityKey: target.entityKey }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const key = deleteRefKey(current);
+    if (deletes.has(key)) continue;
+    deletes.set(key, current);
+
+    switch (current.entityType) {
+      case "asset":
+        for (const item of observations) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "observation", entityKey: item.id });
+        }
+        for (const item of events) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "building_event", entityKey: item.id });
+        }
+        for (const item of costEvidence) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "cost_evidence", entityKey: item.id });
+        }
+        break;
+      case "cost_evidence":
+        for (const item of priceLevelConfirmations) {
+          if (item.costEvidenceId === current.entityKey) {
+            queue.push({ entityType: "price_level_confirmation", entityKey: item.costEvidenceId });
+          }
+        }
+        for (const item of events) {
+          if (eventCitesEvidence(item, current.entityKey)) {
+            queue.push({ entityType: "building_event", entityKey: item.id });
+          }
+        }
+        break;
+      case "financial_account":
+        for (const item of financialEntries) {
+          if (item.accountCode === current.entityKey) {
+            queue.push({ entityType: "financial_entry", entityKey: `${item.accountCode}:${item.year}` });
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const deletedObservationIds = new Set(
+    [...deletes.values()].filter((item) => item.entityType === "observation").map((item) => item.entityKey),
+  );
+  const deletedEventIds = new Set(
+    [...deletes.values()].filter((item) => item.entityType === "building_event").map((item) => item.entityKey),
+  );
+
+  /** @type {Array<{ entityType: string, entityKey: string, label: string, reason: string, value: any }>} */
+  const updates = [];
+  for (const event of events) {
+    if (deletes.has(deleteRefKey({ entityType: "building_event", entityKey: event.id }))) continue;
+    const remaining = (event.observationIds ?? []).filter((id) => !deletedObservationIds.has(id));
+    if (remaining.length === (event.observationIds ?? []).length) continue;
+    updates.push({
+      entityType: "building_event",
+      entityKey: event.id,
+      label: event.title ?? event.id,
+      reason: "viittaus poistettavaan havaintoon poistetaan",
+      value: { ...event, observationIds: remaining },
+    });
+  }
+  for (const evidence of costEvidence) {
+    if (deletes.has(deleteRefKey({ entityType: "cost_evidence", entityKey: evidence.id }))) continue;
+    if (evidence.eventId === undefined || !deletedEventIds.has(evidence.eventId)) continue;
+    const { eventId: _cleared, ...withoutEvent } = evidence;
+    updates.push({
+      entityType: "cost_evidence",
+      entityKey: evidence.id,
+      label: evidence.id,
+      reason: "viittaus poistettavaan korjaustapahtumaan poistetaan, näyttö itse säilyy",
+      value: withoutEvent,
+    });
+  }
+
+  const scheduleRowCount = events
+    .filter((event) => deletedEventIds.has(event.id))
+    .reduce((sum, event) => sum + (event.schedule ?? []).length, 0);
+
+  const ordered = [...deletes.values()].sort((a, b) => {
+    const order = DELETE_ENTITY_ORDER.indexOf(a.entityType) - DELETE_ENTITY_ORDER.indexOf(b.entityType);
+    return order === 0 ? a.entityKey.localeCompare(b.entityKey) : order;
+  });
+
+  return {
+    target: {
+      entityType: target.entityType,
+      entityKey: target.entityKey,
+      label: describeDeleteTarget(model, target.entityType, target.entityKey),
+    },
+    deletes: ordered.map((item) => ({
+      ...item,
+      label: describeDeleteTarget(model, item.entityType, item.entityKey),
+    })),
+    updates,
+    scheduleRowCount,
+    isEmpty: deletes.size === 0,
+  };
+}
+
+/** @param {any} event @param {string} evidenceId */
+function eventCitesEvidence(event, evidenceId) {
+  if (event.actual?.costEvidenceId === evidenceId) return true;
+  return (event.schedule ?? []).some((row) => row.costEvidenceId === evidenceId);
+}
+
+/**
+ * Finnish confirmation lines for one plan: what goes besides the target, and
+ * what gets rewritten. Returns [] when nothing but the target is affected —
+ * the confirmation is still shown (handoff §2 requires it for every delete),
+ * just without a list.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @returns {string[]}
+ */
+export function summarizeDeletionPlan(plan) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const item of plan.deletes) {
+    if (item.entityType === plan.target.entityType && item.entityKey === plan.target.entityKey) continue;
+    counts.set(item.entityType, (counts.get(item.entityType) ?? 0) + 1);
+  }
+
+  const lines = DELETE_ENTITY_ORDER
+    .filter((entityType) => counts.has(entityType))
+    .map((entityType) => {
+      const count = counts.get(entityType);
+      const [singular, plural] = DELETE_ENTITY_LABELS[entityType] ?? [entityType, entityType];
+      const noun = count === 1 ? singular : plural;
+      if (entityType === "building_event" && plan.scheduleRowCount > 0) {
+        const rows = plan.scheduleRowCount === 1 ? "aikataulurivi" : "aikatauluriviä";
+        return `${count} ${noun} (${plan.scheduleRowCount} ${rows})`;
+      }
+      return `${count} ${noun}`;
+    });
+
+  for (const update of plan.updates) {
+    lines.push(`${update.label}: ${update.reason}`);
+  }
+  return lines;
+}
+
+/**
+ * Turns a plan into the operations for one batch. Every operation carries the
+ * deletion target's own key as its sourceIds: a delete has no external source
+ * document, and demanding one would be exactly the friction this feature
+ * exists to remove. The explanation stays mandatory and comes from the user —
+ * that is the field that actually says why the row went.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @param {{ explanation: string }} meta
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function buildDeletionOperations(plan, meta) {
+  const sourceIds = [`${plan.target.entityType}:${plan.target.entityKey}`];
+  const explanation = toTrimmed(meta.explanation);
+  const updates = plan.updates.map((update) => ({
+    type: update.entityType === "building_event" ? "save_building_event" : "save_cost_evidence",
+    value: update.value,
+    sourceIds,
+    explanation,
+  }));
+  const deletes = plan.deletes.map((item) => ({
+    type: "delete_entity",
+    entityType: item.entityType,
+    entityKey: item.entityKey,
+    sourceIds,
+    explanation,
+  }));
+  // Updates first: applyAdminBatch stages operations in order, and rewriting a
+  // surviving row before its neighbours disappear keeps every intermediate
+  // state readable in the audit trail.
+  return [...updates, ...deletes];
+}
+
+/**
+ * Validates the one field a deletion asks the user for.
+ * @param {Record<string, unknown>} raw
+ * @returns {OperationResult<{ explanation: string }>}
+ */
+export function validateDeletionMeta(raw) {
+  const explanation = toTrimmed(raw.explanation);
+  if (explanation === "") {
+    return { ok: false, errors: { explanation: "Poiston selitys on pakollinen." } };
+  }
+  return { ok: true, value: { explanation } };
+}
