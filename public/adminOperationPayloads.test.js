@@ -10,7 +10,6 @@ import {
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
-  buildDeactivateGroupBudgetOperation,
   buildDeletionOperations,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
@@ -44,7 +43,9 @@ import {
   parseFinancialPasteInput,
   parseGroupBudgetPasteInput,
   parseSourceIds,
+  listDataImports,
   planEntityDeletion,
+  planImportDeletion,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   summarizeDeletionPlan,
@@ -2486,7 +2487,7 @@ describe("parseGroupBudgetPasteInput", () => {
   });
 });
 
-describe("buildGroupBudgetImportOperations / buildDeactivateGroupBudgetOperation", () => {
+describe("buildGroupBudgetImportOperations", () => {
   it("builds save_group_budget operations defaulting active: true", () => {
     const parsed = { groupBudgets: [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000 }] };
     const ops = buildGroupBudgetImportOperations(parsed, { sourceIds: ["src1"], explanation: "Tuonti" });
@@ -2496,15 +2497,6 @@ describe("buildGroupBudgetImportOperations / buildDeactivateGroupBudgetOperation
       sourceIds: ["src1"],
       explanation: "Tuonti",
     }]);
-  });
-
-  it("builds a save_group_budget operation that retires a row with active: false", () => {
-    const existing = { id: "expense::Sähkö- ja vesi::2024", kind: "expense", group: "Sähkö- ja vesi", year: 2024, budgetAmount: -10000, active: true, sourceIds: ["old"] };
-    const op = buildDeactivateGroupBudgetOperation(existing, { sourceIds: ["src2"], explanation: "Korjaus: kirjoitusvirhe ryhmän nimessä" });
-    expect(op.value.active).toBe(false);
-    expect(op.value.id).toBe("expense::Sähkö- ja vesi::2024");
-    expect(op.value.budgetAmount).toBe(-10000);
-    expect(op.sourceIds).toEqual(["src2"]);
   });
 });
 
@@ -2934,5 +2926,72 @@ describe("validateDeletionMeta", () => {
 
   it("does not ask for sourceIds at all", () => {
     expect(validateDeletionMeta({ explanation: "Testidataa." }).errors).toBeUndefined();
+  });
+});
+
+describe("listDataImports / planImportDeletion", () => {
+  const IMPORT_MODEL = {
+    financialAccounts: [
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "Hallintopalvelut", active: true },
+      { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö", active: true },
+      { accountCode: "5500", name: "Korjaus", kind: "expense", group: "Korjaukset", active: true },
+    ],
+    financialEntries: [
+      { accountCode: "5300", year: 2024, actualAmount: -12000, sourceIds: ["tp_2024"] },
+      { accountCode: "5300", year: 2025, actualAmount: -12800, sourceIds: ["tp_2025"] },
+      { accountCode: "5400", year: 2025, actualAmount: -9000, sourceIds: ["tp_2025"] },
+      // Two sources on one row: it belongs to neither single-id group.
+      { accountCode: "5500", year: 2025, actualAmount: -3000, sourceIds: ["tp_2025", "korjauserittely"] },
+    ],
+    groupBudgets: [
+      { id: "expense::Sähkö::2025", kind: "expense", group: "Sähkö", year: 2025, budgetAmount: -10000, active: true, sourceIds: ["ryhmabudjetti_2025"] },
+    ],
+  };
+
+  it("groups rows by their whole sourceIds set, counting years and accounts", () => {
+    const imports = listDataImports(IMPORT_MODEL);
+    expect(imports.map((item) => item.key)).toEqual([
+      "korjauserittely,tp_2025",
+      "ryhmabudjetti_2025",
+      "tp_2024",
+      "tp_2025",
+    ]);
+    const tp2025 = imports.find((item) => item.key === "tp_2025");
+    expect(tp2025).toMatchObject({ entryCount: 2, accountCount: 2, groupBudgetCount: 0, years: [2025] });
+    expect(imports.find((item) => item.key === "ryhmabudjetti_2025")).toMatchObject({
+      entryCount: 0,
+      groupBudgetCount: 1,
+    });
+  });
+
+  it("deletes exactly one import's rows and nothing else", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "tp_2025");
+    expect(deletedKeys(plan)).toEqual([
+      "financial_account:5400",
+      "financial_entry:5300:2025",
+      "financial_entry:5400:2025",
+    ]);
+    // 5300 keeps its 2024 row, so the account stays; 5500's row carries a
+    // different source set and is untouched.
+    expect(plan.sourceIds).toEqual(["tp_2025"]);
+  });
+
+  it("uses the import's own source identifiers as the operations' sourceIds", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "korjauserittely,tp_2025");
+    const operations = buildDeletionOperations(plan, { explanation: "Väärä vuosi." });
+    expect(operations.every((item) => item.sourceIds.join(",") === "korjauserittely,tp_2025")).toBe(true);
+    expect(deletedKeys(plan)).toEqual(["financial_account:5500", "financial_entry:5500:2025"]);
+  });
+
+  it("reuses the same grouping for group budgets", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "ryhmabudjetti_2025");
+    expect(deletedKeys(plan)).toEqual(["group_budget:expense::Sähkö::2025"]);
+    expect(summarizeDeletionPlan(plan)).toEqual(["1 ryhmäbudjetti"]);
+  });
+
+  it("reports an unknown key as an empty plan rather than deleting everything", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "ei_tallaista");
+    expect(plan.isEmpty).toBe(true);
+    expect(plan.deletes).toEqual([]);
   });
 });

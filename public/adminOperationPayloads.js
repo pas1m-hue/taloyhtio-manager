@@ -2993,10 +2993,9 @@ export function buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot) {
 /**
  * Deterministic id for a GroupBudget: re-importing the same kind+group+year
  * updates the existing row instead of creating a duplicate (feature/group-budget
- * handoff §1). One consequence, addressed by `active` (see GroupBudget in
- * src/domain/types.ts): a typo'd group name gets a *different* id from the
- * correct one, so it can never be "fixed" by re-import — it has to be
- * retired via `active: false` (buildDeactivateGroupBudgetOperation).
+ * handoff §1). One consequence: a typo'd group name gets a *different* id from
+ * the correct one, so it can never be "fixed" by re-import — the stale row has
+ * to be deleted (delete_entity) and the corrected name imported.
  * @param {"income"|"expense"} kind
  * @param {string} group
  * @param {number} year
@@ -3162,27 +3161,6 @@ export function buildGroupBudgetImportOperations(parsed, opMeta) {
     sourceIds: opMeta.sourceIds,
     explanation: opMeta.explanation,
   }));
-}
-
-/**
- * Builds the save_group_budget operation that retires one existing row by
- * resaving it with `active: false` (feature/group-budget handoff §1
- * clarification). This system has no delete operation — a typo'd group
- * name's id can never be "fixed" by re-import, since the id is derived
- * from the name itself (buildGroupBudgetId), so retiring the stale row is
- * the only way to stop it from showing up forever with an empty actual.
- * Mirrors FinancialAccount.active.
- * @param {{ id: string, kind: "income"|"expense", group: string, year: number, budgetAmount: number, sourceIds: readonly string[], notes?: string }} groupBudget
- * @param {{ sourceIds: string[], explanation: string }} opMeta
- * @returns {{ type: "save_group_budget", value: GroupBudgetValue, sourceIds: string[], explanation: string }}
- */
-export function buildDeactivateGroupBudgetOperation(groupBudget, opMeta) {
-  return {
-    type: /** @type {const} */ ("save_group_budget"),
-    value: { ...groupBudget, active: false, sourceIds: opMeta.sourceIds },
-    sourceIds: opMeta.sourceIds,
-    explanation: opMeta.explanation,
-  };
 }
 
 /**
@@ -3711,6 +3689,7 @@ export function planEntityDeletion(model, target) {
       entityKey: target.entityKey,
       label: describeDeleteTarget(model, target.entityType, target.entityKey),
     },
+    sourceIds: [`${target.entityType}:${target.entityKey}`],
     deletes: ordered.map((item) => ({
       ...item,
       label: describeDeleteTarget(model, item.entityType, item.entityKey),
@@ -3768,12 +3747,14 @@ export function summarizeDeletionPlan(plan) {
  * document, and demanding one would be exactly the friction this feature
  * exists to remove. The explanation stays mandatory and comes from the user —
  * that is the field that actually says why the row went.
+ * An import deletion instead carries the import's own source identifiers,
+ * which is exactly what the user typed to say where those rows came from.
  * @param {ReturnType<typeof planEntityDeletion>} plan
  * @param {{ explanation: string }} meta
  * @returns {Array<Record<string, unknown>>}
  */
 export function buildDeletionOperations(plan, meta) {
-  const sourceIds = [`${plan.target.entityType}:${plan.target.entityKey}`];
+  const sourceIds = plan.sourceIds;
   const explanation = toTrimmed(meta.explanation);
   const updates = plan.updates.map((update) => ({
     type: update.entityType === "building_event" ? "save_building_event" : "save_cost_evidence",
@@ -3805,4 +3786,117 @@ export function validateDeletionMeta(raw) {
     return { ok: false, errors: { explanation: "Poiston selitys on pakollinen." } };
   }
   return { ok: true, value: { explanation } };
+}
+
+/**
+ * Groups every imported financial row and group budget by the source
+ * identifiers it carries, so one paste can be undone as a unit.
+ *
+ * There is no import id or timestamp on the rows — but there does not need to
+ * be: buildFinancialImportOperations and buildGroupBudgetImportOperations both
+ * stamp every row of one paste with that paste's shared sourceIds field, and
+ * the single-row entry form is not wired into the UI, so in practice every row
+ * carries the source identifier of the import that last wrote it. "Last
+ * wrote", not "created", is the right grouping here: a row corrected by a
+ * later paste belongs to that later paste, not the one being undone.
+ *
+ * Rows are keyed by their whole sorted sourceIds set, not by any single id, so
+ * a row tagged with two sources is never swept up by a group named after one
+ * of them.
+ *
+ * @param {any} model
+ * @returns {Array<{ key: string, sourceIds: string[], label: string, years: number[], entryCount: number, accountCount: number, groupBudgetCount: number }>}
+ */
+export function listDataImports(model) {
+  /** @type {Map<string, { key: string, sourceIds: string[], years: Set<number>, accounts: Set<string>, entryCount: number, groupBudgetCount: number }>} */
+  const imports = new Map();
+
+  /** @param {readonly string[] | undefined} rawSourceIds */
+  function bucket(rawSourceIds) {
+    const sourceIds = [...(rawSourceIds ?? [])].map((item) => String(item)).sort();
+    if (sourceIds.length === 0) return undefined;
+    const key = sourceIds.join(",");
+    let entry = imports.get(key);
+    if (entry === undefined) {
+      entry = { key, sourceIds, years: new Set(), accounts: new Set(), entryCount: 0, groupBudgetCount: 0 };
+      imports.set(key, entry);
+    }
+    return entry;
+  }
+
+  for (const row of model?.financialEntries ?? []) {
+    const entry = bucket(row.sourceIds);
+    if (entry === undefined) continue;
+    entry.entryCount += 1;
+    entry.years.add(Number(row.year));
+    entry.accounts.add(String(row.accountCode));
+  }
+  for (const row of model?.groupBudgets ?? []) {
+    const entry = bucket(row.sourceIds);
+    if (entry === undefined) continue;
+    entry.groupBudgetCount += 1;
+    entry.years.add(Number(row.year));
+  }
+
+  return [...imports.values()]
+    .map((entry) => ({
+      key: entry.key,
+      sourceIds: entry.sourceIds,
+      label: entry.sourceIds.join(", "),
+      years: [...entry.years].sort((a, b) => a - b),
+      entryCount: entry.entryCount,
+      accountCount: entry.accounts.size,
+      groupBudgetCount: entry.groupBudgetCount,
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/**
+ * Plans the deletion of one whole import: its financial entries, its group
+ * budgets, and any financial account left with no entries at all once they are
+ * gone — an account with no figures is residue of the import, and would
+ * otherwise linger as an empty row in the per-account views.
+ *
+ * Accounts that still hold rows from another year or another import are kept.
+ *
+ * @param {any} model
+ * @param {string} key An import key from listDataImports.
+ * @returns {ReturnType<typeof planEntityDeletion>}
+ */
+export function planImportDeletion(model, key) {
+  const financialEntries = model?.financialEntries ?? [];
+  const groupBudgets = model?.groupBudgets ?? [];
+  const financialAccounts = model?.financialAccounts ?? [];
+  /** @param {readonly string[] | undefined} rawSourceIds */
+  const matches = (rawSourceIds) =>
+    [...(rawSourceIds ?? [])].map((item) => String(item)).sort().join(",") === key;
+
+  const removedEntries = financialEntries.filter((row) => matches(row.sourceIds));
+  const removedEntryKeys = new Set(removedEntries.map((row) => `${row.accountCode}:${row.year}`));
+  const emptiedAccounts = financialAccounts.filter((account) =>
+    financialEntries.some((row) => row.accountCode === account.accountCode) &&
+    financialEntries
+      .filter((row) => row.accountCode === account.accountCode)
+      .every((row) => removedEntryKeys.has(`${row.accountCode}:${row.year}`))
+  );
+
+  /** @type {Array<{ entityType: string, entityKey: string }>} */
+  const refs = [
+    ...emptiedAccounts.map((account) => ({ entityType: "financial_account", entityKey: account.accountCode })),
+    ...removedEntries.map((row) => ({ entityType: "financial_entry", entityKey: `${row.accountCode}:${row.year}` })),
+    ...groupBudgets.filter((row) => matches(row.sourceIds))
+      .map((row) => ({ entityType: "group_budget", entityKey: row.id })),
+  ];
+
+  return {
+    target: { entityType: "import", entityKey: key, label: key.split(",").join(", ") },
+    sourceIds: key.split(","),
+    deletes: refs.map((ref) => ({
+      ...ref,
+      label: describeDeleteTarget(model, ref.entityType, ref.entityKey),
+    })),
+    updates: [],
+    scheduleRowCount: 0,
+    isEmpty: refs.length === 0,
+  };
 }

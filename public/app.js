@@ -6,7 +6,6 @@ import {
   buildBalanceSheetImportOperation,
   buildBalanceSheetViewModel,
   buildCostEvidenceListViewModel,
-  buildDeactivateGroupBudgetOperation,
   buildDeletionOperations,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
@@ -36,10 +35,12 @@ import {
   groupScheduleByScenario,
   interpretRevisionConflict,
   isCostEvidenceExpired,
+  listDataImports,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
   parseGroupBudgetPasteInput,
   planEntityDeletion,
+  planImportDeletion,
   summarizeDeletionPlan,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
@@ -596,6 +597,7 @@ function renderWorkspace() {
   renderIncome();
   renderExpenseGroups();
   renderAccountCosts();
+  renderDataImportList();
   renderGroupBudgetList();
   renderBudgetVsActual();
   renderBalancePosition();
@@ -934,6 +936,38 @@ function openDeleteConfirmation(entityType, entityKey, onCancel) {
     if (onCancel) onCancel();
     else closeDetailPanel({ restoreFocus: true });
   });
+}
+
+/**
+ * Same confirmation flow for a whole import. It is a different planner but the
+ * same panel, the same mandatory explanation and the same batch — an import is
+ * just a deletion whose target happens to be a set of rows rather than one row.
+ * @param {string} key
+ */
+function openImportDeleteConfirmation(key) {
+  if (!state.admin) return;
+  const plan = planImportDeletion(state.admin, key);
+  const lines = summarizeDeletionPlan(plan);
+  $("#detail-panel-title").textContent = `Poista tuonti: ${plan.target.label}`;
+  $("#detail-panel-body").innerHTML = `
+    <form id="delete-form" class="form-card" novalidate>
+      <p>Poistetaan kaikki lähdetunnisteella <strong>${escapeHtml(plan.target.label)}</strong> tuodut rivit:</p>
+      <ul class="detail-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
+      <p class="warning">Poistoa ei voi perua.</p>
+      <div class="form-grid">
+        ${textField("delete-explanation", "Poiston selitys", "", { required: true })}
+      </div>
+      <p id="delete-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit" class="danger">Poista pysyvästi</button>
+        <button type="button" class="secondary" id="delete-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  openDetailPanel();
+  $("#delete-explanation").focus();
+  $("#delete-form").onsubmit = (event) => submitDeletion(event, plan);
+  $("#delete-cancel").addEventListener("click", () => closeDetailPanel({ restoreFocus: true }));
 }
 
 /** @param {SubmitEvent} event @param {ReturnType<typeof planEntityDeletion>} plan */
@@ -2058,21 +2092,76 @@ function renderAccountCosts() {
         const value = row.values[column.key];
         return `<td>${value === undefined ? "—" : money(value)}</td>`;
       }).join("");
-      return `<tr><td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>${cells}</tr>`;
+      // One delete button per year the account actually has a row for, plus
+      // one for the account itself: a FinancialEntry is keyed by account+year,
+      // so that is the smallest thing there is to delete (handoff §3,
+      // priority 2). Whole-import deletion lives in Liitä tilidataa.
+      const years = [...new Set((state.admin.financialEntries ?? [])
+        .filter((entry) => entry.accountCode === row.accountCode)
+        .map((entry) => Number(entry.year)))].sort((a, b) => a - b);
+      const yearButtons = years.map((year) =>
+        `<button type="button" class="secondary delete-financial-entry" data-key="${escapeHtml(`${row.accountCode}:${year}`)}" title="Poista ${row.accountCode} / ${year}">${year}</button>`
+      ).join("");
+      return `<tr><td>${escapeHtml(row.accountCode)}</td><td>${escapeHtml(row.name)}</td>${cells}
+        <td class="row-actions">${yearButtons}<button type="button" class="danger delete-financial-account" data-account="${escapeHtml(row.accountCode)}" title="Poista koko tili ja kaikki sen vuodet">Tili</button></td>
+      </tr>`;
     }).join("");
     const totalCells = vm.columns.map((column) => `<td>${money(group.totals[column.key] ?? 0)}</td>`).join("");
     return `<tbody>
-      <tr class="group-header"><td colspan="${2 + vm.columns.length}">${escapeHtml(group.group)}</td></tr>
+      <tr class="group-header"><td colspan="${3 + vm.columns.length}">${escapeHtml(group.group)}</td></tr>
       ${rows}
-      <tr class="group-total"><td colspan="2">Ryhmä yhteensä</td>${totalCells}</tr>
+      <tr class="group-total"><td colspan="2">Ryhmä yhteensä</td>${totalCells}<td></td></tr>
     </tbody>`;
   }).join("");
   const grandTotalCells = vm.columns.map((column) => `<td>${money(vm.totals[column.key] ?? 0)}</td>`).join("");
   host.innerHTML = `<table class="data-table">
-    <thead><tr><th>Tili</th><th>Nimi</th>${headerCells}</tr></thead>
+    <thead><tr><th>Tili</th><th>Nimi</th>${headerCells}<th>Poista</th></tr></thead>
     ${groupBlocks}
-    <tfoot><tr><td colspan="2">Kaikki yhteensä</td>${grandTotalCells}</tr></tfoot>
+    <tfoot><tr><td colspan="2">Kaikki yhteensä</td>${grandTotalCells}<td></td></tr></tfoot>
   </table>`;
+  for (const button of host.querySelectorAll(".delete-financial-entry")) {
+    button.addEventListener(
+      "click", () => openDeleteConfirmation("financial_entry", button.dataset.key),
+    );
+  }
+  for (const button of host.querySelectorAll(".delete-financial-account")) {
+    button.addEventListener(
+      "click", () => openDeleteConfirmation("financial_account", button.dataset.account),
+    );
+  }
+}
+
+/**
+ * Lists the imports behind the stored financial rows and group budgets,
+ * grouped by source identifier, so one bad paste can be undone as a unit
+ * (handoff §3, priority 1) instead of row by row.
+ */
+function renderDataImportList() {
+  if (!state.admin) return;
+  const host = $("#finance-import-list");
+  const imports = listDataImports(state.admin);
+  if (imports.length === 0) {
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: "Ei vielä tuonteja",
+      body: "Liitetyt rivit näkyvät tässä lähdetunnisteittain, ja koko tuonnin voi poistaa kerralla.",
+    });
+    return;
+  }
+  const rows = imports.map((item) => `<tr>
+    <td>${escapeHtml(item.label)}</td>
+    <td>${item.years.length === 0 ? "—" : escapeHtml(item.years.join(", "))}</td>
+    <td>${item.entryCount === 0 ? "—" : `${item.entryCount} riviä / ${item.accountCount} tiliä`}</td>
+    <td>${item.groupBudgetCount === 0 ? "—" : `${item.groupBudgetCount} riviä`}</td>
+    <td><button type="button" class="danger delete-data-import" data-key="${escapeHtml(item.key)}">Poista tuonti</button></td>
+  </tr>`).join("");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Lähdetunnisteet</th><th>Vuodet</th><th>Talousrivit</th><th>Ryhmäbudjetit</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  for (const button of host.querySelectorAll(".delete-data-import")) {
+    button.addEventListener("click", () => openImportDeleteConfirmation(button.dataset.key));
+  }
 }
 
 /** Formats a "Muutos" cell: amount plus a parenthesised percentage, or "—" if not computable. */
@@ -2462,12 +2551,11 @@ async function submitGroupBudgetImport(event) {
 }
 
 /**
- * Lists every GroupBudget row (active and retired) so a typo'd group name —
- * whose id can never be corrected by re-import, since the id is derived
- * from the name itself — can be retired via "Poista käytöstä" (handoff §1
- * clarification). Reuses the import form's own sourceIds/explanation
- * fields for the deactivate operation's metadata rather than a separate
- * dialog, since it's the same kind of change to the same entity.
+ * Lists every GroupBudget row so a typo'd group name — whose id can never be
+ * corrected by re-import, since the id is derived from the name itself — can
+ * be deleted outright. `active` stays in the data model for a genuine "no
+ * longer in force but kept" state, but the UI no longer offers retiring as a
+ * stand-in for deletion: it only existed because deletion did not.
  */
 function renderGroupBudgetList() {
   if (!state.admin) return;
@@ -2488,45 +2576,14 @@ function renderGroupBudgetList() {
     <td>${groupBudget.year}</td>
     <td>${money(groupBudget.budgetAmount)}</td>
     <td>${groupBudget.active ? "Aktiivinen" : "Poistettu käytöstä"}</td>
-    <td>${groupBudget.active
-      ? `<button type="button" class="secondary deactivate-group-budget" data-id="${escapeHtml(groupBudget.id)}">Poista käytöstä</button>`
-      : "—"}</td>
+    <td><button type="button" class="danger delete-group-budget" data-id="${escapeHtml(groupBudget.id)}">Poista</button></td>
   </tr>`).join("");
   host.innerHTML = `<div class="table-wrap"><table>
     <thead><tr><th>Kind</th><th>Ryhmä</th><th>Vuosi</th><th>Budjetti</th><th>Tila</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
-  for (const button of host.querySelectorAll(".deactivate-group-budget")) {
-    button.addEventListener("click", () => deactivateGroupBudget(button.dataset.id));
-  }
-}
-
-async function deactivateGroupBudget(id) {
-  const groupBudget = (state.admin.groupBudgets ?? []).find((item) => item.id === id);
-  if (!groupBudget) return;
-  clearFieldErrors("#group-budget-import-form");
-  const meta = validateOperationMeta({
-    sourceIds: fieldValue("group-budget-import-source-ids"),
-    explanation: fieldValue("group-budget-import-explanation"),
-  });
-  if (!meta.ok) {
-    applyFieldErrors("#group-budget-import-form", {
-      sourceIds: "group-budget-import-source-ids",
-      explanation: "group-budget-import-explanation",
-    }, meta.errors);
-    setFeedback("#group-budget-import-feedback", "Täytä lähdetunnisteet ja selitys ennen poistoa käytöstä.", "error");
-    return;
-  }
-  const operation = buildDeactivateGroupBudgetOperation(groupBudget, meta.value);
-  const sent = await sendAdminOperations([operation], {
-    successMessage: `Ryhmäbudjetti ${groupBudget.group} (${groupBudget.year}) poistettu käytöstä.`,
-  });
-  if (sent.ok) {
-    setFeedback("#group-budget-import-feedback", "Tallennettu.", "ok");
-    renderGroupBudgetList();
-    renderBudgetVsActual();
-  } else if (sent.conflict) {
-    setFeedback("#group-budget-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  for (const button of host.querySelectorAll(".delete-group-budget")) {
+    button.addEventListener("click", () => openDeleteConfirmation("group_budget", button.dataset.id));
   }
 }
 
@@ -2732,6 +2789,12 @@ function renderBalancePosition() {
   const selectedId = $("#finance-position-snapshot").value;
   const snapshot = sorted.find((item) => item.id === selectedId);
   const vm = buildBalanceSheetViewModel(snapshot);
+
+  const deleteButton = $("#finance-position-delete");
+  deleteButton.disabled = snapshot === undefined;
+  deleteButton.onclick = snapshot === undefined
+    ? null
+    : () => openDeleteConfirmation("balance_sheet_snapshot", snapshot.id);
 
   if (vm.isEmpty) {
     $("#finance-position-compare").innerHTML = `<option value="">Ei vertailua</option>`;

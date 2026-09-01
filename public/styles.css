@@ -123,6 +123,8 @@ legend { padding: 0 .4rem; }
 .view-lead { max-width: 60ch; }
 .subsection { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .button-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.row-actions { display: flex; gap: .3rem; flex-wrap: wrap; }
+.row-actions button { padding: .2rem .45rem; font-size: .75rem; }
 .workspace-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 
 /* ---- Cards / KPIs ---- */
