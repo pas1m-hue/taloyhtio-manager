@@ -84,8 +84,18 @@ const newEvent: BuildingEvent = {
   ],
 };
 
+/**
+ * Distributes over the operation union so each member drops its own metadata
+ * keys. A plain Omit<Union, ...> collapses to the members' shared keys, which
+ * since delete_entity (no `value` field) joined the union would reject every
+ * save_* literal here.
+ */
+type WithoutOperationMetadata<T> = T extends unknown
+  ? Omit<T, "sourceIds" | "explanation">
+  : never;
+
 function operation<T extends AdminDataBatchCommand["operations"][number]>(
-  value: Omit<T, "sourceIds" | "explanation">,
+  value: WithoutOperationMetadata<T>,
 ): T {
   return {
     ...value,
@@ -366,5 +376,206 @@ describe("V2.1 admin manual entry", () => {
     });
     expect(empty.companyId).toBe("new_company");
     expect(empty.events).toEqual([]);
+  });
+});
+
+describe("delete_entity", () => {
+  /** An asset nothing else refers to, so it can be deleted on its own. */
+  const loneAsset: Asset = {
+    id: "asset_manual_bike_shed",
+    name: "Pyörävarasto",
+    category: "yard",
+    sourceIds: ["manual_admin_entry_2026"],
+    active: true,
+  };
+
+  /** Baseline + the asset/evidence/event trio, so deletions have something to cascade over. */
+  function seeded() {
+    return applyAdminBatch(
+      adminBaselineSnapshot,
+      command([
+        operation({ type: "save_asset", value: newAsset }),
+        operation({ type: "save_cost_evidence", value: newEvidence }),
+        operation({ type: "save_building_event", value: newEvent }),
+        operation({ type: "save_asset", value: loneAsset }),
+      ]),
+    );
+  }
+
+  it("removes the entity and records a delete audit entry carrying before but no after", () => {
+    const seed = seeded();
+    const next = applyAdminBatch(
+      seed,
+      command(
+        [operation({ type: "delete_entity", entityType: "asset", entityKey: loneAsset.id })],
+        seed.revision,
+      ),
+    );
+
+    expect(next.assets.some((item) => item.id === loneAsset.id)).toBe(false);
+    const audit = next.auditTrail.at(-1);
+    expect(audit?.operation).toBe("delete");
+    expect(audit?.entityType).toBe("asset");
+    expect(audit?.entityKey).toBe(loneAsset.id);
+    expect(audit?.before).toEqual(loneAsset);
+    expect(audit?.after).toBeUndefined();
+    // The audit trail keeps every earlier entry: deletion removes the entity,
+    // not its history.
+    expect(next.auditTrail.length).toBe(seed.auditTrail.length + 1);
+  });
+
+  it("keeps cost evidence alive when its event is deleted, with eventId cleared in the same batch", () => {
+    // The user's call (handoff review): a contractor quote is expensive to
+    // obtain and still says what the work costs after the planned event is
+    // dropped, and eventId is optional in the model — so the cascade clears
+    // the back-reference instead of destroying the evidence.
+    const seed = seeded();
+    const { eventId: _dropped, ...evidenceWithoutEvent } = newEvidence;
+    const next = applyAdminBatch(
+      seed,
+      command(
+        [
+          operation({ type: "delete_entity", entityType: "building_event", entityKey: newEvent.id }),
+          operation({ type: "save_cost_evidence", value: evidenceWithoutEvent }),
+        ],
+        seed.revision,
+      ),
+    );
+
+    expect(next.events.some((item) => item.id === newEvent.id)).toBe(false);
+    const evidence = next.costEvidence.find((item) => item.id === newEvidence.id);
+    expect(evidence).toBeDefined();
+    expect(evidence?.eventId).toBeUndefined();
+    expect(evidence?.assetId).toBe(newAsset.id);
+    expect(evidence?.amount).toBe(12_500);
+  });
+
+  it("rejects the batch when the target no longer exists instead of silently doing nothing", () => {
+    const seed = seeded();
+    expect(() => applyAdminBatch(
+      seed,
+      command(
+        [operation({
+          type: "delete_entity",
+          entityType: "asset",
+          entityKey: "asset_that_was_never_here",
+        })],
+        seed.revision,
+      ),
+    )).toThrowError(/cannot delete missing/);
+  });
+
+  it("rejects deleting the housing company", () => {
+    expect(() => applyAdminBatch(
+      adminBaselineSnapshot,
+      command([operation({
+        type: "delete_entity",
+        // Cast: the union forbids this at compile time, but the HTTP layer
+        // forwards operations as opaque JSON, so the runtime guard must hold.
+        entityType: "housing_company" as "asset",
+        entityKey: adminBaselineSnapshot.companyId,
+      })]),
+    )).toThrowError(DomainValidationError);
+  });
+
+  it("rejects a delete whose entityKey is blank", () => {
+    expect(() => applyAdminBatch(
+      adminBaselineSnapshot,
+      command([operation({ type: "delete_entity", entityType: "asset", entityKey: "  " })]),
+    )).toThrowError(DomainValidationError);
+  });
+
+  it("rejects a batch that both saves and deletes the same entity", () => {
+    const seed = seeded();
+    expect(() => applyAdminBatch(
+      seed,
+      command(
+        [
+          operation({ type: "save_asset", value: { ...newAsset, name: "Uusi nimi" } }),
+          operation({ type: "delete_entity", entityType: "asset", entityKey: newAsset.id }),
+        ],
+        seed.revision,
+      ),
+    )).toThrowError(/more than once/);
+  });
+
+  it("rejects a partial cascade that would leave a dangling reference", () => {
+    // The asset alone: its observation-free event and evidence would be orphaned.
+    const seed = seeded();
+    expect(() => applyAdminBatch(
+      seed,
+      command(
+        [operation({ type: "delete_entity", entityType: "asset", entityKey: newAsset.id })],
+        seed.revision,
+      ),
+    )).toThrowError(DomainValidationError);
+  });
+
+  it("accepts the whole cascade applied as one batch, in any order", () => {
+    // Deleting the asset takes its event and its asset-bound evidence with it;
+    // order inside the batch does not matter because the snapshot is validated
+    // once, after every operation has been staged.
+    const seed = seeded();
+    const next = applyAdminBatch(
+      seed,
+      command(
+        [
+          operation({ type: "delete_entity", entityType: "building_event", entityKey: newEvent.id }),
+          operation({ type: "delete_entity", entityType: "cost_evidence", entityKey: newEvidence.id }),
+          operation({ type: "delete_entity", entityType: "asset", entityKey: newAsset.id }),
+        ],
+        seed.revision,
+      ),
+    );
+
+    expect(next.assets.some((item) => item.id === newAsset.id)).toBe(false);
+    expect(next.events.some((item) => item.id === newEvent.id)).toBe(false);
+    expect(next.costEvidence.some((item) => item.id === newEvidence.id)).toBe(false);
+    expect(next.auditTrail.slice(-3).map((item) => item.operation)).toEqual([
+      "delete",
+      "delete",
+      "delete",
+    ]);
+  });
+
+  it("deletes a financial entry by its accountCode:year key without touching its sibling years", () => {
+    const seed = applyAdminBatch(
+      adminBaselineSnapshot,
+      command([
+        operation({
+          type: "save_financial_account",
+          value: {
+            accountCode: "5300",
+            name: "Isännöintipalkkiot",
+            kind: "expense",
+            group: "Hallintopalvelut",
+            active: true,
+          },
+        }),
+        operation({
+          type: "save_financial_entry",
+          value: { accountCode: "5300", year: 2024, actualAmount: -12_000, sourceIds: ["tp_2024"] },
+        }),
+        operation({
+          type: "save_financial_entry",
+          value: { accountCode: "5300", year: 2025, actualAmount: -12_800, sourceIds: ["tp_2025"] },
+        }),
+      ]),
+    );
+
+    const next = applyAdminBatch(
+      seed,
+      command(
+        [operation({
+          type: "delete_entity",
+          entityType: "financial_entry",
+          entityKey: "5300:2025",
+        })],
+        seed.revision,
+      ),
+    );
+
+    expect(next.financialEntries.map((item) => item.year)).toEqual([2024]);
+    expect(next.financialAccounts.some((item) => item.accountCode === "5300")).toBe(true);
   });
 });

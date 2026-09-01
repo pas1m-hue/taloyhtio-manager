@@ -485,7 +485,18 @@ export const ADMIN_ENTITY_TYPES = [
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
-export type AdminOperationType = "create" | "update";
+export type AdminOperationType = "create" | "update" | "delete";
+
+/**
+ * Every entity type a delete_entity operation may target. `housing_company`
+ * is deliberately absent: validateAdminDataSnapshot requires the snapshot's
+ * housingCompany to exist and to match companyId, so deleting it could only
+ * ever produce an invalid snapshot.
+ */
+export const DELETABLE_ADMIN_ENTITY_TYPES = ADMIN_ENTITY_TYPES.filter(
+  (entityType) => entityType !== "housing_company",
+) as readonly Exclude<AdminEntityType, "housing_company">[];
+export type DeletableAdminEntityType = (typeof DELETABLE_ADMIN_ENTITY_TYPES)[number];
 
 export type AdminEntitySnapshot =
   | HousingCompany
@@ -512,7 +523,12 @@ export interface AdminAuditEntry {
   readonly sourceIds: readonly string[];
   readonly explanation: string;
   readonly before?: AdminEntitySnapshot;
-  readonly after: AdminEntitySnapshot;
+  /**
+   * Absent only on a `delete` entry, where the entity no longer exists after
+   * the operation — `before` then carries the removed value. Every create and
+   * update entry has one.
+   */
+  readonly after?: AdminEntitySnapshot;
 }
 
 export interface AdminDataSnapshot {
@@ -552,7 +568,12 @@ export type AdminDataOperation =
   | ({ readonly type: "save_financial_account"; readonly value: FinancialAccount } & AdminOperationMetadata)
   | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata)
   | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata)
-  | ({ readonly type: "save_group_budget"; readonly value: GroupBudget } & AdminOperationMetadata);
+  | ({ readonly type: "save_group_budget"; readonly value: GroupBudget } & AdminOperationMetadata)
+  | ({
+      readonly type: "delete_entity";
+      readonly entityType: DeletableAdminEntityType;
+      readonly entityKey: string;
+    } & AdminOperationMetadata);
 
 export interface AdminDataBatchCommand {
   readonly companyId: string;
@@ -857,6 +878,7 @@ export type ValidationCode =
   | "INVALID_ADMIN_DATA"
   | "INVALID_ADMIN_OPERATION"
   | "DUPLICATE_ADMIN_OPERATION"
+  | "DELETE_TARGET_NOT_FOUND"
   | "ADMIN_DATA_NOT_FOUND"
   | "ADMIN_DATA_ALREADY_EXISTS"
   | "ADMIN_REVISION_CONFLICT"

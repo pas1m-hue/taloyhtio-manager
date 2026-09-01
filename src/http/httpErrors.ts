@@ -65,6 +65,9 @@ function statusForDomainCode(code: ValidationCode): number {
     case "CHANGE_PROPOSAL_CONFLICT":
     case "CHANGE_PROPOSAL_ALREADY_DECIDED":
     case "DUPLICATE_CHANGE_PROPOSAL_ID":
+    // The delete target was there when the caller computed its cascade and is
+    // gone now — a concurrent change, not a malformed request.
+    case "DELETE_TARGET_NOT_FOUND":
       return 409;
     case "SESSION_EXPIRED":
       return 410;
