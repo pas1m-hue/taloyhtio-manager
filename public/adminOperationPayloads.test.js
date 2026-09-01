@@ -43,6 +43,8 @@ import {
   parseFinancialPasteInput,
   parseGroupBudgetPasteInput,
   parseSourceIds,
+  detectBalanceImportValueDrops,
+  detectFinancialImportValueDrops,
   listDataImports,
   planEntityDeletion,
   planImportDeletion,
@@ -2993,5 +2995,52 @@ describe("listDataImports / planImportDeletion", () => {
     const plan = planImportDeletion(IMPORT_MODEL, "ei_tallaista");
     expect(plan.isEmpty).toBe(true);
     expect(plan.deletes).toEqual([]);
+  });
+});
+
+describe("re-import value drops", () => {
+  const EXISTING_ENTRIES = [
+    { accountCode: "5300", year: 2025, budgetAmount: 13000, actualAmount: 12800 },
+    { accountCode: "5400", year: 2025, actualAmount: -9000 },
+  ];
+
+  it("warns when a paste omits a column the stored row has a value in", () => {
+    // Upsert replaces the row whole, so a toteuma-only paste erases the budget.
+    const parsed = { entries: [{ accountCode: "5300", year: 2025, actualAmount: 12500 }] };
+    expect(detectFinancialImportValueDrops(parsed, EXISTING_ENTRIES)).toEqual([
+      "5300:2025: liitos ei sisällä budjettia, nykyinen arvo 13000 poistuu.",
+    ]);
+  });
+
+  it("stays quiet when the paste carries both values, or the row is new", () => {
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5300", year: 2025, budgetAmount: 13000, actualAmount: 12500 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5999", year: 2025, actualAmount: 1 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+    // A stored row with no budget at all has nothing to lose.
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5400", year: 2025, actualAmount: -9500 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+  });
+
+  it("warns when re-importing a balance snapshot leaves out entries it currently has", () => {
+    const existing = [{
+      id: "Tase-2025",
+      entries: [{ key: "cash", name: "Rahat" }, { key: "receivables", name: "Saamiset" }],
+    }];
+    const parsed = { snapshot: { id: "Tase-2025", entries: [{ key: "cash" }] } };
+    const warnings = detectBalanceImportValueDrops(parsed, existing);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Saamiset");
+  });
+
+  it("stays quiet for a balance snapshot id that does not exist yet", () => {
+    const parsed = { snapshot: { id: "Tase-2026", entries: [{ key: "cash" }] } };
+    expect(detectBalanceImportValueDrops(parsed, [{ id: "Tase-2025", entries: [{ key: "cash" }] }])).toEqual([]);
   });
 });

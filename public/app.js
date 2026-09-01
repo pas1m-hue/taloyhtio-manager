@@ -7,6 +7,8 @@ import {
   buildBalanceSheetViewModel,
   buildCostEvidenceListViewModel,
   buildDeletionOperations,
+  detectBalanceImportValueDrops,
+  detectFinancialImportValueDrops,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
@@ -2609,6 +2611,15 @@ function updateFinanceImportPreview() {
       items: parsed.errors.map((error) => error.message),
     })
     : `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p></article>`;
+  const drops = detectFinancialImportValueDrops(parsed, state.admin?.financialEntries);
+  if (drops.length > 0) {
+    host.innerHTML += stateBlock({
+      kind: "warning",
+      title: "Tuonti korvaa olemassa olevia arvoja",
+      body: "Uudelleentuonti päivittää rivit eikä luo kaksoiskappaleita, mutta se korvaa rivin kokonaan. Tallennus on sallittu — tarkista että tämä on tarkoitus.",
+      items: drops,
+    });
+  }
   const hasRows = parsed.accounts.length > 0 || parsed.entries.length > 0;
   $("#finance-import-submit").disabled = !hasRows || parsed.errors.length > 0;
 }
@@ -2677,6 +2688,15 @@ function updateBalanceImportPreview() {
     const vm = buildBalanceSheetViewModel(parsed.snapshot);
     const totals = vm.topGroups.map((group) => `${group.label} ${money(group.groupTotal)}`).join(" · ");
     host.innerHTML = `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p><p class="muted">${escapeHtml(totals)}</p></article>`;
+    const drops = detectBalanceImportValueDrops(parsed, state.admin?.balanceSheetSnapshots);
+    if (drops.length > 0) {
+      host.innerHTML += stateBlock({
+        kind: "warning",
+        title: "Tuonti korvaa olemassa olevan snapshotin",
+        body: "Saman tunnisteen liittäminen uudelleen päivittää snapshotin eikä luo kaksoiskappaletta, mutta se korvaa sen erät kokonaan.",
+        items: drops,
+      });
+    }
   }
   $("#balance-import-submit").disabled = entryCount === 0 || parsed.errors.length > 0;
 }

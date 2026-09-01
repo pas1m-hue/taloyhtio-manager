@@ -144,6 +144,8 @@ legend { padding: 0 .4rem; }
 .state-block.is-error { border-color: var(--danger); border-style: solid; }
 .state-block.is-error h4 { color: var(--danger); }
 .state-block.is-unavailable { border-color: var(--warning); }
+.state-block.is-warning { border-color: var(--warning); border-style: solid; }
+.state-block.is-warning h4 { color: var(--warning); }
 .state-block ul { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--muted); }
 
 /* ---- Balance reconciliation card (Taloudellinen asema, vaihe 4B) ---- */

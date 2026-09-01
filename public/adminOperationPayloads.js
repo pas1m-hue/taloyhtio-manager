@@ -3900,3 +3900,63 @@ export function planImportDeletion(model, key) {
     isEmpty: refs.length === 0,
   };
 }
+
+/**
+ * Warns about values a re-import would silently drop.
+ *
+ * Re-importing updates rather than duplicates — every save_* operation is an
+ * upsert on a deterministic key (FinancialEntry on accountCode+year,
+ * BalanceSheetSnapshot on id) — but it replaces the row *whole*. A paste that
+ * leaves the budget column empty for an account/year that already has one
+ * therefore erases that budget without saying so, which is the DATA GAP
+ * principle failing in the other direction: a figure quietly becoming nothing.
+ *
+ * This does not block the import. Emptying a value on purpose has to stay
+ * possible; the user just has to see it coming.
+ *
+ * @param {{ entries?: ReadonlyArray<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }> }} parsed
+ * @param {ReadonlyArray<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }>} [existingEntries]
+ * @returns {string[]} Finnish warning lines, empty when nothing would be lost.
+ */
+export function detectFinancialImportValueDrops(parsed, existingEntries) {
+  const existing = new Map(
+    (existingEntries ?? []).map((row) => [`${String(row.accountCode)}:${Number(row.year)}`, row]),
+  );
+  /** @type {string[]} */
+  const warnings = [];
+  for (const entry of parsed?.entries ?? []) {
+    const key = `${String(entry.accountCode)}:${Number(entry.year)}`;
+    const current = existing.get(key);
+    if (current === undefined) continue;
+    for (const [field, label] of [["budgetAmount", "budjetti"], ["actualAmount", "toteuma"]]) {
+      if (typeof current[field] === "number" && typeof entry[field] !== "number") {
+        warnings.push(
+          `${key}: liitos ei sisällä ${label}a, nykyinen arvo ${current[field]} poistuu.`,
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * The same warning for balance data, where re-importing an existing snapshot
+ * id replaces its entries wholesale: any entry key missing from the paste
+ * disappears from the snapshot.
+ * @param {{ snapshot?: { id?: unknown, entries?: ReadonlyArray<{ key?: unknown }> } }} parsed
+ * @param {ReadonlyArray<{ id?: unknown, entries?: ReadonlyArray<{ key?: unknown, name?: unknown }> }>} [existingSnapshots]
+ * @returns {string[]}
+ */
+export function detectBalanceImportValueDrops(parsed, existingSnapshots) {
+  const id = String(parsed?.snapshot?.id ?? "");
+  const current = (existingSnapshots ?? []).find((item) => String(item.id) === id);
+  if (current === undefined) return [];
+  const pastedKeys = new Set((parsed?.snapshot?.entries ?? []).map((entry) => String(entry.key)));
+  const dropped = (current.entries ?? []).filter((entry) => !pastedKeys.has(String(entry.key)));
+  if (dropped.length === 0) return [];
+  return [
+    `Snapshotti ${id} on jo olemassa ja korvataan kokonaan. Liitoksesta puuttuu ` +
+      `${dropped.length} nykyistä erää, jotka poistuvat: ` +
+      dropped.map((entry) => String(entry.name ?? entry.key)).join(", "),
+  ];
+}
