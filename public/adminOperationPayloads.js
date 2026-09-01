@@ -2344,6 +2344,15 @@ export function buildBudgetVsActualViewModel(accounts, entries, year) {
  * @returns {{ isConflict: boolean, message: string }}
  */
 export function interpretRevisionConflict(error) {
+  // The delete target was there when the cascade was computed and is gone
+  // now — same remedy as a revision conflict: reload and look again.
+  if (error && error.code === "DELETE_TARGET_NOT_FOUND") {
+    return {
+      isConflict: true,
+      message:
+        "Poistettavaa tietuetta ei enää ole. Lataa työtila uudelleen ja tarkista tilanne.",
+    };
+  }
   if (error && error.code === "ADMIN_REVISION_CONFLICT") {
     return {
       isConflict: true,

@@ -7,6 +7,7 @@ import {
   buildBalanceSheetViewModel,
   buildCostEvidenceListViewModel,
   buildDeactivateGroupBudgetOperation,
+  buildDeletionOperations,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
@@ -38,8 +39,11 @@ import {
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
   parseGroupBudgetPasteInput,
+  planEntityDeletion,
+  summarizeDeletionPlan,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
+  validateDeletionMeta,
   validateOperationMeta,
 } from "./adminOperationPayloads.js";
 
@@ -866,7 +870,10 @@ function renderAssetDetail() {
       <div class="detail-item"><span>Aktiivinen</span><strong>${asset.active ? "Kyllä" : "Ei"}</strong></div>
       <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((asset.sourceIds ?? []).join(", ") || "—")}</strong></div>
     </div>
-    <div class="button-row"><button type="button" class="secondary" id="detail-edit-asset">Muokkaa</button></div>
+    <div class="button-row">
+      <button type="button" class="secondary" id="detail-edit-asset">Muokkaa</button>
+      <button type="button" class="danger" id="detail-delete-asset">Poista</button>
+    </div>
     ${detailGroup("Havainnot", observations.map((o) =>
       `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei havaintoja.")}
     ${detailGroup("Tapahtumat", events.map((e) =>
@@ -878,6 +885,78 @@ function renderAssetDetail() {
     }), "Ei kustannusnäyttöä.")}
   `;
   $("#detail-edit-asset").addEventListener("click", () => openAssetEditor("edit", asset.id));
+  $("#detail-delete-asset").addEventListener(
+    "click", () => openDeleteConfirmation("asset", asset.id, renderAssetDetail),
+  );
+}
+
+/**
+ * Renders the mandatory delete confirmation into the detail panel itself
+ * rather than a second modal: the panel is already the place where a single
+ * entity is inspected and edited, and reusing it keeps focus handling, Escape
+ * and the backdrop click working exactly as before.
+ *
+ * Confirmation is required for every deletion, including one with nothing
+ * attached — then it simply shows no list.
+ *
+ * @param {string} entityType
+ * @param {string} entityKey
+ * @param {() => void} [onCancel] Restores whatever the panel showed before.
+ */
+function openDeleteConfirmation(entityType, entityKey, onCancel) {
+  if (!state.admin) return;
+  const plan = planEntityDeletion(state.admin, { entityType, entityKey });
+  const lines = summarizeDeletionPlan(plan);
+  const collateral = lines.length === 0
+    ? `<p>Poistetaan <strong>${escapeHtml(plan.target.label)}</strong>. Mikään muu ei muutu.</p>`
+    : `<p>Poistetaan <strong>${escapeHtml(plan.target.label)}</strong> ja sen mukana:</p>
+       <ul class="detail-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`;
+
+  $("#detail-panel-title").textContent = `Poista: ${plan.target.label}`;
+  $("#detail-panel-body").innerHTML = `
+    <form id="delete-form" class="form-card" novalidate>
+      ${collateral}
+      <p class="warning">Poistoa ei voi perua.</p>
+      <div class="form-grid">
+        ${textField("delete-explanation", "Poiston selitys", "", { required: true })}
+      </div>
+      <p id="delete-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit" class="danger">Poista pysyvästi</button>
+        <button type="button" class="secondary" id="delete-cancel">Peruuta</button>
+      </div>
+    </form>
+  `;
+  openDetailPanel();
+  $("#delete-explanation").focus();
+  $("#delete-form").onsubmit = (event) => submitDeletion(event, plan);
+  $("#delete-cancel").addEventListener("click", () => {
+    if (onCancel) onCancel();
+    else closeDetailPanel({ restoreFocus: true });
+  });
+}
+
+/** @param {SubmitEvent} event @param {ReturnType<typeof planEntityDeletion>} plan */
+async function submitDeletion(event, plan) {
+  event.preventDefault();
+  clearFieldErrors("#delete-form");
+  const meta = validateDeletionMeta({ explanation: fieldValue("delete-explanation") });
+  if (!meta.ok) {
+    applyFieldErrors("#delete-form", { explanation: "delete-explanation" }, meta.errors);
+    setFeedback("#delete-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const sent = await sendAdminOperations(buildDeletionOperations(plan, meta.value), {
+    successMessage: `${plan.target.label} poistettu.`,
+  });
+  if (sent.ok) {
+    // The selection points at something that no longer exists; clearing it
+    // before the panel closes keeps renderDetailPanel from looking it up.
+    state.selection = null;
+    closeDetailPanel({ restoreFocus: true });
+  } else if (sent.conflict) {
+    setFeedback("#delete-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
 }
 
 /** Element focused just before the detail modal opened, for restoring focus on user-initiated close. */
@@ -1095,12 +1174,16 @@ function renderObservationDetail() {
     <div class="button-row">
       <button type="button" class="secondary" id="detail-edit-observation">Muokkaa</button>
       <button type="button" class="secondary" id="detail-create-event-from-observation">Luo korjaustapahtuma</button>
+      <button type="button" class="danger" id="detail-delete-observation">Poista</button>
     </div>
     ${detailGroup("Linkitetyt tapahtumat", linkedEvents.map((event) =>
       `<li><strong>${escapeHtml(event.title)}</strong> · ${escapeHtml(event.status)}</li>`), "Ei linkitettyjä tapahtumia.")}
   `;
   $("#detail-edit-observation").addEventListener(
     "click", () => openObservationEditor("edit", observation.id),
+  );
+  $("#detail-delete-observation").addEventListener(
+    "click", () => openDeleteConfirmation("observation", observation.id, renderObservationDetail),
   );
   $("#detail-create-event-from-observation").addEventListener("click", () => {
     closeDetailPanel();
@@ -1328,6 +1411,7 @@ function renderCostEvidenceDetail() {
     </div>
     <div class="button-row">
       <button type="button" class="secondary" id="detail-edit-cost-evidence">Muokkaa</button>
+      <button type="button" class="danger" id="detail-delete-cost-evidence">Poista</button>
       ${needsConfirmation && !confirmed
         ? `<button type="button" class="secondary" id="detail-confirm-price-level">Vahvista hintataso ${PROJECTION_PRICE_LEVEL_YEAR}</button>`
         : ""}
@@ -1335,6 +1419,9 @@ function renderCostEvidenceDetail() {
   `;
   $("#detail-edit-cost-evidence").addEventListener(
     "click", () => openCostEvidenceEditor("edit", evidence.id),
+  );
+  $("#detail-delete-cost-evidence").addEventListener(
+    "click", () => openDeleteConfirmation("cost_evidence", evidence.id, renderCostEvidenceDetail),
   );
   const confirmButton = $("#detail-confirm-price-level");
   if (confirmButton) {
@@ -1667,12 +1754,18 @@ function renderEventDetail() {
       <div class="detail-item"><span>Huomio</span><strong>${escapeHtml(event.notes ?? "—")}</strong></div>
       <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((event.sourceIds ?? []).join(", ") || "—")}</strong></div>
     </div>
-    <div class="button-row"><button type="button" class="secondary" id="detail-edit-event">Muokkaa</button></div>
+    <div class="button-row">
+      <button type="button" class="secondary" id="detail-edit-event">Muokkaa</button>
+      <button type="button" class="danger" id="detail-delete-event">Poista</button>
+    </div>
     ${scheduleBlock}
     ${detailGroup("Linkitetyt havainnot", linkedObservations.map((o) =>
       `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei linkitettyjä havaintoja.")}
   `;
   $("#detail-edit-event").addEventListener("click", () => openEventEditor("edit", event.id));
+  $("#detail-delete-event").addEventListener(
+    "click", () => openDeleteConfirmation("building_event", event.id, renderEventDetail),
+  );
 }
 
 function ensureEventEditorHost() {

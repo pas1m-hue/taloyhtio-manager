@@ -2915,6 +2915,14 @@ describe("buildDeletionOperations", () => {
   });
 });
 
+describe("interpretRevisionConflict with a stale delete target", () => {
+  it("treats DELETE_TARGET_NOT_FOUND as a conflict, so the UI asks for a reload", () => {
+    const result = interpretRevisionConflict({ code: "DELETE_TARGET_NOT_FOUND", message: "x" });
+    expect(result.isConflict).toBe(true);
+    expect(result.message).toMatch(/Lataa työtila uudelleen/);
+  });
+});
+
 describe("validateDeletionMeta", () => {
   it("requires an explanation", () => {
     expect(validateDeletionMeta({ explanation: "   " }).ok).toBe(false);
