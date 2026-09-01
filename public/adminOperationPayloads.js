@@ -3266,6 +3266,14 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  */
 
 /**
+ * @typedef {Object} GroupBudgetVsActualKpis
+ * @property {number|undefined} totalBudget
+ * @property {number|undefined} totalActual
+ * @property {number|undefined} netDiff
+ * @property {number|undefined} avgAbsDeviationPercent Mean of |diffPercent| over this kind's group rows; rows without a computable diffPercent (one-sided, or budget 0) are excluded rather than counted as 0.
+ */
+
+/**
  * Ryhmätason "Budjetti vs. toteuma" (feature/group-budget handoff §1). The
  * group's actual is always derived from FinancialEntry.actualAmount, summed
  * per (kind, group, year) from the accounts belonging to that group. The
@@ -3301,19 +3309,19 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  * actual euros across both would add figures of opposite dominant sign
  * (e.g. -44 000 € of expense budget + 42 187 € of income budget), producing
  * a number close to zero that means nothing (confirmed against real 2024/
- * 2025 production data during review). `avgAbsDeviationPercent` stays a
- * single combined figure across both kinds — unlike the euro totals, a
- * percentage deviation is already scale- and sign-normalized, so averaging
- * it across groups regardless of kind is meaningful and matches the source
- * Excel's "Budjettitarkkuus" metric.
+ * 2025 production data during review). `avgAbsDeviationPercent` is split by
+ * kind for a different reason: it mixes two unrelated questions when
+ * combined — how well expenses were budgeted vs. how well vastike income
+ * was forecast — and since there is typically a single income group, its
+ * near-zero deviation dilutes the expense figure. The source Excel's
+ * "Budjettitarkkuus" sheet computes it for expenses separately.
  * @returns {{
  *   isEmpty: boolean,
  *   year: number|null,
  *   sections: Array<{ kind: "income"|"expense", groups: GroupBudgetVsActualRow[] }>,
  *   kpis: {
- *     income: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
- *     expense: { totalBudget: number|undefined, totalActual: number|undefined, netDiff: number|undefined } | null,
- *     avgAbsDeviationPercent: number|undefined,
+ *     income: GroupBudgetVsActualKpis | null,
+ *     expense: GroupBudgetVsActualKpis | null,
  *   } | null,
  *   emptyMessage: string,
  * }}
@@ -3451,13 +3459,12 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
     const totalBudget = budgetValues.length > 0 ? budgetValues.reduce((s, v) => s + v, 0) : undefined;
     const totalActual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
     const netDiff = totalBudget !== undefined && totalActual !== undefined ? totalActual - totalBudget : undefined;
-    return { totalBudget, totalActual, netDiff };
+    const diffPercents = rows.map((r) => r.diffPercent).filter((v) => v !== undefined);
+    const avgAbsDeviationPercent = diffPercents.length > 0
+      ? diffPercents.reduce((s, v) => s + Math.abs(v), 0) / diffPercents.length
+      : undefined;
+    return { totalBudget, totalActual, netDiff, avgAbsDeviationPercent };
   }
-
-  const allDiffPercents = allRows.map((r) => r.diffPercent).filter((v) => v !== undefined);
-  const avgAbsDeviationPercent = allDiffPercents.length > 0
-    ? allDiffPercents.reduce((s, v) => s + Math.abs(v), 0) / allDiffPercents.length
-    : undefined;
 
   return {
     isEmpty: false,
@@ -3466,7 +3473,6 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
     kpis: {
       income: kpisForKind("income"),
       expense: kpisForKind("expense"),
-      avgAbsDeviationPercent,
     },
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
   };

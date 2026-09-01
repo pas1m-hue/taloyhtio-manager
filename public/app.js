@@ -613,7 +613,6 @@ function renderLoadPrompts() {
   $("#observations-kpis").innerHTML = "";
   $("#events-kpis").innerHTML = "";
   $("#cost-evidence-kpis").innerHTML = "";
-  $("#finance-budget-kpis").innerHTML = "";
   for (const id of [
     "#assets-list", "#observations-list", "#events-list", "#cost-evidence-list",
     "#finance-income-body", "#finance-costs-group-body", "#finance-costs-account-body",
@@ -2215,11 +2214,9 @@ function renderBudgetVsActual() {
   if (!state.admin) return;
   populateFinanceBudgetYearFilter(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupBudgets);
   const vm = currentBudgetVsActualViewModel();
-  const kpiHost = $("#finance-budget-kpis");
   const host = $("#finance-budget-body");
 
   if (!vm || vm.isEmpty) {
-    kpiHost.innerHTML = "";
     host.innerHTML = stateBlock({
       kind: "empty",
       title: vm === null ? "Valitse vuosi" : "Ei vertailukelpoista dataa tälle vuodelle",
@@ -2227,10 +2224,6 @@ function renderBudgetVsActual() {
     });
     return;
   }
-
-  kpiHost.innerHTML = [
-    ["Keskim. abs. poikkeama", vm.kpis.avgAbsDeviationPercent === undefined ? "—" : percent(vm.kpis.avgAbsDeviationPercent)],
-  ].map(kpiCard).join("");
 
   const selected = selectionId("finance-budget");
   const sectionBlocks = vm.sections.map((section) => {
@@ -2240,6 +2233,7 @@ function renderBudgetVsActual() {
         ["Budjetti", sectionKpis.totalBudget === undefined ? "—" : money(sectionKpis.totalBudget)],
         ["Toteuma", sectionKpis.totalActual === undefined ? "—" : money(sectionKpis.totalActual)],
         ["Nettoerotus", sectionKpis.netDiff === undefined ? "—" : money(sectionKpis.netDiff)],
+        ["Keskim. abs. poikkeama", sectionKpis.avgAbsDeviationPercent === undefined ? "—" : percent(sectionKpis.avgAbsDeviationPercent)],
       ].map(kpiCard).join("")}
     </div>`;
     const rows = section.groups.map((group) => {

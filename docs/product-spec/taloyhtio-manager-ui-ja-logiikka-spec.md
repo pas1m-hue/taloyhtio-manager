@@ -253,8 +253,8 @@ Tulkinta (ohjaa rivin korostuksen — epäedullinen rivi saa varoitusvärin — 
 
 KPI:t:
 
-- **Keskim. abs. poikkeama** näytetään kerran koko näkymän yläosassa, **prosenttina** (ryhmäkohtaisten |Erotus %| -arvojen keskiarvo, kuten lähde-Excelin "Budjettitarkkuus"-mittari). Prosentti on vertailukelpoinen sekä kulu- että tuloryhmien ja vuosien välillä, joten se ei jakaudu tulot/kulut-osioihin toisin kuin alla olevat euromääräiset KPI:t.
-- **Budjetti / Toteuma / Nettoerotus** näytetään omana KPI-rivinä kummankin osion (Tulot, Kulut) taulukon yllä, **erikseen kullekin kind:lle**. Näitä ei summata tulojen ja kulujen yli: kulujen ja tulojen budjetti-/toteumasummat ovat eri etumerkkikonventiolla (kulut negatiivisina) ja eri suuruusluokkaa, joten yhteenlaskettu luku ei tarkoittaisi mitään taloudellista suuretta.
+- **Budjetti / Toteuma / Nettoerotus / Keskim. abs. poikkeama** näytetään omana KPI-rivinä kummankin osion (Tulot, Kulut) taulukon yllä, **erikseen kullekin kind:lle**. Euromääräisiä lukuja ei summata tulojen ja kulujen yli: kulujen ja tulojen budjetti-/toteumasummat ovat eri etumerkkikonventiolla (kulut negatiivisina) ja eri suuruusluokkaa, joten yhteenlaskettu luku ei tarkoittaisi mitään taloudellista suuretta.
+- **Keskim. abs. poikkeama** on kyseisen kind:n ryhmäkohtaisten |Erotus %| -arvojen keskiarvo, **prosenttina** (kuten lähde-Excelin "Budjettitarkkuus"-mittari, joka niin ikään laskee sen kuluille erikseen). Vaikka prosentti on sinänsä vertailukelpoinen kulu- ja tuloryhmien välillä, yhteinen luku sekoittaa kaksi eri asiaa — kulubudjetoinnin osuvuuden ja vastiketuottojen osuvuuden — ja koska tuloryhmiä on tyypillisesti vain yksi, sen pieni poikkeama laimentaa kulujen lukua. Keskiarvoon lasketaan vain rivit joilla Erotus % on laskettavissa; yksipuoliset rivit ja nollabudjetti eivät vaikuta siihen. Kind jolla ei ole yhtään laskettavaa riviä näyttää "—", ei 0 %.
 
 ### 6.5 Taloudellinen asema
 
