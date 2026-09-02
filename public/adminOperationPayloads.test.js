@@ -51,6 +51,7 @@ import {
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   summarizeDeletionPlan,
+  formatDeletionSources,
   validateAssetInput,
   validateBalanceSheetSnapshotInput,
   validateBuildingEventInput,
@@ -2852,13 +2853,48 @@ describe("planEntityDeletion", () => {
     const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_roof" });
     expect(plan.target.label).toBe("Vesikatto");
     expect(summarizeDeletionPlan(plan)).toEqual([
-      "1 havainto",
+      "1 havainto · lähde: s",
       "1 korjaustapahtuma (2 aikatauluriviä)",
       "1 kustannusnäyttö",
       "1 hintatasovahvistus",
       "Pihan korjaus: viittaus poistettavaan havaintoon poistetaan",
       "quote_loose_2026: viittaus poistettavaan korjaustapahtumaan poistetaan, näyttö itse säilyy",
     ]);
+  });
+
+  // A live deletion once hit the real row instead of the test row because the
+  // two shared a name. The confirmation has to name the source of the target
+  // and of anything the cascade drags along with it.
+  it("carries the source identifiers of the target and of the cascade", () => {
+    const model = {
+      assets: [
+        { id: "asset_a", name: "Lämmönjakokeskus", sourceIds: ["excel_terminaali_2026_kuluva_kausi"] },
+        { id: "asset_b", name: "Lämmönjakokeskus", sourceIds: ["ffg"] },
+      ],
+      observations: [
+        { id: "obs_a", assetId: "asset_a", description: "Vuoto", sourceIds: ["inspection_2026"] },
+      ],
+    };
+
+    const plan = planEntityDeletion(model, { entityType: "asset", entityKey: "asset_b" });
+    expect(plan.target.sources).toEqual(["ffg"]);
+    expect(summarizeDeletionPlan(plan)).toEqual([]);
+
+    const other = planEntityDeletion(model, { entityType: "asset", entityKey: "asset_a" });
+    expect(other.target.sources).toEqual(["excel_terminaali_2026_kuluva_kausi"]);
+    // The observation came from a different import than its asset; that is
+    // exactly the case the summary must not hide.
+    expect(summarizeDeletionPlan(other)).toEqual(["1 havainto · lähde: inspection_2026"]);
+    expect(other.deletes.find((item) => item.entityType === "observation").sources)
+      .toEqual(["inspection_2026"]);
+  });
+
+  it("omits the source clause for an entity that carries none", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_yard" });
+    // The yard's event and evidence have no sourceIds in the fixture.
+    expect(summarizeDeletionPlan(plan)).toContain("1 korjaustapahtuma (1 aikataulurivi)");
+    expect(formatDeletionSources([])).toBe("");
+    expect(formatDeletionSources(["a", "b"])).toBe("lähteet: a, b");
   });
 });
 
@@ -2988,7 +3024,9 @@ describe("listDataImports / planImportDeletion", () => {
   it("reuses the same grouping for group budgets", () => {
     const plan = planImportDeletion(IMPORT_MODEL, "ryhmabudjetti_2025");
     expect(deletedKeys(plan)).toEqual(["group_budget:expense::Sähkö::2025"]);
-    expect(summarizeDeletionPlan(plan)).toEqual(["1 ryhmäbudjetti"]);
+    expect(summarizeDeletionPlan(plan)).toEqual([
+      "1 ryhmäbudjetti · lähde: ryhmabudjetti_2025",
+    ]);
   });
 
   it("reports an unknown key as an empty plan rather than deleting everything", () => {

@@ -221,7 +221,12 @@ function parseJsonSegment(encoded: string): unknown {
   return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
-function decodeBase64Url(value: string): Uint8Array {
+// The explicit ArrayBuffer type argument is what makes the result assignable
+// to BufferSource for crypto.subtle: `Uint8Array` alone widens its buffer to
+// ArrayBufferLike, which includes SharedArrayBuffer. The array below is always
+// allocated with `new Uint8Array(length)`, i.e. a plain ArrayBuffer, so this
+// annotation only states what the function already returns.
+function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   if (value === "" || value.includes("=") || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new Error("JWT segment is not canonical base64url.");
   }
