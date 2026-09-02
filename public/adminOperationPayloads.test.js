@@ -52,6 +52,7 @@ import {
   selectFinancialYearViewModel,
   summarizeDeletionPlan,
   formatDeletionSources,
+  formatDeletionTarget,
   validateAssetInput,
   validateBalanceSheetSnapshotInput,
   validateBuildingEventInput,
@@ -2865,36 +2866,78 @@ describe("planEntityDeletion", () => {
   // A live deletion once hit the real row instead of the test row because the
   // two shared a name. The confirmation has to name the source of the target
   // and of anything the cascade drags along with it.
-  it("carries the source identifiers of the target and of the cascade", () => {
+  //
+  // These assert the rendered sentence, not merely that a sources field
+  // exists: the first version of this feature populated the field correctly
+  // and still printed the wrong text.
+  it("renders the target sentence with the source of an entity that keeps sourceIds", () => {
     const model = {
       assets: [
-        { id: "asset_a", name: "Lämmönjakokeskus", sourceIds: ["excel_terminaali_2026_kuluva_kausi"] },
-        { id: "asset_b", name: "Lämmönjakokeskus", sourceIds: ["ffg"] },
+        { id: "asset_a", name: "Putki", sourceIds: ["excel_terminaali_2026_kuluva_kausi"] },
+        { id: "asset_b", name: "Putki", sourceIds: ["ffg"] },
       ],
       observations: [
         { id: "obs_a", assetId: "asset_a", description: "Vuoto", sourceIds: ["inspection_2026"] },
       ],
     };
 
-    const plan = planEntityDeletion(model, { entityType: "asset", entityKey: "asset_b" });
-    expect(plan.target.sources).toEqual(["ffg"]);
-    expect(summarizeDeletionPlan(plan)).toEqual([]);
-
-    const other = planEntityDeletion(model, { entityType: "asset", entityKey: "asset_a" });
-    expect(other.target.sources).toEqual(["excel_terminaali_2026_kuluva_kausi"]);
+    expect(formatDeletionTarget(planEntityDeletion(model, { entityType: "asset", entityKey: "asset_b" })))
+      .toBe("Putki (lähde: ffg)");
+    const real = planEntityDeletion(model, { entityType: "asset", entityKey: "asset_a" });
+    expect(formatDeletionTarget(real))
+      .toBe("Putki (lähde: excel_terminaali_2026_kuluva_kausi)");
     // The observation came from a different import than its asset; that is
     // exactly the case the summary must not hide.
-    expect(summarizeDeletionPlan(other)).toEqual(["1 havainto · lähde: inspection_2026"]);
-    expect(other.deletes.find((item) => item.entityType === "observation").sources)
-      .toEqual(["inspection_2026"]);
+    expect(summarizeDeletionPlan(real)).toEqual(["1 havainto · lähde: inspection_2026"]);
   });
 
-  it("omits the source clause for an entity that carries none", () => {
+  // CostEvidence is the one entity with a singular `sourceId` string instead
+  // of a `sourceIds` array; reading the array field left it sourceless.
+  it("renders the singular sourceId of a cost evidence, and prefers its sourceUrl", () => {
+    const model = {
+      costEvidence: [
+        { id: "quote_a", status: "quote", sourceId: "excel_terminaali_2026_pitka_aikavali" },
+        { id: "quote_b", status: "quote", sourceId: "ffg", sourceUrl: "https://example.test/tarjous.pdf" },
+      ],
+    };
+
+    expect(formatDeletionTarget(planEntityDeletion(model, { entityType: "cost_evidence", entityKey: "quote_a" })))
+      .toBe("quote_a (lähde: excel_terminaali_2026_pitka_aikavali)");
+    expect(formatDeletionTarget(planEntityDeletion(model, { entityType: "cost_evidence", entityKey: "quote_b" })))
+      .toBe("quote_b (lähde: https://example.test/tarjous.pdf)");
+  });
+
+  // A source identifier that arrives as a bare string must not be spread into
+  // its characters, and a numeric one must not lose its digits.
+  it("keeps a non-array source identifier whole", () => {
+    const model = { assets: [{ id: "a", name: "Putki", sourceIds: "ffg" }] };
+    expect(formatDeletionTarget(planEntityDeletion(model, { entityType: "asset", entityKey: "a" })))
+      .toBe("Putki (lähde: ffg)");
+
+    const numeric = { assets: [{ id: "a", name: "Putki", sourceIds: [23] }] };
+    expect(formatDeletionTarget(planEntityDeletion(numeric, { entityType: "asset", entityKey: "a" })))
+      .toBe("Putki (lähde: 23)");
+  });
+
+  it("borrows an account's sources from its entries and prints none when there are none", () => {
+    expect(formatDeletionTarget(planEntityDeletion(DELETE_MODEL, {
+      entityType: "financial_account", entityKey: "5300",
+    }))).toBe("5300 Isännöintipalkkiot (lähteet: tp_2024, tp_2025)");
+
+    // The yard asset carries a source; its event does not, so the cascade
+    // line for the event stays bare rather than inventing one.
     const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_yard" });
-    // The yard's event and evidence have no sourceIds in the fixture.
+    expect(formatDeletionTarget(plan)).toBe("Piha-alue (lähde: s)");
     expect(summarizeDeletionPlan(plan)).toContain("1 korjaustapahtuma (1 aikataulurivi)");
     expect(formatDeletionSources([])).toBe("");
     expect(formatDeletionSources(["a", "b"])).toBe("lähteet: a, b");
+  });
+
+  it("prints the label alone for a target with no source at all", () => {
+    const model = { balanceSheetSnapshots: [{ id: "tase-2025", entries: [] }] };
+    expect(formatDeletionTarget(planEntityDeletion(model, {
+      entityType: "balance_sheet_snapshot", entityKey: "tase-2025",
+    }))).toBe("tase-2025");
   });
 });
 

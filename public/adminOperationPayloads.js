@@ -3543,6 +3543,29 @@ function describeDeleteTarget(model, entityType, entityKey) {
 }
 
 /**
+ * One entity's source identifiers, normalised to a list of non-empty strings.
+ *
+ * The model does not use one shape for this. Asset, Observation,
+ * BuildingEvent, FinancialEntry, GroupBudget and BalanceSheetSnapshot carry
+ * `sourceIds: string[]`; CostEvidence instead carries a singular
+ * `sourceId?: string` (with `sourceUrl` taking precedence, exactly as its
+ * detail view renders it); FinancialAccount and PriceLevelConfirmation carry
+ * no source of their own.
+ *
+ * Spreading is deliberately avoided: `[..."ffg"]` yields ["f","f","g"], so a
+ * singular string source id would be rendered as unrelated fragments. A
+ * non-array value is wrapped, never iterated.
+ *
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function normalizeSourceList(value) {
+  if (value === undefined || value === null) return [];
+  const list = Array.isArray(value) ? value : [value];
+  return list.map((item) => String(item).trim()).filter((item) => item !== "");
+}
+
+/**
  * The source identifiers a deletable entity carries, so the confirmation can
  * say where the row came from and not only what it is called. Two rows about
  * the same building part routinely share a name — one imported from the real
@@ -3558,34 +3581,45 @@ function describeDeleteTarget(model, entityType, entityKey) {
  * @returns {string[]}
  */
 function deleteTargetSourceIds(model, entityType, entityKey) {
-  /** @param {{ sourceIds?: readonly unknown[] } | undefined} row */
-  const of = (row) => [...(row?.sourceIds ?? [])].map((item) => String(item));
+  const find = (rows, predicate) => (rows ?? []).find(predicate);
   switch (entityType) {
     case "import":
       return entityKey === "" ? [] : entityKey.split(",");
     case "asset":
-      return of((model.assets ?? []).find((item) => item.id === entityKey));
+      return normalizeSourceList(find(model.assets, (item) => item.id === entityKey)?.sourceIds);
     case "observation":
-      return of((model.observations ?? []).find((item) => item.id === entityKey));
+      return normalizeSourceList(find(model.observations, (item) => item.id === entityKey)?.sourceIds);
     case "building_event":
-      return of((model.events ?? []).find((item) => item.id === entityKey));
-    case "cost_evidence":
-      return of((model.costEvidence ?? []).find((item) => item.id === entityKey));
-    case "price_level_confirmation":
-      return of((model.priceLevelConfirmations ?? []).find((item) => item.costEvidenceId === entityKey));
-    case "financial_account":
-      return of((model.financialAccounts ?? []).find((item) => item.accountCode === entityKey));
+      return normalizeSourceList(find(model.events, (item) => item.id === entityKey)?.sourceIds);
+    case "cost_evidence": {
+      const evidence = find(model.costEvidence, (item) => item.id === entityKey);
+      return normalizeSourceList(evidence?.sourceUrl ?? evidence?.sourceId);
+    }
     case "financial_entry": {
       const [accountCode, year] = entityKey.split(":");
-      return of((model.financialEntries ?? []).find(
+      return normalizeSourceList(find(
+        model.financialEntries,
         (item) => item.accountCode === accountCode && String(item.year) === year,
-      ));
+      )?.sourceIds);
+    }
+    case "financial_account": {
+      // An account carries no source of its own, so the distinct sources of
+      // its entries stand in: that is what actually says which import brought
+      // this account into the workspace.
+      const sources = new Set();
+      for (const entry of model.financialEntries ?? []) {
+        if (entry.accountCode !== entityKey) continue;
+        for (const source of normalizeSourceList(entry.sourceIds)) sources.add(source);
+      }
+      return [...sources];
     }
     case "balance_sheet_snapshot":
-      return of((model.balanceSheetSnapshots ?? []).find((item) => item.id === entityKey));
+      return normalizeSourceList(find(model.balanceSheetSnapshots, (item) => item.id === entityKey)?.sourceIds);
     case "group_budget":
-      return of((model.groupBudgets ?? []).find((item) => item.id === entityKey));
+      return normalizeSourceList(find(model.groupBudgets, (item) => item.id === entityKey)?.sourceIds);
     default:
+      // PriceLevelConfirmation has no source field; it only ever appears as a
+      // cascade child of the cost evidence it confirms.
       return [];
   }
 }
@@ -3764,9 +3798,24 @@ function eventCitesEvidence(event, evidenceId) {
  * @returns {string}
  */
 export function formatDeletionSources(sources) {
-  const list = [...(sources ?? [])].map((item) => String(item)).filter((item) => item !== "");
+  const list = normalizeSourceList(sources);
   if (list.length === 0) return "";
+  // Same joining the detail views use for sourceIds, so one identifier reads
+  // identically wherever it appears.
   return `${list.length === 1 ? "lähde" : "lähteet"}: ${list.join(", ")}`;
+}
+
+/**
+ * The exact sentence subject the delete confirmation prints: the target's
+ * label, and its source in parentheses when it has one. Lives here rather
+ * than in the view so the rendered text is the thing under test.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @returns {string}
+ */
+export function formatDeletionTarget(plan) {
+  const label = String(plan?.target?.label ?? "");
+  const sources = formatDeletionSources(plan?.target?.sources);
+  return sources === "" ? label : `${label} (${sources})`;
 }
 
 /**
