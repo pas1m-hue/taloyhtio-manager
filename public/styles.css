@@ -231,12 +231,18 @@ tbody tr.is-gap { background: #fdf3ea; }
   position: fixed; inset: 0; z-index: 59;
   display: flex; align-items: center; justify-content: center;
   background: rgba(11, 18, 24, .45);
-  padding: 1.5rem;
+  /* This padding is the only thing keeping a long panel off the viewport
+     edges, because the panel below caps itself at 100% of it. */
+  padding: clamp(1rem, 4vh, 2.5rem);
 }
 .detail-modal[hidden] { display: none; }
 .detail-modal-panel {
   flex: 0 0 auto;
-  width: min(92vw, 1800px); max-height: calc(100vh - 3rem);
+  /* 100% of the flex container's content box, i.e. the viewport minus the
+     padding above. A vh-based calc had to repeat that padding by hand and
+     drifted from it, which is how the panel ended up flush against the top
+     of the screen on the longest schedules. */
+  width: min(92vw, 1800px); max-height: 100%;
   overflow-y: auto; overflow-x: hidden;
   background: var(--panel); border: 1px solid var(--line); border-radius: .7rem;
   box-shadow: 0 20px 60px rgba(0,0,0,.3);

@@ -3543,6 +3543,88 @@ function describeDeleteTarget(model, entityType, entityKey) {
 }
 
 /**
+ * One entity's source identifiers, normalised to a list of non-empty strings.
+ *
+ * The model does not use one shape for this. Asset, Observation,
+ * BuildingEvent, FinancialEntry, GroupBudget and BalanceSheetSnapshot carry
+ * `sourceIds: string[]`; CostEvidence instead carries a singular
+ * `sourceId?: string` (with `sourceUrl` taking precedence, exactly as its
+ * detail view renders it); FinancialAccount and PriceLevelConfirmation carry
+ * no source of their own.
+ *
+ * Spreading is deliberately avoided: `[..."ffg"]` yields ["f","f","g"], so a
+ * singular string source id would be rendered as unrelated fragments. A
+ * non-array value is wrapped, never iterated.
+ *
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function normalizeSourceList(value) {
+  if (value === undefined || value === null) return [];
+  const list = Array.isArray(value) ? value : [value];
+  return list.map((item) => String(item).trim()).filter((item) => item !== "");
+}
+
+/**
+ * The source identifiers a deletable entity carries, so the confirmation can
+ * say where the row came from and not only what it is called. Two rows about
+ * the same building part routinely share a name — one imported from the real
+ * accounting export, one from a test paste — and the name alone has already
+ * been enough to delete the wrong one.
+ *
+ * Read-only: nothing here feeds buildDeletionOperations, which keeps using
+ * plan.sourceIds as before.
+ *
+ * @param {any} model
+ * @param {string} entityType
+ * @param {string} entityKey
+ * @returns {string[]}
+ */
+function deleteTargetSourceIds(model, entityType, entityKey) {
+  const find = (rows, predicate) => (rows ?? []).find(predicate);
+  switch (entityType) {
+    case "import":
+      return entityKey === "" ? [] : entityKey.split(",");
+    case "asset":
+      return normalizeSourceList(find(model.assets, (item) => item.id === entityKey)?.sourceIds);
+    case "observation":
+      return normalizeSourceList(find(model.observations, (item) => item.id === entityKey)?.sourceIds);
+    case "building_event":
+      return normalizeSourceList(find(model.events, (item) => item.id === entityKey)?.sourceIds);
+    case "cost_evidence": {
+      const evidence = find(model.costEvidence, (item) => item.id === entityKey);
+      return normalizeSourceList(evidence?.sourceUrl ?? evidence?.sourceId);
+    }
+    case "financial_entry": {
+      const [accountCode, year] = entityKey.split(":");
+      return normalizeSourceList(find(
+        model.financialEntries,
+        (item) => item.accountCode === accountCode && String(item.year) === year,
+      )?.sourceIds);
+    }
+    case "financial_account": {
+      // An account carries no source of its own, so the distinct sources of
+      // its entries stand in: that is what actually says which import brought
+      // this account into the workspace.
+      const sources = new Set();
+      for (const entry of model.financialEntries ?? []) {
+        if (entry.accountCode !== entityKey) continue;
+        for (const source of normalizeSourceList(entry.sourceIds)) sources.add(source);
+      }
+      return [...sources];
+    }
+    case "balance_sheet_snapshot":
+      return normalizeSourceList(find(model.balanceSheetSnapshots, (item) => item.id === entityKey)?.sourceIds);
+    case "group_budget":
+      return normalizeSourceList(find(model.groupBudgets, (item) => item.id === entityKey)?.sourceIds);
+    default:
+      // PriceLevelConfirmation has no source field; it only ever appears as a
+      // cascade child of the cost evidence it confirms.
+      return [];
+  }
+}
+
+/**
  * Computes the complete cascade for deleting one entity: every other entity
  * that must go with it, and every entity that must be rewritten because a
  * reference to the deleted one is disappearing.
@@ -3688,11 +3770,13 @@ export function planEntityDeletion(model, target) {
       entityType: target.entityType,
       entityKey: target.entityKey,
       label: describeDeleteTarget(model, target.entityType, target.entityKey),
+      sources: deleteTargetSourceIds(model, target.entityType, target.entityKey),
     },
     sourceIds: [`${target.entityType}:${target.entityKey}`],
     deletes: ordered.map((item) => ({
       ...item,
       label: describeDeleteTarget(model, item.entityType, item.entityKey),
+      sources: deleteTargetSourceIds(model, item.entityType, item.entityKey),
     })),
     updates,
     scheduleRowCount,
@@ -3707,6 +3791,34 @@ function eventCitesEvidence(event, evidenceId) {
 }
 
 /**
+ * Renders source identifiers for the confirmation view. Empty string when the
+ * entity carries none, so callers can drop the whole clause rather than print
+ * an empty label.
+ * @param {readonly string[] | undefined} sources
+ * @returns {string}
+ */
+export function formatDeletionSources(sources) {
+  const list = normalizeSourceList(sources);
+  if (list.length === 0) return "";
+  // Same joining the detail views use for sourceIds, so one identifier reads
+  // identically wherever it appears.
+  return `${list.length === 1 ? "lähde" : "lähteet"}: ${list.join(", ")}`;
+}
+
+/**
+ * The exact sentence subject the delete confirmation prints: the target's
+ * label, and its source in parentheses when it has one. Lives here rather
+ * than in the view so the rendered text is the thing under test.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @returns {string}
+ */
+export function formatDeletionTarget(plan) {
+  const label = String(plan?.target?.label ?? "");
+  const sources = formatDeletionSources(plan?.target?.sources);
+  return sources === "" ? label : `${label} (${sources})`;
+}
+
+/**
  * Finnish confirmation lines for one plan: what goes besides the target, and
  * what gets rewritten. Returns [] when nothing but the target is affected —
  * the confirmation is still shown (handoff §2 requires it for every delete),
@@ -3717,9 +3829,14 @@ function eventCitesEvidence(event, evidenceId) {
 export function summarizeDeletionPlan(plan) {
   /** @type {Map<string, number>} */
   const counts = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const sources = new Map();
   for (const item of plan.deletes) {
     if (item.entityType === plan.target.entityType && item.entityKey === plan.target.entityKey) continue;
     counts.set(item.entityType, (counts.get(item.entityType) ?? 0) + 1);
+    const seen = sources.get(item.entityType) ?? new Set();
+    for (const source of item.sources ?? []) seen.add(source);
+    sources.set(item.entityType, seen);
   }
 
   const lines = DELETE_ENTITY_ORDER
@@ -3728,11 +3845,16 @@ export function summarizeDeletionPlan(plan) {
       const count = counts.get(entityType);
       const [singular, plural] = DELETE_ENTITY_LABELS[entityType] ?? [entityType, entityType];
       const noun = count === 1 ? singular : plural;
+      // The sources of a whole group are collapsed into one distinct list:
+      // the point is to show which import the cascade reaches into, not to
+      // repeat an identifier once per row.
+      const suffix = formatDeletionSources([...(sources.get(entityType) ?? [])]);
+      const tail = suffix === "" ? "" : ` · ${suffix}`;
       if (entityType === "building_event" && plan.scheduleRowCount > 0) {
         const rows = plan.scheduleRowCount === 1 ? "aikataulurivi" : "aikatauluriviä";
-        return `${count} ${noun} (${plan.scheduleRowCount} ${rows})`;
+        return `${count} ${noun} (${plan.scheduleRowCount} ${rows})${tail}`;
       }
-      return `${count} ${noun}`;
+      return `${count} ${noun}${tail}`;
     });
 
   for (const update of plan.updates) {
@@ -3889,11 +4011,17 @@ export function planImportDeletion(model, key) {
   ];
 
   return {
-    target: { entityType: "import", entityKey: key, label: key.split(",").join(", ") },
+    target: {
+      entityType: "import",
+      entityKey: key,
+      label: key.split(",").join(", "),
+      sources: deleteTargetSourceIds(model, "import", key),
+    },
     sourceIds: key.split(","),
     deletes: refs.map((ref) => ({
       ...ref,
       label: describeDeleteTarget(model, ref.entityType, ref.entityKey),
+      sources: deleteTargetSourceIds(model, ref.entityType, ref.entityKey),
     })),
     updates: [],
     scheduleRowCount: 0,

@@ -44,6 +44,7 @@ import {
   planEntityDeletion,
   planImportDeletion,
   summarizeDeletionPlan,
+  formatDeletionTarget,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
   validateDeletionMeta,
@@ -911,9 +912,14 @@ function openDeleteConfirmation(entityType, entityKey, onCancel) {
   if (!state.admin) return;
   const plan = planEntityDeletion(state.admin, { entityType, entityKey });
   const lines = summarizeDeletionPlan(plan);
+  // The name on its own has already caused a real row to be deleted in place
+  // of an identically named test row, so the target's source is spelled out
+  // next to it here and in every cascade line below. The text comes from
+  // formatDeletionTarget so that what the tests pin is what is rendered.
+  const target = `<strong>${escapeHtml(formatDeletionTarget(plan))}</strong>`;
   const collateral = lines.length === 0
-    ? `<p>Poistetaan <strong>${escapeHtml(plan.target.label)}</strong>. Mikään muu ei muutu.</p>`
-    : `<p>Poistetaan <strong>${escapeHtml(plan.target.label)}</strong> ja sen mukana:</p>
+    ? `<p>Poistetaan ${target}. Mikään muu ei muutu.</p>`
+    : `<p>Poistetaan ${target} ja sen mukana:</p>
        <ul class="detail-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`;
 
   $("#detail-panel-title").textContent = `Poista: ${plan.target.label}`;
