@@ -562,6 +562,35 @@ Hyväksymiskriteeri: Budjetti näkyy ennen toteumaa ja budjettivertailu on keski
 
 ---
 
+## 12b. Poisto ja muokkaus
+
+### Poisto
+
+Jokainen entiteetti on poistettavissa — rakennusosat, havainnot, korjaustapahtumat, kustannusnäytöt, tasesnapshotit, ryhmäbudjetit ja talousdata. Poikkeus on taloyhtiö itse, jonka olemassaolo on snapshotin invariantti.
+
+Poisto vaatii aina vahvistuksen, myös silloin kun mitään muuta ei poistu. Vahvistus näyttää etukäteen mitä muuta katoaa ja mitä muuta muuttuu; se lasketaan samasta listasta joka lähetetään, joten esikatselu ei voi erota lopputuloksesta. Käyttäjältä pyydetään vain **selitys** — lähdetunnistetta ei kysytä, koska poistolla ei ole ulkoista lähdedokumenttia; operaation lähdetunnisteeksi merkitään poistettavan kohteen oma tunniste.
+
+Liitokset poistuvat mukana (kaskadi), koska orpo viittaus ei ole sallittu tila:
+
+- rakennusosa → sen havainnot, korjaustapahtumat ja kustannusnäytöt
+- kustannusnäyttö → sen hintatasovahvistus sekä jokainen korjaustapahtuma joka viittaa siihen aikataulurivillään tai toteumassaan
+- tili → sen talousrivit
+
+Kaksi viittausta **nollataan** poiston sijaan, koska kohde on laillinen ilman niitä:
+
+- korjaustapahtuman `observationIds`: korjaus on tapahtunut riippumatta taustahavainnostaan
+- kustannusnäytön `eventId` (valinnainen kentässä): urakoitsijalta pyydetty tarjous on kallis hankkia ja kertoo yhä mitä työ maksaa, vaikka suunniteltu tapahtuma poistetaan. Näyttö jää rakennusosalleen, ja käyttäjä voi poistaa sen erikseen jos haluaa.
+
+Talousdatan poistossa on kaksi tasoa: **tuontikohtainen** (kaikki yhdellä liitoksella syntyneet rivit kerralla — päätaso, koska virhe syntyy käytännössä aina yhdestä huonosta liitoksesta) ja **rivikohtainen** (yksi tili + vuosi). Tuonti tunnistetaan rivin lähdetunnisteista: yhden liitoksen kaikki rivit kantavat saman tunnisteen. Tasedatalle tuontikohtaista poistoa ei ole erikseen — yksi liitos on tasan yksi tasesnapshotti, joten snapshotin poisto on tuonnin poisto.
+
+### Muokkaus
+
+Entiteetit joilla on jo lomake (rakennusosat, havainnot, korjaustapahtumat, kustannusnäytöt) muokataan lomakkeella. Liitettävät aineistot (talousdata, tasedata, ryhmäbudjetit) muokataan **uudelleentuonnilla**: jokainen tallennusoperaatio on upsert deterministisellä avaimella (talousrivi tili+vuosi, tili tilinumero, tasesnapshotti tunniste, ryhmäbudjetti kind/ryhmä/vuosi), joten sama rivi liitettynä uudelleen päivittyy eikä kahdennu.
+
+Uudelleentuonti korvaa rivin **kokonaan**. Jos liitos jättää sarakkeen tyhjäksi rivillä jolla on jo arvo, arvo poistuu. Tätä ei estetä — arvon tyhjentämisen on pysyttävä mahdollisena — mutta esikatselu varoittaa siitä nimeltä ennen tallennusta. Hiljainen tietohäviö olisi DATA GAP -periaate väärinpäin.
+
+---
+
 ## 13. Claude Code -rajat
 
 Claude Codelle annettavat pakolliset rajat:

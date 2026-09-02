@@ -123,6 +123,8 @@ legend { padding: 0 .4rem; }
 .view-lead { max-width: 60ch; }
 .subsection { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .button-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.row-actions { display: flex; gap: .3rem; flex-wrap: wrap; }
+.row-actions button { padding: .2rem .45rem; font-size: .75rem; }
 .workspace-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 
 /* ---- Cards / KPIs ---- */
@@ -142,6 +144,8 @@ legend { padding: 0 .4rem; }
 .state-block.is-error { border-color: var(--danger); border-style: solid; }
 .state-block.is-error h4 { color: var(--danger); }
 .state-block.is-unavailable { border-color: var(--warning); }
+.state-block.is-warning { border-color: var(--warning); border-style: solid; }
+.state-block.is-warning h4 { color: var(--warning); }
 .state-block ul { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--muted); }
 
 /* ---- Balance reconciliation card (Taloudellinen asema, vaihe 4B) ---- */

@@ -2344,6 +2344,15 @@ export function buildBudgetVsActualViewModel(accounts, entries, year) {
  * @returns {{ isConflict: boolean, message: string }}
  */
 export function interpretRevisionConflict(error) {
+  // The delete target was there when the cascade was computed and is gone
+  // now — same remedy as a revision conflict: reload and look again.
+  if (error && error.code === "DELETE_TARGET_NOT_FOUND") {
+    return {
+      isConflict: true,
+      message:
+        "Poistettavaa tietuetta ei enää ole. Lataa työtila uudelleen ja tarkista tilanne.",
+    };
+  }
   if (error && error.code === "ADMIN_REVISION_CONFLICT") {
     return {
       isConflict: true,
@@ -2984,10 +2993,9 @@ export function buildBalanceComparisonViewModel(newerSnapshot, olderSnapshot) {
 /**
  * Deterministic id for a GroupBudget: re-importing the same kind+group+year
  * updates the existing row instead of creating a duplicate (feature/group-budget
- * handoff §1). One consequence, addressed by `active` (see GroupBudget in
- * src/domain/types.ts): a typo'd group name gets a *different* id from the
- * correct one, so it can never be "fixed" by re-import — it has to be
- * retired via `active: false` (buildDeactivateGroupBudgetOperation).
+ * handoff §1). One consequence: a typo'd group name gets a *different* id from
+ * the correct one, so it can never be "fixed" by re-import — the stale row has
+ * to be deleted (delete_entity) and the corrected name imported.
  * @param {"income"|"expense"} kind
  * @param {string} group
  * @param {number} year
@@ -3153,27 +3161,6 @@ export function buildGroupBudgetImportOperations(parsed, opMeta) {
     sourceIds: opMeta.sourceIds,
     explanation: opMeta.explanation,
   }));
-}
-
-/**
- * Builds the save_group_budget operation that retires one existing row by
- * resaving it with `active: false` (feature/group-budget handoff §1
- * clarification). This system has no delete operation — a typo'd group
- * name's id can never be "fixed" by re-import, since the id is derived
- * from the name itself (buildGroupBudgetId), so retiring the stale row is
- * the only way to stop it from showing up forever with an empty actual.
- * Mirrors FinancialAccount.active.
- * @param {{ id: string, kind: "income"|"expense", group: string, year: number, budgetAmount: number, sourceIds: readonly string[], notes?: string }} groupBudget
- * @param {{ sourceIds: string[], explanation: string }} opMeta
- * @returns {{ type: "save_group_budget", value: GroupBudgetValue, sourceIds: string[], explanation: string }}
- */
-export function buildDeactivateGroupBudgetOperation(groupBudget, opMeta) {
-  return {
-    type: /** @type {const} */ ("save_group_budget"),
-    value: { ...groupBudget, active: false, sourceIds: opMeta.sourceIds },
-    sourceIds: opMeta.sourceIds,
-    explanation: opMeta.explanation,
-  };
 }
 
 /**
@@ -3476,4 +3463,500 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
     },
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
   };
+}
+
+/* ------------------------------------------------------------------ delete */
+
+/**
+ * Finnish label per entity type, singular and partitive-plural, for the
+ * confirmation summary ("1 havainto", "2 havaintoa").
+ */
+const DELETE_ENTITY_LABELS = {
+  asset: ["rakennusosa", "rakennusosaa"],
+  observation: ["havainto", "havaintoa"],
+  building_event: ["korjaustapahtuma", "korjaustapahtumaa"],
+  cost_evidence: ["kustannusnäyttö", "kustannusnäyttöä"],
+  price_level_confirmation: ["hintatasovahvistus", "hintatasovahvistusta"],
+  financial_account: ["tili", "tiliä"],
+  financial_entry: ["talousrivi", "talousriviä"],
+  balance_sheet_snapshot: ["tasesnapshot", "tasesnapshottia"],
+  group_budget: ["ryhmäbudjetti", "ryhmäbudjettia"],
+  financial_year: ["tilikausi", "tilikautta"],
+  liquidity_baseline: ["maksuvalmiuden lähtötieto", "maksuvalmiuden lähtötietoa"],
+};
+
+/** Order the confirmation lists things in — the deletion target's own kind first is handled by the caller. */
+const DELETE_ENTITY_ORDER = [
+  "asset",
+  "observation",
+  "building_event",
+  "cost_evidence",
+  "price_level_confirmation",
+  "financial_account",
+  "financial_entry",
+  "balance_sheet_snapshot",
+  "group_budget",
+  "financial_year",
+  "liquidity_baseline",
+];
+
+/** @param {{ entityType: string, entityKey: string }} ref */
+function deleteRefKey(ref) {
+  return `${ref.entityType}:${ref.entityKey}`;
+}
+
+/**
+ * Human label for one entity, used in the confirmation view. Falls back to the
+ * key, which is always meaningful (an id the user typed, or accountCode:year).
+ * @param {any} model
+ * @param {string} entityType
+ * @param {string} entityKey
+ */
+function describeDeleteTarget(model, entityType, entityKey) {
+  switch (entityType) {
+    case "asset":
+      return (model.assets ?? []).find((item) => item.id === entityKey)?.name ?? entityKey;
+    case "observation": {
+      const observation = (model.observations ?? []).find((item) => item.id === entityKey);
+      if (observation === undefined) return entityKey;
+      const description = String(observation.description ?? "");
+      return description.length > 60 ? `${description.slice(0, 57)}…` : description || entityKey;
+    }
+    case "building_event":
+      return (model.events ?? []).find((item) => item.id === entityKey)?.title ?? entityKey;
+    case "financial_entry": {
+      const [accountCode, year] = entityKey.split(":");
+      const account = (model.financialAccounts ?? []).find((item) => item.accountCode === accountCode);
+      return `${accountCode} ${account?.name ?? ""} · ${year}`.replace(/\s+/g, " ").trim();
+    }
+    case "financial_account": {
+      const account = (model.financialAccounts ?? []).find((item) => item.accountCode === entityKey);
+      return account === undefined ? entityKey : `${entityKey} ${account.name}`;
+    }
+    case "group_budget": {
+      const groupBudget = (model.groupBudgets ?? []).find((item) => item.id === entityKey);
+      return groupBudget === undefined ? entityKey : `${groupBudget.group} ${groupBudget.year}`;
+    }
+    default:
+      return entityKey;
+  }
+}
+
+/**
+ * Computes the complete cascade for deleting one entity: every other entity
+ * that must go with it, and every entity that must be rewritten because a
+ * reference to the deleted one is disappearing.
+ *
+ * The reference map this implements was read off the validators, not the
+ * spec — every edge below is one that validateAdminDataSnapshot or
+ * projectEvents actually enforces, so a missed edge fails the batch rather
+ * than corrupting the snapshot:
+ *
+ * - Observation.assetId, BuildingEvent.assetId, CostEvidence.assetId
+ *   → deleting an asset deletes its observations, events and evidence.
+ * - BuildingEvent.schedule[].costEvidenceId / actual.costEvidenceId are
+ *   required, and a non-cancelled future event may not have an empty
+ *   schedule → deleting cost evidence deletes every event citing it. This is
+ *   the one cascade that runs "upwards"; the alternative (refuse the delete
+ *   and ask the user to fix the event first) is a dead end, because schedule
+ *   rows cannot be edited away one by one in the UI.
+ * - PriceLevelConfirmation.costEvidenceId → deleted with its evidence.
+ * - FinancialEntry.accountCode → deleting an account deletes its entries.
+ *
+ * Two references are cleared instead of cascaded, because both targets are
+ * legal without them:
+ * - BuildingEvent.observationIds: the event is a real repair that happened;
+ *   losing its background observation does not unmake it.
+ * - CostEvidence.eventId (optional in the model): a contractor quote is
+ *   expensive to obtain and still says what the work costs after the planned
+ *   event is dropped. Clearing the back-reference leaves the evidence on its
+ *   asset, where the user can delete it separately if they want to.
+ *
+ * The walk is a fixed point because the graph has a cycle (event → evidence
+ * → event) and cascades are transitive.
+ *
+ * @param {any} model The admin dashboard read model (state.admin).
+ * @param {{ entityType: string, entityKey: string }} target
+ * @returns {{
+ *   target: { entityType: string, entityKey: string, label: string },
+ *   deletes: Array<{ entityType: string, entityKey: string, label: string }>,
+ *   updates: Array<{ entityType: string, entityKey: string, label: string, reason: string, value: any }>,
+ *   scheduleRowCount: number,
+ *   isEmpty: boolean,
+ * }}
+ */
+export function planEntityDeletion(model, target) {
+  const assets = model?.assets ?? [];
+  const observations = model?.observations ?? [];
+  const events = model?.events ?? [];
+  const costEvidence = model?.costEvidence ?? [];
+  const priceLevelConfirmations = model?.priceLevelConfirmations ?? [];
+  const financialEntries = model?.financialEntries ?? [];
+
+  /** @type {Map<string, { entityType: string, entityKey: string }>} */
+  const deletes = new Map();
+  /** @type {Array<{ entityType: string, entityKey: string }>} */
+  const queue = [{ entityType: target.entityType, entityKey: target.entityKey }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const key = deleteRefKey(current);
+    if (deletes.has(key)) continue;
+    deletes.set(key, current);
+
+    switch (current.entityType) {
+      case "asset":
+        for (const item of observations) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "observation", entityKey: item.id });
+        }
+        for (const item of events) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "building_event", entityKey: item.id });
+        }
+        for (const item of costEvidence) {
+          if (item.assetId === current.entityKey) queue.push({ entityType: "cost_evidence", entityKey: item.id });
+        }
+        break;
+      case "cost_evidence":
+        for (const item of priceLevelConfirmations) {
+          if (item.costEvidenceId === current.entityKey) {
+            queue.push({ entityType: "price_level_confirmation", entityKey: item.costEvidenceId });
+          }
+        }
+        for (const item of events) {
+          if (eventCitesEvidence(item, current.entityKey)) {
+            queue.push({ entityType: "building_event", entityKey: item.id });
+          }
+        }
+        break;
+      case "financial_account":
+        for (const item of financialEntries) {
+          if (item.accountCode === current.entityKey) {
+            queue.push({ entityType: "financial_entry", entityKey: `${item.accountCode}:${item.year}` });
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const deletedObservationIds = new Set(
+    [...deletes.values()].filter((item) => item.entityType === "observation").map((item) => item.entityKey),
+  );
+  const deletedEventIds = new Set(
+    [...deletes.values()].filter((item) => item.entityType === "building_event").map((item) => item.entityKey),
+  );
+
+  /** @type {Array<{ entityType: string, entityKey: string, label: string, reason: string, value: any }>} */
+  const updates = [];
+  for (const event of events) {
+    if (deletes.has(deleteRefKey({ entityType: "building_event", entityKey: event.id }))) continue;
+    const remaining = (event.observationIds ?? []).filter((id) => !deletedObservationIds.has(id));
+    if (remaining.length === (event.observationIds ?? []).length) continue;
+    updates.push({
+      entityType: "building_event",
+      entityKey: event.id,
+      label: event.title ?? event.id,
+      reason: "viittaus poistettavaan havaintoon poistetaan",
+      value: { ...event, observationIds: remaining },
+    });
+  }
+  for (const evidence of costEvidence) {
+    if (deletes.has(deleteRefKey({ entityType: "cost_evidence", entityKey: evidence.id }))) continue;
+    if (evidence.eventId === undefined || !deletedEventIds.has(evidence.eventId)) continue;
+    const { eventId: _cleared, ...withoutEvent } = evidence;
+    updates.push({
+      entityType: "cost_evidence",
+      entityKey: evidence.id,
+      label: evidence.id,
+      reason: "viittaus poistettavaan korjaustapahtumaan poistetaan, näyttö itse säilyy",
+      value: withoutEvent,
+    });
+  }
+
+  const scheduleRowCount = events
+    .filter((event) => deletedEventIds.has(event.id))
+    .reduce((sum, event) => sum + (event.schedule ?? []).length, 0);
+
+  const ordered = [...deletes.values()].sort((a, b) => {
+    const order = DELETE_ENTITY_ORDER.indexOf(a.entityType) - DELETE_ENTITY_ORDER.indexOf(b.entityType);
+    return order === 0 ? a.entityKey.localeCompare(b.entityKey) : order;
+  });
+
+  return {
+    target: {
+      entityType: target.entityType,
+      entityKey: target.entityKey,
+      label: describeDeleteTarget(model, target.entityType, target.entityKey),
+    },
+    sourceIds: [`${target.entityType}:${target.entityKey}`],
+    deletes: ordered.map((item) => ({
+      ...item,
+      label: describeDeleteTarget(model, item.entityType, item.entityKey),
+    })),
+    updates,
+    scheduleRowCount,
+    isEmpty: deletes.size === 0,
+  };
+}
+
+/** @param {any} event @param {string} evidenceId */
+function eventCitesEvidence(event, evidenceId) {
+  if (event.actual?.costEvidenceId === evidenceId) return true;
+  return (event.schedule ?? []).some((row) => row.costEvidenceId === evidenceId);
+}
+
+/**
+ * Finnish confirmation lines for one plan: what goes besides the target, and
+ * what gets rewritten. Returns [] when nothing but the target is affected —
+ * the confirmation is still shown (handoff §2 requires it for every delete),
+ * just without a list.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @returns {string[]}
+ */
+export function summarizeDeletionPlan(plan) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const item of plan.deletes) {
+    if (item.entityType === plan.target.entityType && item.entityKey === plan.target.entityKey) continue;
+    counts.set(item.entityType, (counts.get(item.entityType) ?? 0) + 1);
+  }
+
+  const lines = DELETE_ENTITY_ORDER
+    .filter((entityType) => counts.has(entityType))
+    .map((entityType) => {
+      const count = counts.get(entityType);
+      const [singular, plural] = DELETE_ENTITY_LABELS[entityType] ?? [entityType, entityType];
+      const noun = count === 1 ? singular : plural;
+      if (entityType === "building_event" && plan.scheduleRowCount > 0) {
+        const rows = plan.scheduleRowCount === 1 ? "aikataulurivi" : "aikatauluriviä";
+        return `${count} ${noun} (${plan.scheduleRowCount} ${rows})`;
+      }
+      return `${count} ${noun}`;
+    });
+
+  for (const update of plan.updates) {
+    lines.push(`${update.label}: ${update.reason}`);
+  }
+  return lines;
+}
+
+/**
+ * Turns a plan into the operations for one batch. Every operation carries the
+ * deletion target's own key as its sourceIds: a delete has no external source
+ * document, and demanding one would be exactly the friction this feature
+ * exists to remove. The explanation stays mandatory and comes from the user —
+ * that is the field that actually says why the row went.
+ * An import deletion instead carries the import's own source identifiers,
+ * which is exactly what the user typed to say where those rows came from.
+ * @param {ReturnType<typeof planEntityDeletion>} plan
+ * @param {{ explanation: string }} meta
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function buildDeletionOperations(plan, meta) {
+  const sourceIds = plan.sourceIds;
+  const explanation = toTrimmed(meta.explanation);
+  const updates = plan.updates.map((update) => ({
+    type: update.entityType === "building_event" ? "save_building_event" : "save_cost_evidence",
+    value: update.value,
+    sourceIds,
+    explanation,
+  }));
+  const deletes = plan.deletes.map((item) => ({
+    type: "delete_entity",
+    entityType: item.entityType,
+    entityKey: item.entityKey,
+    sourceIds,
+    explanation,
+  }));
+  // Updates first: applyAdminBatch stages operations in order, and rewriting a
+  // surviving row before its neighbours disappear keeps every intermediate
+  // state readable in the audit trail.
+  return [...updates, ...deletes];
+}
+
+/**
+ * Validates the one field a deletion asks the user for.
+ * @param {Record<string, unknown>} raw
+ * @returns {OperationResult<{ explanation: string }>}
+ */
+export function validateDeletionMeta(raw) {
+  const explanation = toTrimmed(raw.explanation);
+  if (explanation === "") {
+    return { ok: false, errors: { explanation: "Poiston selitys on pakollinen." } };
+  }
+  return { ok: true, value: { explanation } };
+}
+
+/**
+ * Groups every imported financial row and group budget by the source
+ * identifiers it carries, so one paste can be undone as a unit.
+ *
+ * There is no import id or timestamp on the rows — but there does not need to
+ * be: buildFinancialImportOperations and buildGroupBudgetImportOperations both
+ * stamp every row of one paste with that paste's shared sourceIds field, and
+ * the single-row entry form is not wired into the UI, so in practice every row
+ * carries the source identifier of the import that last wrote it. "Last
+ * wrote", not "created", is the right grouping here: a row corrected by a
+ * later paste belongs to that later paste, not the one being undone.
+ *
+ * Rows are keyed by their whole sorted sourceIds set, not by any single id, so
+ * a row tagged with two sources is never swept up by a group named after one
+ * of them.
+ *
+ * @param {any} model
+ * @returns {Array<{ key: string, sourceIds: string[], label: string, years: number[], entryCount: number, accountCount: number, groupBudgetCount: number }>}
+ */
+export function listDataImports(model) {
+  /** @type {Map<string, { key: string, sourceIds: string[], years: Set<number>, accounts: Set<string>, entryCount: number, groupBudgetCount: number }>} */
+  const imports = new Map();
+
+  /** @param {readonly string[] | undefined} rawSourceIds */
+  function bucket(rawSourceIds) {
+    const sourceIds = [...(rawSourceIds ?? [])].map((item) => String(item)).sort();
+    if (sourceIds.length === 0) return undefined;
+    const key = sourceIds.join(",");
+    let entry = imports.get(key);
+    if (entry === undefined) {
+      entry = { key, sourceIds, years: new Set(), accounts: new Set(), entryCount: 0, groupBudgetCount: 0 };
+      imports.set(key, entry);
+    }
+    return entry;
+  }
+
+  for (const row of model?.financialEntries ?? []) {
+    const entry = bucket(row.sourceIds);
+    if (entry === undefined) continue;
+    entry.entryCount += 1;
+    entry.years.add(Number(row.year));
+    entry.accounts.add(String(row.accountCode));
+  }
+  for (const row of model?.groupBudgets ?? []) {
+    const entry = bucket(row.sourceIds);
+    if (entry === undefined) continue;
+    entry.groupBudgetCount += 1;
+    entry.years.add(Number(row.year));
+  }
+
+  return [...imports.values()]
+    .map((entry) => ({
+      key: entry.key,
+      sourceIds: entry.sourceIds,
+      label: entry.sourceIds.join(", "),
+      years: [...entry.years].sort((a, b) => a - b),
+      entryCount: entry.entryCount,
+      accountCount: entry.accounts.size,
+      groupBudgetCount: entry.groupBudgetCount,
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/**
+ * Plans the deletion of one whole import: its financial entries, its group
+ * budgets, and any financial account left with no entries at all once they are
+ * gone — an account with no figures is residue of the import, and would
+ * otherwise linger as an empty row in the per-account views.
+ *
+ * Accounts that still hold rows from another year or another import are kept.
+ *
+ * @param {any} model
+ * @param {string} key An import key from listDataImports.
+ * @returns {ReturnType<typeof planEntityDeletion>}
+ */
+export function planImportDeletion(model, key) {
+  const financialEntries = model?.financialEntries ?? [];
+  const groupBudgets = model?.groupBudgets ?? [];
+  const financialAccounts = model?.financialAccounts ?? [];
+  /** @param {readonly string[] | undefined} rawSourceIds */
+  const matches = (rawSourceIds) =>
+    [...(rawSourceIds ?? [])].map((item) => String(item)).sort().join(",") === key;
+
+  const removedEntries = financialEntries.filter((row) => matches(row.sourceIds));
+  const removedEntryKeys = new Set(removedEntries.map((row) => `${row.accountCode}:${row.year}`));
+  const emptiedAccounts = financialAccounts.filter((account) =>
+    financialEntries.some((row) => row.accountCode === account.accountCode) &&
+    financialEntries
+      .filter((row) => row.accountCode === account.accountCode)
+      .every((row) => removedEntryKeys.has(`${row.accountCode}:${row.year}`))
+  );
+
+  /** @type {Array<{ entityType: string, entityKey: string }>} */
+  const refs = [
+    ...emptiedAccounts.map((account) => ({ entityType: "financial_account", entityKey: account.accountCode })),
+    ...removedEntries.map((row) => ({ entityType: "financial_entry", entityKey: `${row.accountCode}:${row.year}` })),
+    ...groupBudgets.filter((row) => matches(row.sourceIds))
+      .map((row) => ({ entityType: "group_budget", entityKey: row.id })),
+  ];
+
+  return {
+    target: { entityType: "import", entityKey: key, label: key.split(",").join(", ") },
+    sourceIds: key.split(","),
+    deletes: refs.map((ref) => ({
+      ...ref,
+      label: describeDeleteTarget(model, ref.entityType, ref.entityKey),
+    })),
+    updates: [],
+    scheduleRowCount: 0,
+    isEmpty: refs.length === 0,
+  };
+}
+
+/**
+ * Warns about values a re-import would silently drop.
+ *
+ * Re-importing updates rather than duplicates — every save_* operation is an
+ * upsert on a deterministic key (FinancialEntry on accountCode+year,
+ * BalanceSheetSnapshot on id) — but it replaces the row *whole*. A paste that
+ * leaves the budget column empty for an account/year that already has one
+ * therefore erases that budget without saying so, which is the DATA GAP
+ * principle failing in the other direction: a figure quietly becoming nothing.
+ *
+ * This does not block the import. Emptying a value on purpose has to stay
+ * possible; the user just has to see it coming.
+ *
+ * @param {{ entries?: ReadonlyArray<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }> }} parsed
+ * @param {ReadonlyArray<{ accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown }>} [existingEntries]
+ * @returns {string[]} Finnish warning lines, empty when nothing would be lost.
+ */
+export function detectFinancialImportValueDrops(parsed, existingEntries) {
+  const existing = new Map(
+    (existingEntries ?? []).map((row) => [`${String(row.accountCode)}:${Number(row.year)}`, row]),
+  );
+  /** @type {string[]} */
+  const warnings = [];
+  for (const entry of parsed?.entries ?? []) {
+    const key = `${String(entry.accountCode)}:${Number(entry.year)}`;
+    const current = existing.get(key);
+    if (current === undefined) continue;
+    for (const [field, label] of [["budgetAmount", "budjetti"], ["actualAmount", "toteuma"]]) {
+      if (typeof current[field] === "number" && typeof entry[field] !== "number") {
+        warnings.push(
+          `${key}: liitos ei sisällä ${label}a, nykyinen arvo ${current[field]} poistuu.`,
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * The same warning for balance data, where re-importing an existing snapshot
+ * id replaces its entries wholesale: any entry key missing from the paste
+ * disappears from the snapshot.
+ * @param {{ snapshot?: { id?: unknown, entries?: ReadonlyArray<{ key?: unknown }> } }} parsed
+ * @param {ReadonlyArray<{ id?: unknown, entries?: ReadonlyArray<{ key?: unknown, name?: unknown }> }>} [existingSnapshots]
+ * @returns {string[]}
+ */
+export function detectBalanceImportValueDrops(parsed, existingSnapshots) {
+  const id = String(parsed?.snapshot?.id ?? "");
+  const current = (existingSnapshots ?? []).find((item) => String(item.id) === id);
+  if (current === undefined) return [];
+  const pastedKeys = new Set((parsed?.snapshot?.entries ?? []).map((entry) => String(entry.key)));
+  const dropped = (current.entries ?? []).filter((entry) => !pastedKeys.has(String(entry.key)));
+  if (dropped.length === 0) return [];
+  return [
+    `Snapshotti ${id} on jo olemassa ja korvataan kokonaan. Liitoksesta puuttuu ` +
+      `${dropped.length} nykyistä erää, jotka poistuvat: ` +
+      dropped.map((entry) => String(entry.name ?? entry.key)).join(", "),
+  ];
 }

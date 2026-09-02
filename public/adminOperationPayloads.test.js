@@ -10,7 +10,7 @@ import {
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
-  buildDeactivateGroupBudgetOperation,
+  buildDeletionOperations,
   buildEventListViewModel,
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
@@ -43,13 +43,20 @@ import {
   parseFinancialPasteInput,
   parseGroupBudgetPasteInput,
   parseSourceIds,
+  detectBalanceImportValueDrops,
+  detectFinancialImportValueDrops,
+  listDataImports,
+  planEntityDeletion,
+  planImportDeletion,
   PROJECTION_PRICE_LEVEL_YEAR,
   selectFinancialYearViewModel,
+  summarizeDeletionPlan,
   validateAssetInput,
   validateBalanceSheetSnapshotInput,
   validateBuildingEventInput,
   validateCompanyInput,
   validateCostEvidenceInput,
+  validateDeletionMeta,
   validateFinancialAccountInput,
   validateFinancialEntryInput,
   validateObservationInput,
@@ -2482,7 +2489,7 @@ describe("parseGroupBudgetPasteInput", () => {
   });
 });
 
-describe("buildGroupBudgetImportOperations / buildDeactivateGroupBudgetOperation", () => {
+describe("buildGroupBudgetImportOperations", () => {
   it("builds save_group_budget operations defaulting active: true", () => {
     const parsed = { groupBudgets: [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000 }] };
     const ops = buildGroupBudgetImportOperations(parsed, { sourceIds: ["src1"], explanation: "Tuonti" });
@@ -2492,15 +2499,6 @@ describe("buildGroupBudgetImportOperations / buildDeactivateGroupBudgetOperation
       sourceIds: ["src1"],
       explanation: "Tuonti",
     }]);
-  });
-
-  it("builds a save_group_budget operation that retires a row with active: false", () => {
-    const existing = { id: "expense::Sähkö- ja vesi::2024", kind: "expense", group: "Sähkö- ja vesi", year: 2024, budgetAmount: -10000, active: true, sourceIds: ["old"] };
-    const op = buildDeactivateGroupBudgetOperation(existing, { sourceIds: ["src2"], explanation: "Korjaus: kirjoitusvirhe ryhmän nimessä" });
-    expect(op.value.active).toBe(false);
-    expect(op.value.id).toBe("expense::Sähkö- ja vesi::2024");
-    expect(op.value.budgetAmount).toBe(-10000);
-    expect(op.sourceIds).toEqual(["src2"]);
   });
 });
 
@@ -2709,5 +2707,396 @@ describe("group budget separation from account-level views (rajaus regression)",
     const vm = buildExpenseGroupViewModel(GROUP_BUDGET_ACCOUNTS, entries);
     const sahko = vm.groups.find((g) => g.group === "Sähkö");
     expect(sahko.actuals[2024]).toBe(-6000);
+  });
+});
+
+/**
+ * A model shaped like state.admin with one asset carrying the full chain:
+ * observation → event (citing both the observation and two evidence rows),
+ * plus a price-level confirmation and a second, unrelated asset.
+ */
+const DELETE_MODEL = {
+  assets: [
+    { id: "asset_roof", name: "Vesikatto", category: "envelope", active: true, sourceIds: ["s"] },
+    { id: "asset_yard", name: "Piha-alue", category: "yard", active: true, sourceIds: ["s"] },
+  ],
+  observations: [
+    { id: "obs_roof_leak", assetId: "asset_roof", description: "Vuoto katolla", observedAt: "2026-01-02", sourceIds: ["s"] },
+    { id: "obs_yard_crack", assetId: "asset_yard", description: "Halkeama", observedAt: "2026-01-03", sourceIds: ["s"] },
+  ],
+  events: [
+    {
+      id: "event_roof_repair",
+      assetId: "asset_roof",
+      title: "Katon korjaus",
+      observationIds: ["obs_roof_leak"],
+      schedule: [
+        { id: "base_2030", scenario: "base", year: 2030, costEvidenceId: "quote_roof_2026" },
+        { id: "stress_2028", scenario: "stress", year: 2028, costEvidenceId: "quote_roof_2026" },
+      ],
+    },
+    {
+      id: "event_yard_repair",
+      assetId: "asset_yard",
+      title: "Pihan korjaus",
+      observationIds: ["obs_roof_leak", "obs_yard_crack"],
+      schedule: [{ id: "base_2031", scenario: "base", year: 2031, costEvidenceId: "quote_yard_2026" }],
+    },
+  ],
+  costEvidence: [
+    { id: "quote_roof_2026", assetId: "asset_roof", eventId: "event_roof_repair", status: "quote" },
+    { id: "quote_yard_2026", assetId: "asset_yard", eventId: "event_yard_repair", status: "quote" },
+    { id: "quote_loose_2026", status: "quote", eventId: "event_roof_repair" },
+  ],
+  priceLevelConfirmations: [{ costEvidenceId: "quote_roof_2026", confirmedYear: 2026 }],
+  financialAccounts: [
+    { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "Hallintopalvelut", active: true },
+    { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö", active: true },
+  ],
+  financialEntries: [
+    { accountCode: "5300", year: 2024, actualAmount: -12000, sourceIds: ["tp_2024"] },
+    { accountCode: "5300", year: 2025, actualAmount: -12800, sourceIds: ["tp_2025"] },
+    { accountCode: "5400", year: 2025, actualAmount: -9000, sourceIds: ["tp_2025"] },
+  ],
+  balanceSheetSnapshots: [{ id: "tase-testi-2025", asOfDate: "2025-12-31", entries: [] }],
+  groupBudgets: [{ id: "expense::Sähkö::2025", kind: "expense", group: "Sähkö", year: 2025, budgetAmount: -10000, active: true }],
+};
+
+/** @param {ReturnType<typeof planEntityDeletion>} plan */
+function deletedKeys(plan) {
+  return plan.deletes.map((item) => `${item.entityType}:${item.entityKey}`).sort();
+}
+
+describe("planEntityDeletion", () => {
+  it("plans a lone entity as itself with nothing else affected", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "balance_sheet_snapshot", entityKey: "tase-testi-2025" });
+    expect(deletedKeys(plan)).toEqual(["balance_sheet_snapshot:tase-testi-2025"]);
+    expect(plan.updates).toEqual([]);
+    expect(summarizeDeletionPlan(plan)).toEqual([]);
+  });
+
+  it("takes an asset's observations, events, evidence and price-level confirmation with it", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_roof" });
+    expect(deletedKeys(plan)).toEqual([
+      "asset:asset_roof",
+      "building_event:event_roof_repair",
+      "cost_evidence:quote_roof_2026",
+      "observation:obs_roof_leak",
+      "price_level_confirmation:quote_roof_2026",
+    ]);
+  });
+
+  it("rewrites, rather than deletes, an unrelated event that referenced a deleted observation", () => {
+    // Both events cite this observation; neither is destroyed by losing it.
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "observation", entityKey: "obs_roof_leak" });
+    expect(deletedKeys(plan)).toEqual(["observation:obs_roof_leak"]);
+    expect(plan.updates.map((item) => item.entityKey)).toEqual([
+      "event_roof_repair",
+      "event_yard_repair",
+    ]);
+    expect(plan.updates.every((item) => item.entityType === "building_event")).toBe(true);
+    expect(plan.updates[0].value.observationIds).toEqual([]);
+    expect(plan.updates[1].value.observationIds).toEqual(["obs_yard_crack"]);
+  });
+
+  it("clears eventId on surviving cost evidence instead of deleting the evidence", () => {
+    // quote_loose_2026 has no assetId, so nothing else pulls it into the
+    // cascade — it must survive the event's deletion with eventId gone.
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "building_event", entityKey: "event_roof_repair" });
+    expect(deletedKeys(plan)).toEqual(["building_event:event_roof_repair"]);
+    const update = plan.updates.find((item) => item.entityKey === "quote_loose_2026");
+    expect(update).toBeDefined();
+    expect("eventId" in update.value).toBe(false);
+    expect(update.value.status).toBe("quote");
+  });
+
+  it("deletes every event citing a deleted cost evidence, and reports the schedule rows that go with them", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "cost_evidence", entityKey: "quote_roof_2026" });
+    expect(deletedKeys(plan)).toEqual([
+      "building_event:event_roof_repair",
+      "cost_evidence:quote_roof_2026",
+      "price_level_confirmation:quote_roof_2026",
+    ]);
+    expect(plan.scheduleRowCount).toBe(2);
+    expect(summarizeDeletionPlan(plan)).toContain("1 korjaustapahtuma (2 aikatauluriviä)");
+  });
+
+  it("terminates on the event ↔ evidence cycle instead of looping", () => {
+    // asset_yard's event cites quote_yard_2026, which points back at the event.
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_yard" });
+    expect(deletedKeys(plan)).toEqual([
+      "asset:asset_yard",
+      "building_event:event_yard_repair",
+      "cost_evidence:quote_yard_2026",
+      "observation:obs_yard_crack",
+    ]);
+    // quote_loose_2026 pointed at the *other* event, so it is untouched here.
+    expect(plan.updates).toEqual([]);
+  });
+
+  it("deletes a financial account's entries with it, leaving other accounts alone", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "financial_account", entityKey: "5300" });
+    expect(deletedKeys(plan)).toEqual([
+      "financial_account:5300",
+      "financial_entry:5300:2024",
+      "financial_entry:5300:2025",
+    ]);
+  });
+
+  it("deletes a single financial entry without touching its account or sibling year", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "financial_entry", entityKey: "5300:2025" });
+    expect(deletedKeys(plan)).toEqual(["financial_entry:5300:2025"]);
+  });
+
+  it("labels the target and the collateral in Finnish for the confirmation view", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "asset", entityKey: "asset_roof" });
+    expect(plan.target.label).toBe("Vesikatto");
+    expect(summarizeDeletionPlan(plan)).toEqual([
+      "1 havainto",
+      "1 korjaustapahtuma (2 aikatauluriviä)",
+      "1 kustannusnäyttö",
+      "1 hintatasovahvistus",
+      "Pihan korjaus: viittaus poistettavaan havaintoon poistetaan",
+      "quote_loose_2026: viittaus poistettavaan korjaustapahtumaan poistetaan, näyttö itse säilyy",
+    ]);
+  });
+});
+
+describe("buildDeletionOperations", () => {
+  it("emits every update before every delete, with the target key as sourceIds", () => {
+    const plan = planEntityDeletion(DELETE_MODEL, { entityType: "building_event", entityKey: "event_roof_repair" });
+    const operations = buildDeletionOperations(plan, { explanation: "Testidataa, poistetaan." });
+
+    // Both evidence rows pointed at this event and both survive it.
+    expect(operations.map((item) => item.type)).toEqual([
+      "save_cost_evidence",
+      "save_cost_evidence",
+      "delete_entity",
+    ]);
+    expect(operations.every((item) => item.explanation === "Testidataa, poistetaan.")).toBe(true);
+    // A delete has no external source document; demanding one would be exactly
+    // the friction this feature removes.
+    expect(operations.every((item) => item.sourceIds.length === 1)).toBe(true);
+    expect(operations[0].sourceIds).toEqual(["building_event:event_roof_repair"]);
+    expect(operations.at(-1)).toMatchObject({
+      type: "delete_entity",
+      entityType: "building_event",
+      entityKey: "event_roof_repair",
+    });
+  });
+
+  it("produces a batch that applyAdminBatch accepts, and the result matches the preview", () => {
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "company_1", name: "As Oy Testi", apartmentCount: 12 },
+      assets: DELETE_MODEL.assets,
+      observations: DELETE_MODEL.observations,
+      updatedAt: "2026-09-01T09:00:00Z",
+      updatedBy: "admin:pasi",
+    });
+    const plan = planEntityDeletion(snapshot, { entityType: "asset", entityKey: "asset_yard" });
+    const next = applyAdminBatch(snapshot, {
+      companyId: "company_1",
+      expectedRevision: snapshot.revision,
+      actorId: "admin:pasi",
+      occurredAt: "2026-09-01T10:00:00Z",
+      operations: buildDeletionOperations(plan, { explanation: "Testidataa." }),
+    });
+
+    // Exactly what the preview listed, no more and no less.
+    expect(next.assets.map((item) => item.id)).toEqual(["asset_roof"]);
+    expect(next.observations.map((item) => item.id)).toEqual(["obs_roof_leak"]);
+    expect(next.auditTrail.map((item) => item.operation)).toEqual(["delete", "delete"]);
+  });
+});
+
+describe("interpretRevisionConflict with a stale delete target", () => {
+  it("treats DELETE_TARGET_NOT_FOUND as a conflict, so the UI asks for a reload", () => {
+    const result = interpretRevisionConflict({ code: "DELETE_TARGET_NOT_FOUND", message: "x" });
+    expect(result.isConflict).toBe(true);
+    expect(result.message).toMatch(/Lataa työtila uudelleen/);
+  });
+});
+
+describe("validateDeletionMeta", () => {
+  it("requires an explanation", () => {
+    expect(validateDeletionMeta({ explanation: "   " }).ok).toBe(false);
+    expect(validateDeletionMeta({ explanation: "Testidataa." })).toEqual({
+      ok: true,
+      value: { explanation: "Testidataa." },
+    });
+  });
+
+  it("does not ask for sourceIds at all", () => {
+    expect(validateDeletionMeta({ explanation: "Testidataa." }).errors).toBeUndefined();
+  });
+});
+
+describe("listDataImports / planImportDeletion", () => {
+  const IMPORT_MODEL = {
+    financialAccounts: [
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "Hallintopalvelut", active: true },
+      { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö", active: true },
+      { accountCode: "5500", name: "Korjaus", kind: "expense", group: "Korjaukset", active: true },
+    ],
+    financialEntries: [
+      { accountCode: "5300", year: 2024, actualAmount: -12000, sourceIds: ["tp_2024"] },
+      { accountCode: "5300", year: 2025, actualAmount: -12800, sourceIds: ["tp_2025"] },
+      { accountCode: "5400", year: 2025, actualAmount: -9000, sourceIds: ["tp_2025"] },
+      // Two sources on one row: it belongs to neither single-id group.
+      { accountCode: "5500", year: 2025, actualAmount: -3000, sourceIds: ["tp_2025", "korjauserittely"] },
+    ],
+    groupBudgets: [
+      { id: "expense::Sähkö::2025", kind: "expense", group: "Sähkö", year: 2025, budgetAmount: -10000, active: true, sourceIds: ["ryhmabudjetti_2025"] },
+    ],
+  };
+
+  it("groups rows by their whole sourceIds set, counting years and accounts", () => {
+    const imports = listDataImports(IMPORT_MODEL);
+    expect(imports.map((item) => item.key)).toEqual([
+      "korjauserittely,tp_2025",
+      "ryhmabudjetti_2025",
+      "tp_2024",
+      "tp_2025",
+    ]);
+    const tp2025 = imports.find((item) => item.key === "tp_2025");
+    expect(tp2025).toMatchObject({ entryCount: 2, accountCount: 2, groupBudgetCount: 0, years: [2025] });
+    expect(imports.find((item) => item.key === "ryhmabudjetti_2025")).toMatchObject({
+      entryCount: 0,
+      groupBudgetCount: 1,
+    });
+  });
+
+  it("deletes exactly one import's rows and nothing else", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "tp_2025");
+    expect(deletedKeys(plan)).toEqual([
+      "financial_account:5400",
+      "financial_entry:5300:2025",
+      "financial_entry:5400:2025",
+    ]);
+    // 5300 keeps its 2024 row, so the account stays; 5500's row carries a
+    // different source set and is untouched.
+    expect(plan.sourceIds).toEqual(["tp_2025"]);
+  });
+
+  it("uses the import's own source identifiers as the operations' sourceIds", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "korjauserittely,tp_2025");
+    const operations = buildDeletionOperations(plan, { explanation: "Väärä vuosi." });
+    expect(operations.every((item) => item.sourceIds.join(",") === "korjauserittely,tp_2025")).toBe(true);
+    expect(deletedKeys(plan)).toEqual(["financial_account:5500", "financial_entry:5500:2025"]);
+  });
+
+  it("reuses the same grouping for group budgets", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "ryhmabudjetti_2025");
+    expect(deletedKeys(plan)).toEqual(["group_budget:expense::Sähkö::2025"]);
+    expect(summarizeDeletionPlan(plan)).toEqual(["1 ryhmäbudjetti"]);
+  });
+
+  it("reports an unknown key as an empty plan rather than deleting everything", () => {
+    const plan = planImportDeletion(IMPORT_MODEL, "ei_tallaista");
+    expect(plan.isEmpty).toBe(true);
+    expect(plan.deletes).toEqual([]);
+  });
+});
+
+describe("re-import value drops", () => {
+  const EXISTING_ENTRIES = [
+    { accountCode: "5300", year: 2025, budgetAmount: 13000, actualAmount: 12800 },
+    { accountCode: "5400", year: 2025, actualAmount: -9000 },
+  ];
+
+  it("warns when a paste omits a column the stored row has a value in", () => {
+    // Upsert replaces the row whole, so a toteuma-only paste erases the budget.
+    const parsed = { entries: [{ accountCode: "5300", year: 2025, actualAmount: 12500 }] };
+    expect(detectFinancialImportValueDrops(parsed, EXISTING_ENTRIES)).toEqual([
+      "5300:2025: liitos ei sisällä budjettia, nykyinen arvo 13000 poistuu.",
+    ]);
+  });
+
+  it("stays quiet when the paste carries both values, or the row is new", () => {
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5300", year: 2025, budgetAmount: 13000, actualAmount: 12500 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5999", year: 2025, actualAmount: 1 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+    // A stored row with no budget at all has nothing to lose.
+    expect(detectFinancialImportValueDrops(
+      { entries: [{ accountCode: "5400", year: 2025, actualAmount: -9500 }] },
+      EXISTING_ENTRIES,
+    )).toEqual([]);
+  });
+
+  it("warns when re-importing a balance snapshot leaves out entries it currently has", () => {
+    const existing = [{
+      id: "Tase-2025",
+      entries: [{ key: "cash", name: "Rahat" }, { key: "receivables", name: "Saamiset" }],
+    }];
+    const parsed = { snapshot: { id: "Tase-2025", entries: [{ key: "cash" }] } };
+    const warnings = detectBalanceImportValueDrops(parsed, existing);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Saamiset");
+  });
+
+  it("stays quiet for a balance snapshot id that does not exist yet", () => {
+    const parsed = { snapshot: { id: "Tase-2026", entries: [{ key: "cash" }] } };
+    expect(detectBalanceImportValueDrops(parsed, [{ id: "Tase-2025", entries: [{ key: "cash" }] }])).toEqual([]);
+  });
+});
+
+describe("views after a deletion (regression)", () => {
+  it("recomputes every finance view over the surviving rows, with no orphan references", () => {
+    const accounts = [
+      { accountCode: "5300", name: "Isännöintipalkkiot", kind: "expense", group: "Hallintopalvelut", active: true },
+      { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö", active: true },
+      { accountCode: "3000", name: "Hoitovastikkeet", kind: "income", group: "Vastiketulot", active: true },
+    ];
+    const snapshot = createAdminDataSnapshot({
+      housingCompany: { id: "company_1", name: "As Oy Testi", apartmentCount: 12 },
+      financialAccounts: accounts,
+      financialEntries: [
+        { accountCode: "5300", year: 2025, budgetAmount: -13000, actualAmount: -12800, sourceIds: ["tp_2025"] },
+        { accountCode: "5400", year: 2025, budgetAmount: -10000, actualAmount: -9000, sourceIds: ["tp_2025"] },
+        { accountCode: "3000", year: 2025, budgetAmount: 500000, actualAmount: 495000, sourceIds: ["tp_2025"] },
+      ],
+      groupBudgets: [
+        { id: "expense::Sähkö::2025", kind: "expense", group: "Sähkö", year: 2025, budgetAmount: -10000, active: true, sourceIds: ["rb_2025"] },
+      ],
+      updatedAt: "2026-09-01T09:00:00Z",
+      updatedBy: "admin:pasi",
+    });
+
+    const plan = planEntityDeletion(snapshot, { entityType: "financial_account", entityKey: "5400" });
+    const next = applyAdminBatch(snapshot, {
+      companyId: "company_1",
+      expectedRevision: snapshot.revision,
+      actorId: "admin:pasi",
+      occurredAt: "2026-09-01T10:00:00Z",
+      operations: buildDeletionOperations(plan, { explanation: "Väärä tili." }),
+    });
+
+    const accountCosts = buildAccountCostsViewModel(next.financialAccounts, next.financialEntries);
+    expect(accountCosts.groups.some((group) => group.group === "Sähkö")).toBe(false);
+    expect(accountCosts.totals["actual-2025"]).toBe(-12800);
+
+    const expenseGroups = buildExpenseGroupViewModel(next.financialAccounts, next.financialEntries);
+    expect(expenseGroups.groups.map((group) => group.group)).toEqual(["Hallintopalvelut"]);
+
+    const income = buildIncomeViewModel(next.financialAccounts, next.financialEntries);
+    expect(income.isEmpty).toBe(false);
+
+    // The group budget for the deleted account's group survives — it is an
+    // independent row — and the comparison still renders it, now without an
+    // actual, rather than crashing on the missing account.
+    const budget = buildGroupBudgetVsActualViewModel(
+      next.financialAccounts, next.financialEntries, next.groupBudgets, 2025,
+    );
+    const sahko = budget.sections
+      .flatMap((section) => section.groups)
+      .find((group) => group.group === "Sähkö");
+    expect(sahko?.budget).toBe(-10000);
+    expect(sahko?.actual).toBeUndefined();
+    expect(sahko?.diffPercent).toBeUndefined();
   });
 });

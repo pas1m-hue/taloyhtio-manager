@@ -320,6 +320,11 @@
               <p id="finance-import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
               <div class="button-row"><button id="finance-import-submit" type="submit" disabled>Tallenna tuonti</button></div>
             </form>
+            <section class="card">
+              <h3>Tuonnit</h3>
+              <p class="muted">Rivit ryhmiteltynä niiden lähdetunnisteiden mukaan. Yhden liitoksen kaikki rivit kantavat saman tunnisteen, joten koko virheellinen liitos saa mennä kerralla — sen sijaan että rivit poistetaan yksi kerrallaan. Yksittäisen luvun voi korjata liittämällä saman tilin ja vuoden uudelleen; se päivittää rivin eikä luo kaksoiskappaletta.</p>
+              <div id="finance-import-list"></div>
+            </section>
           </section>
           <section class="view" data-view="finance-income" aria-labelledby="finance-income-title" hidden>
             <header class="view-head"><h2 id="finance-income-title">Talous · Tulot</h2></header>
@@ -361,7 +366,7 @@
             </form>
             <section class="card">
               <h3>Nykyiset ryhmäbudjetit</h3>
-              <p class="muted">Väärin kirjoitettu ryhmänimi ei koskaan saa toteumaa eikä sitä voi korjata uudelleentuonnilla (nimi on osa rivin tunnistetta) — poista se käytöstä alla ja tuo oikea nimi uudelleen. Poisto käyttää yllä olevan lomakkeen lähdetunnisteita ja selitystä.</p>
+              <p class="muted">Väärin kirjoitettu ryhmänimi ei koskaan saa toteumaa eikä sitä voi korjata uudelleentuonnilla (nimi on osa rivin tunnistetta) — poista rivi alla ja tuo oikea nimi uudelleen.</p>
               <div id="group-budget-list"></div>
             </section>
           </section>
@@ -428,6 +433,9 @@
               <label>Vertaa snapshotiin
                 <select id="finance-position-compare"></select>
               </label>
+              <div class="button-row">
+                <button type="button" class="danger" id="finance-position-delete">Poista snapshotti</button>
+              </div>
             </div>
             <div id="finance-position-body"></div>
           </section>

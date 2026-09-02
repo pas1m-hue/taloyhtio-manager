@@ -1,4 +1,5 @@
 import {
+  DELETABLE_ADMIN_ENTITY_TYPES,
   DomainValidationError,
   type AdminAuditEntry,
   type AdminDataBatchCommand,
@@ -10,6 +11,7 @@ import {
   type FinancialAccount,
   type FinancialEntry,
   type BalanceSheetSnapshot,
+  type DeletableAdminEntityType,
   type GroupBudget,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
@@ -86,6 +88,32 @@ export function applyAdminBatch(
     operationKeys.add(compoundKey);
 
     const before = findCurrent(mutable, descriptor.entityType, descriptor.entityKey);
+    const auditBase = {
+      id: `${revision}:${String(index + 1).padStart(3, "0")}:${compoundKey}`,
+      revision,
+      entityType: descriptor.entityType,
+      entityKey: descriptor.entityKey,
+      actorId: command.actorId,
+      occurredAt: command.occurredAt,
+      sourceIds: [...operation.sourceIds].sort(),
+      explanation: operation.explanation,
+    };
+
+    if (operation.type === "delete_entity") {
+      // Deleting a key that is not there is a stale-preview symptom, not a
+      // no-op: the caller computed a cascade against a snapshot that has
+      // since changed. Failing the whole batch keeps the preview honest.
+      if (before === undefined) {
+        throw new DomainValidationError(
+          "DELETE_TARGET_NOT_FOUND",
+          `Admin batch cannot delete missing ${compoundKey}.`,
+        );
+      }
+      deleteOperation(mutable, operation.entityType, descriptor.entityKey);
+      stagedAudits.push({ ...auditBase, operation: "delete", before: clone(before) });
+      return;
+    }
+
     saveOperation(mutable, operation);
     const after = findCurrent(mutable, descriptor.entityType, descriptor.entityKey);
     if (after === undefined) {
@@ -95,15 +123,8 @@ export function applyAdminBatch(
       );
     }
     stagedAudits.push({
-      id: `${revision}:${String(index + 1).padStart(3, "0")}:${compoundKey}`,
-      revision,
-      entityType: descriptor.entityType,
-      entityKey: descriptor.entityKey,
+      ...auditBase,
       operation: before === undefined ? "create" : "update",
-      actorId: command.actorId,
-      occurredAt: command.occurredAt,
-      sourceIds: [...operation.sourceIds].sort(),
-      explanation: operation.explanation,
       ...(before === undefined ? {} : { before: clone(before) }),
       after: clone(after),
     });
@@ -172,6 +193,18 @@ function validateOperationMetadata(operation: AdminDataOperation): void {
   if (operation.type === "save_building_event") {
     validateBuildingEventRuntime(operation.value);
   }
+  if (operation.type === "delete_entity") {
+    // The HTTP layer forwards operations as opaque JSON, so the entityType
+    // union is a compile-time guarantee only — check it at runtime too.
+    if (!DELETABLE_ADMIN_ENTITY_TYPES.includes(operation.entityType) ||
+        operation.entityKey.trim() === "") {
+      throw new DomainValidationError(
+        "INVALID_ADMIN_OPERATION",
+        `delete_entity cannot target ${operation.entityType || "<empty>"} ` +
+          `${operation.entityKey || "<empty>"}.`,
+      );
+    }
+  }
 }
 
 function describeOperation(operation: AdminDataOperation): {
@@ -209,6 +242,8 @@ function describeOperation(operation: AdminDataOperation): {
       return { entityType: "balance_sheet_snapshot", entityKey: operation.value.id };
     case "save_group_budget":
       return { entityType: "group_budget", entityKey: operation.value.id };
+    case "delete_entity":
+      return { entityType: operation.entityType, entityKey: operation.entityKey };
   }
 }
 
@@ -273,6 +308,62 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
       return;
     case "save_group_budget":
       state.groupBudgets = upsertById(state.groupBudgets, operation.value);
+      return;
+    case "delete_entity":
+      throw new DomainValidationError(
+        "INVALID_ADMIN_OPERATION",
+        "delete_entity is applied by deleteOperation, not saveOperation.",
+      );
+  }
+}
+
+/**
+ * Removes one entity by the same (entityType, entityKey) pair findCurrent
+ * reads, so a delete can never target a different row than the audit entry
+ * describes. Referential integrity is not checked here: the caller sends the
+ * whole cascade in one batch and validateAdminDataSnapshot rejects the batch
+ * if any reference would be left dangling.
+ */
+function deleteOperation(
+  state: MutableAdminState,
+  entityType: DeletableAdminEntityType,
+  key: string,
+): void {
+  switch (entityType) {
+    case "financial_year":
+      state.financialYears = state.financialYears.filter((item) => String(item.year) !== key);
+      return;
+    case "liquidity_baseline":
+      state.liquidityBaselines = state.liquidityBaselines.filter((item) => item.id !== key);
+      return;
+    case "asset":
+      state.assets = state.assets.filter((item) => item.id !== key);
+      return;
+    case "observation":
+      state.observations = state.observations.filter((item) => item.id !== key);
+      return;
+    case "cost_evidence":
+      state.costEvidence = state.costEvidence.filter((item) => item.id !== key);
+      return;
+    case "price_level_confirmation":
+      state.priceLevelConfirmations = state.priceLevelConfirmations
+        .filter((item) => item.costEvidenceId !== key);
+      return;
+    case "building_event":
+      state.events = state.events.filter((item) => item.id !== key);
+      return;
+    case "financial_account":
+      state.financialAccounts = state.financialAccounts.filter((item) => item.accountCode !== key);
+      return;
+    case "financial_entry":
+      state.financialEntries = state.financialEntries
+        .filter((item) => `${item.accountCode}:${item.year}` !== key);
+      return;
+    case "balance_sheet_snapshot":
+      state.balanceSheetSnapshots = state.balanceSheetSnapshots.filter((item) => item.id !== key);
+      return;
+    case "group_budget":
+      state.groupBudgets = state.groupBudgets.filter((item) => item.id !== key);
       return;
   }
 }

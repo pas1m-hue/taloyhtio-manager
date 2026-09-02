@@ -345,6 +345,85 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded).toBeDefined();
     expect(loaded!.groupBudgets).toEqual([]);
   });
+
+  it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    // The three tests above each pin one field, which means a future field
+    // added without a matching test is unprotected. This one strips every
+    // collection key withDefaultedAdminCollections() knows about, so deleting
+    // any single `?? []` from it fails here even if nobody adds a test.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = payload
+         - 'financialYears' - 'liquidityBaselines' - 'assets' - 'observations'
+         - 'costEvidence' - 'priceLevelConfirmations' - 'events'
+         - 'financialAccounts' - 'financialEntries' - 'balanceSheetSnapshots'
+         - 'groupBudgets' - 'auditTrail'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    for (const collection of [
+      loaded!.financialYears, loaded!.liquidityBaselines, loaded!.assets,
+      loaded!.observations, loaded!.costEvidence, loaded!.priceLevelConfirmations,
+      loaded!.events, loaded!.financialAccounts, loaded!.financialEntries,
+      loaded!.balanceSheetSnapshots, loaded!.groupBudgets, loaded!.auditTrail,
+    ]) {
+      expect(collection).toEqual([]);
+    }
+  });
+
+  it("round-trips a delete audit entry, which has no `after` value to store", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    const stored = await publications.load(COMPANY_ID);
+    const added = applyAdminBatch(stored!, {
+      companyId: COMPANY_ID,
+      expectedRevision: stored!.revision,
+      actorId: "admin:pasi",
+      occurredAt: "2026-09-01T11:00:00+03:00",
+      operations: [{
+        type: "save_asset",
+        value: {
+          id: "asset_typo_row",
+          name: "fgda",
+          category: "other",
+          sourceIds: ["manual_admin_entry_2026"],
+          active: true,
+        },
+        sourceIds: ["manual_admin_entry_2026"],
+        explanation: "Testirivi.",
+      }],
+    });
+    await publications.save(COMPANY_ID, stored!.revision, added);
+
+    const next = applyAdminBatch(added, {
+      companyId: COMPANY_ID,
+      expectedRevision: added.revision,
+      actorId: "admin:pasi",
+      occurredAt: "2026-09-01T12:00:00+03:00",
+      operations: [{
+        type: "delete_entity",
+        entityType: "asset",
+        entityKey: "asset_typo_row",
+        sourceIds: ["asset:asset_typo_row"],
+        explanation: "Testidataa, poistetaan.",
+      }],
+    });
+    await publications.save(COMPANY_ID, added.revision, next);
+
+    const reloaded = await publications.load(COMPANY_ID);
+    const audit = reloaded!.auditTrail.at(-1);
+    expect(audit?.operation).toBe("delete");
+    expect(audit?.after).toBeUndefined();
+    expect(audit?.before).toMatchObject({ id: "asset_typo_row" });
+    expect(reloaded!.assets.some((item) => item.id === "asset_typo_row")).toBe(false);
+    // The create entry is still there: deleting the row does not delete its history.
+    expect(reloaded!.auditTrail.some((item) =>
+      item.entityKey === "asset_typo_row" && item.operation === "create")).toBe(true);
+  });
 });
 
 describe("V2.5 PostgreSQL visitor-session repository", () => {
