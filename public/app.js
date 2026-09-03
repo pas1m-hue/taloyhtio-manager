@@ -14,6 +14,7 @@ import {
   buildFinancialImportOperations,
   buildGroupBudgetImportOperations,
   buildGroupBudgetVsActualViewModel,
+  buildGroupChartModel,
   buildIncomeViewModel,
   buildObservationListViewModel,
   buildSaveAssetOperation,
@@ -2356,11 +2357,94 @@ function renderExpenseGroupDetail() {
   }).join("");
   $("#detail-panel-title").textContent = group.group;
   $("#detail-panel-body").innerHTML = `
+    ${renderGroupChart(group, vm)}
     <div class="table-wrap"><table>
       <thead><tr><th>Tili</th><th>Nimi</th><th>Luonne</th><th>Ohjattavuus</th>${yearHeaderCells}<th>${escapeHtml(budgetLabel)}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   `;
+}
+
+/** Whole euros: the chart shows shape, the tables below carry the cents. */
+function moneyCompact(value) {
+  return new Intl.NumberFormat("fi-FI", {
+    style: "currency", currency: "EUR", maximumFractionDigits: 0,
+  }).format(value);
+}
+
+/**
+ * The group detail chart (handoff feature/group-chart). All arithmetic lives
+ * in buildGroupChartModel(); this only turns the model into markup.
+ *
+ * The bars are an SVG with preserveAspectRatio="none" over a fixed CSS
+ * height, so the columns stretch to whatever width the modal has (it ranges
+ * from min(92vw, 1800px) down to a full-screen phone) while bar heights stay
+ * pixel-accurate. Labels and values are deliberately NOT in that SVG: text
+ * inside it would scale with the box and end up either huge in a wide modal
+ * or unreadably small on a phone. They are HTML in a grid that shares the
+ * bars' column count instead, so they behave like every other text on the
+ * page.
+ *
+ * Strokes carry vector-effect="non-scaling-stroke" because the non-uniform
+ * scaling would otherwise stretch the budget bar's dashes horizontally.
+ *
+ * Colors come only from CSS custom properties. Beyond the house rule, a
+ * literal hex colour written out in this file would read as an id reference
+ * to viewWiring.test.js's id scan (hash followed by a letter) and fail the
+ * id cross-check — as an earlier draft of this very comment did.
+ */
+function renderGroupChart(group, vm) {
+  const model = buildGroupChartModel(group, vm.actualYears, vm.budgetYear);
+  if (model.isEmpty) return "";
+
+  const bars = model.bars.map((bar) => {
+    if (bar.missing) return "";
+    const height = bar.heightPercent;
+    const className = bar.isBudget ? "group-chart-bar is-budget" : "group-chart-bar";
+    // y is measured from the top of a 100-unit tall viewBox; a zero-height
+    // bar sits on the baseline and draws nothing visible, which is correct
+    // for a real 0,00 € and unreachable for a missing year (skipped above).
+    return `<rect class="${className}" x="${bar.xPercent.toFixed(3)}" y="${(100 - height).toFixed(3)}" ` +
+      `width="${bar.widthPercent.toFixed(3)}" height="${height.toFixed(3)}" ` +
+      `vector-effect="non-scaling-stroke" />`;
+  }).join("");
+
+  const labels = model.bars.map((bar) => {
+    const yearLabel = bar.isBudget
+      ? `${bar.year} · budjetti`
+      : String(bar.year);
+    const valueLabel = bar.missing ? "—" : moneyCompact(bar.value);
+    const missingClass = bar.missing ? " is-missing" : "";
+    return `<div class="group-chart-label${missingClass}">
+      <span class="group-chart-value">${escapeHtml(valueLabel)}</span>
+      <span class="group-chart-year">${escapeHtml(yearLabel)}</span>
+    </div>`;
+  }).join("");
+
+  const summary = model.bars
+    .map((bar) => {
+      const what = bar.isBudget ? `budjetti ${bar.year}` : `toteuma ${bar.year}`;
+      return bar.missing ? `${what}: ei tietoa` : `${what}: ${moneyCompact(bar.value)}`;
+    })
+    .join(", ");
+  const hasMissing = model.bars.some((bar) => bar.missing);
+
+  return `<figure class="group-chart">
+    <svg class="group-chart-plot" viewBox="0 0 100 100" preserveAspectRatio="none"
+         role="img" aria-label="${escapeHtml(`Pylväskaavio, ${group.group}: ${summary}.`)}">
+      ${bars}
+      <line class="group-chart-baseline" x1="0" y1="100" x2="100" y2="100"
+            vector-effect="non-scaling-stroke" />
+    </svg>
+    <div class="group-chart-labels" style="grid-template-columns: repeat(${model.bars.length}, minmax(0, 1fr));">
+      ${labels}
+    </div>
+    <figcaption class="group-chart-legend">
+      <span class="group-chart-key"><span class="group-chart-swatch"></span>Toteuma</span>
+      ${model.hasBudget ? `<span class="group-chart-key"><span class="group-chart-swatch is-budget"></span>Budjetti (ennuste, ei toteutunut)</span>` : ""}
+      ${hasMissing ? `<span class="group-chart-key">— = lukua ei ole, ei nolla</span>` : ""}
+    </figcaption>
+  </figure>`;
 }
 
 /** -------- Budjetti vs. toteuma (spec §6.4) -------- */

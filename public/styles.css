@@ -264,6 +264,42 @@ tbody tr.is-gap { background: #fdf3ea; }
 .detail-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
 .detail-list li { border: 1px solid var(--line); border-radius: .5rem; padding: .5rem .6rem; font-size: .84rem; }
 
+/* ---- Group detail chart (handoff feature/group-chart) ---- */
+/* The SVG stretches horizontally (preserveAspectRatio="none") over a fixed
+   height, so bar heights stay pixel-accurate at any modal width. Labels are
+   HTML below it, not SVG text, which would scale with the box. */
+.group-chart { margin: 0; display: grid; gap: .35rem; }
+.group-chart-plot { width: 100%; height: 180px; display: block; overflow: visible; }
+.group-chart-bar { fill: var(--accent); }
+.group-chart-bar.is-budget {
+  fill: var(--soft); stroke: var(--accent); stroke-width: 2px; stroke-dasharray: 5 3;
+}
+.group-chart-baseline { stroke: var(--line); stroke-width: 1px; }
+/* column-gap must be 0: the bars are positioned at exact percentages of the
+   SVG's full width, so any gap here would shift the label centres off the
+   bars they belong to. Breathing room comes from padding inside the cell,
+   which does not move its centre. */
+.group-chart-labels { display: grid; column-gap: 0; row-gap: 0; }
+.group-chart-label {
+  display: grid; gap: .05rem; text-align: center; min-width: 0;
+  padding: 0 .15rem; overflow-wrap: anywhere;
+}
+.group-chart-value { font-size: .78rem; font-weight: 650; }
+.group-chart-year { font-size: .72rem; color: var(--muted); }
+.group-chart-label.is-missing .group-chart-value { color: var(--muted); font-weight: 400; }
+.group-chart-legend {
+  display: flex; flex-wrap: wrap; gap: .3rem .9rem;
+  font-size: .74rem; color: var(--muted);
+}
+.group-chart-key { display: inline-flex; align-items: center; gap: .3rem; }
+.group-chart-swatch {
+  width: .85rem; height: .85rem; border-radius: .15rem;
+  background: var(--accent); flex: 0 0 auto;
+}
+.group-chart-swatch.is-budget {
+  background: var(--soft); border: 2px dashed var(--accent);
+}
+
 /* ---- Toast ---- */
 #toast {
   position: fixed; right: 1rem; bottom: 1rem; max-width: min(420px, calc(100vw - 2rem));
@@ -291,6 +327,9 @@ tbody tr.is-gap { background: #fdf3ea; }
     display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.4);
   }
   .detail-modal { padding: 0; }
+  .group-chart-plot { height: 140px; }
+  .group-chart-value { font-size: .7rem; }
+  .group-chart-year { font-size: .66rem; }
   .detail-modal-panel {
     width: 100vw; height: 100vh; max-height: 100vh;
     border-radius: 0; border: 0;
