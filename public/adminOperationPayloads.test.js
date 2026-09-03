@@ -7,6 +7,7 @@ import {
   buildBalanceSheetViewModel,
   computeBalanceReconciliation,
   computeBalanceRatios,
+  computeTrailing12mOperatingCosts,
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
@@ -2335,6 +2336,173 @@ describe("buildExpenseGroupViewModel", () => {
     const vm = buildExpenseGroupViewModel([], []);
     expect(vm.isEmpty).toBe(true);
     expect(vm.emptyMessage).toBe("Ei vielä talousdataa. Tuo se Liitä tilidataa -näkymästä.");
+  });
+});
+
+/**
+ * Real Kulut-sheet figures (docs/product-spec/taloyhtio terminaali.xlsx):
+ * one maintenance group standing for the nine stable ones, plus KORJAUKSET.
+ * Actuals negative, as the expense sign convention stores them.
+ */
+const TRAILING_ACCOUNTS = [
+  {
+    accountCode: "5300", name: "Hoitokulut yhteensä", kind: "expense",
+    group: "HALLINTOPALVELUT", controllability: "fixed",
+  },
+  {
+    accountCode: "6100", name: "Korjaukset", kind: "expense",
+    group: "KORJAUKSET", controllability: "variable",
+  },
+];
+/** Hoito 34 029,46 in 2025 and 31 412,66 in 2024; KORJAUKSET 3 881,55 / 5 348,53. */
+const TRAILING_ENTRIES = [
+  { accountCode: "5300", year: 2024, actualAmount: -31_412.66 },
+  { accountCode: "5300", year: 2025, actualAmount: -34_029.46 },
+  { accountCode: "6100", year: 2024, actualAmount: -5_348.53 },
+  { accountCode: "6100", year: 2025, actualAmount: -3_881.55 },
+];
+
+describe("computeTrailing12mOperatingCosts", () => {
+  it("computes latest-year costs excluding repairs plus the multi-year repair mean", () => {
+    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
+
+    expect(result.status).toBe("available");
+    expect(result.latestActualYear).toBe(2025);
+    expect(result.latestYearCostsExRepairs).toBeCloseTo(34_029.46, 2);
+    expect(result.repairAverage).toBeCloseTo(4_615.04, 2);
+    expect(result.repairYears).toEqual([2024, 2025]);
+    expect(result.value).toBeCloseTo(38_644.50, 2);
+    expect(result.reason).toBeNull();
+  });
+
+  it("returns a positive divisor even though the underlying actuals are negative", () => {
+    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
+    expect(result.value).toBeGreaterThan(0);
+  });
+
+  it("averages a single year to itself instead of failing on a thin sample", () => {
+    const oneYear = TRAILING_ENTRIES.filter((entry) => entry.year === 2025);
+    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, oneYear);
+
+    expect(result.status).toBe("available");
+    expect(result.repairYears).toEqual([2025]);
+    expect(result.repairAverage).toBeCloseTo(3_881.55, 2);
+    expect(result.value).toBeCloseTo(34_029.46 + 3_881.55, 2);
+  });
+
+  it("widens the repair mean on its own as older financial years are imported", () => {
+    const withHistory = [
+      ...TRAILING_ENTRIES,
+      { accountCode: "5300", year: 2023, actualAmount: -32_886.57 },
+      { accountCode: "6100", year: 2023, actualAmount: -1_385.06 },
+    ];
+    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, withHistory);
+
+    expect(result.latestActualYear).toBe(2025);
+    expect(result.repairYears).toEqual([2023, 2024, 2025]);
+    expect(result.repairAverage).toBeCloseTo((1_385.06 + 5_348.53 + 3_881.55) / 3, 2);
+    expect(result.value).toBeCloseTo(34_029.46 + 3_538.38, 2);
+  });
+
+  it("reports unavailable rather than substituting zero when no repair group exists", () => {
+    const renamed = TRAILING_ACCOUNTS.map((account) =>
+      account.group === "KORJAUKSET" ? { ...account, group: "REMONTIT" } : account
+    );
+    const result = computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES);
+
+    expect(result.status).toBe("unavailable");
+    expect(result.reason).toBe("repair_group_missing");
+    expect(result.value).toBeNull();
+    expect(result.repairAverage).toBeNull();
+  });
+
+  it("accepts nature: \"repair\" as a secondary signal for a hand-entered group", () => {
+    const renamed = TRAILING_ACCOUNTS.map((account) =>
+      account.group === "KORJAUKSET"
+        ? { ...account, group: "REMONTIT", nature: "repair" }
+        : account
+    );
+    const result = computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES);
+
+    expect(result.status).toBe("available");
+    expect(result.value).toBeCloseTo(38_644.50, 2);
+  });
+
+  it("reports unavailable when repairs have no actual for the latest actual year", () => {
+    const entries = TRAILING_ENTRIES.filter(
+      (entry) => !(entry.accountCode === "6100" && entry.year === 2025),
+    );
+    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, entries);
+
+    expect(result.status).toBe("unavailable");
+    expect(result.reason).toBe("repair_actual_missing_for_latest_year");
+    expect(result.value).toBeNull();
+  });
+
+  it("reports unavailable when there is no expense data at all", () => {
+    expect(computeTrailing12mOperatingCosts([], []).reason).toBe("no_expense_actuals");
+    expect(computeTrailing12mOperatingCosts(undefined, undefined).status).toBe("unavailable");
+  });
+
+  it("reports unavailable when expense rows carry budgets but no actuals", () => {
+    const budgetsOnly = [{ accountCode: "5300", year: 2026, budgetAmount: -43_470.09 }];
+    expect(computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, budgetsOnly).reason)
+      .toBe("no_expense_actuals");
+  });
+
+  it("ignores income accounts", () => {
+    const withIncome = [
+      ...TRAILING_ACCOUNTS,
+      { accountCode: "3000", name: "Hoitovastike", kind: "income", group: "HOITOVASTIKKEET" },
+    ];
+    const entries = [...TRAILING_ENTRIES, { accountCode: "3000", year: 2025, actualAmount: 43_906.75 }];
+    expect(computeTrailing12mOperatingCosts(withIncome, entries).value).toBeCloseTo(38_644.50, 2);
+  });
+
+  it("documents the depreciation limitation: a POISTOT expense group would be counted", () => {
+    // Handoff §4: poistot are not in the source data (the 822,00 € 2025
+    // depreciation reconciles hoitokate 5 995,74 to retained earnings
+    // 5 173,74, i.e. it sits below the expense groups), so no filter is
+    // built. This pins what would happen if that ever changed, so the
+    // behaviour is a known limitation rather than a surprise.
+    const withDepreciation = [
+      ...TRAILING_ACCOUNTS,
+      { accountCode: "7000", name: "Rakennusten poisto", kind: "expense", group: "POISTOT" },
+    ];
+    const entries = [...TRAILING_ENTRIES, { accountCode: "7000", year: 2025, actualAmount: -822 }];
+    expect(computeTrailing12mOperatingCosts(withDepreciation, entries).value)
+      .toBeCloseTo(38_644.50 + 822, 2);
+  });
+
+  it("feeds computeBalanceRatios: 22 208,49 cash over the computed divisor is ~6.9 months", () => {
+    const computed = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
+    const balanceSnapshot = {
+      id: "b1", asOfDate: "2025-12-31", sourceIds: ["s"],
+      entries: [
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208.49 },
+        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2_041.91 },
+      ],
+    };
+    const ratios = computeBalanceRatios(balanceSnapshot, {
+      trailing12mOperatingCosts: computed.value,
+    });
+
+    expect(ratios.monthsOfCash).toBeCloseTo(22_208.49 / (38_644.50 / 12), 2);
+    expect(Number(ratios.monthsOfCash.toFixed(1))).toBe(6.9);
+  });
+
+  it("still reads 7.8 months from the retired hand-entered placeholder", () => {
+    // The change the handoff predicts: 7.8 → 6.9 is expected and correct,
+    // not a regression.
+    const balanceSnapshot = {
+      id: "b1", asOfDate: "2025-12-31", sourceIds: ["s"],
+      entries: [
+        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208.49 },
+        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2_041.91 },
+      ],
+    };
+    const ratios = computeBalanceRatios(balanceSnapshot, { trailing12mOperatingCosts: 34_029.46 });
+    expect(Number(ratios.monthsOfCash.toFixed(1))).toBe(7.8);
   });
 });
 
