@@ -28,6 +28,7 @@ import {
   buildSaveFinancialAccountOperation,
   buildSaveFinancialEntryOperation,
   buildSaveHousingCompanyOperation,
+  buildSummaryChartModel,
   buildTrailing12mNote,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
@@ -2724,6 +2725,181 @@ describe("buildGroupChartModel", () => {
 
     expect(model.bars.map((bar) => bar.value)).toEqual([-7_885.63, -7_360.76, -7_972.32]);
     expect(model.bars[2].isBudget).toBe(true);
+  });
+});
+
+describe("buildSummaryChartModel", () => {
+  /**
+   * Real workbook figures. Income and expenses are complete for 2024–2025;
+   * 2023 exists on both sides but only partially at account level, which is
+   * the case this model has to mark rather than draw as a total.
+   */
+  const income = {
+    actualYears: [2023, 2024, 2025],
+    groups: [
+      { actuals: { 2023: 3_527.5, 2024: 40_666.93, 2025: 43_150.75 } },
+      { actuals: { 2024: 756, 2025: 756 } },
+    ],
+    totals: { actuals: { 2023: 3_527.5, 2024: 41_422.93, 2025: 43_906.75 } },
+  };
+  const expense = {
+    actualYears: [2023, 2024, 2025],
+    groups: [
+      { actuals: { 2023: -360, 2024: -600, 2025: -600 } },
+      { actuals: { 2024: -36_161.19, 2025: -37_311.01 } },
+    ],
+    totals: { actuals: { 2023: -360, 2024: -36_761.19, 2025: -37_911.01 } },
+  };
+
+  it("pairs income and expenses on one shared zero-based scale", () => {
+    const model = buildSummaryChartModel(income, expense);
+
+    expect(model.isEmpty).toBe(false);
+    expect(model.years).toEqual([2023, 2024, 2025]);
+    expect(model.maxAbsValue).toBe(43_906.75);
+    const latest = model.columns.find((column) => column.year === 2025);
+    expect(latest.bars.map((bar) => bar.series)).toEqual(["income", "expense"]);
+    expect(latest.bars[0].heightPercent).toBe(100);
+    // The height difference is the hoitokate, so both must share one scale.
+    expect(latest.bars[1].heightPercent).toBeCloseTo((37_911.01 / 43_906.75) * 100, 8);
+  });
+
+  it("draws expenses upward but keeps the stored negative sign in value", () => {
+    const model = buildSummaryChartModel(income, expense);
+    const expenseBar = model.columns.find((c) => c.year === 2025).bars[1];
+
+    expect(expenseBar.value).toBe(-37_911.01);
+    expect(expenseBar.heightPercent).toBeGreaterThan(0);
+  });
+
+  it("flags a partially reported year instead of presenting it as a total", () => {
+    // 2023 expenses sum to -360 from one group of two, against a real total of
+    // 34 271,63. Unmarked that is the same failure as a zero bar for a missing
+    // year: the unknown presented as known.
+    const model = buildSummaryChartModel(income, expense);
+    const year2023 = model.columns.find((column) => column.year === 2023);
+
+    expect(model.hasPartial).toBe(true);
+    for (const bar of year2023.bars) {
+      expect(bar.partial).toBe(true);
+      expect(bar.missing).toBe(false);
+      expect(bar.reportingGroups).toBe(1);
+      expect(bar.totalGroups).toBe(2);
+    }
+  });
+
+  it("does not flag a fully reported year as partial", () => {
+    const model = buildSummaryChartModel(income, expense);
+    for (const year of [2024, 2025]) {
+      const column = model.columns.find((c) => c.year === year);
+      for (const bar of column.bars) {
+        expect(bar.partial).toBe(false);
+        expect(bar.reportingGroups).toBe(bar.totalGroups);
+      }
+    }
+  });
+
+  it("draws one series and marks the other missing when a year has only one", () => {
+    // The genuinely new case versus the group chart: the two series are not
+    // missing the same years, and neither may disappear because the other has
+    // no figure.
+    const incomeOnly2022 = {
+      actualYears: [2022, 2025],
+      groups: [{ actuals: { 2022: 30_000, 2025: 43_906.75 } }],
+      totals: { actuals: { 2022: 30_000, 2025: 43_906.75 } },
+    };
+    const expenseNo2022 = {
+      actualYears: [2025],
+      groups: [{ actuals: { 2025: -37_911.01 } }],
+      totals: { actuals: { 2025: -37_911.01 } },
+    };
+    const model = buildSummaryChartModel(incomeOnly2022, expenseNo2022);
+    const year2022 = model.columns.find((column) => column.year === 2022);
+
+    expect(model.years).toEqual([2022, 2025]);
+    expect(year2022.bars[0].missing).toBe(false);
+    expect(year2022.bars[0].value).toBe(30_000);
+    expect(year2022.bars[1].missing).toBe(true);
+    expect(year2022.bars[1].value).toBeNull();
+    expect(year2022.bars[1].heightPercent).toBeNull();
+  });
+
+  it("never turns a missing series into a zero-height bar", () => {
+    const model = buildSummaryChartModel(
+      { actualYears: [2025], groups: [{ actuals: { 2025: 100 } }], totals: { actuals: { 2025: 100 } } },
+      { actualYears: [], groups: [], totals: { actuals: {} } },
+    );
+    const bar = model.columns[0].bars[1];
+
+    expect(bar.missing).toBe(true);
+    expect(bar.heightPercent).toBeNull();
+    expect(bar.heightPercent).not.toBe(0);
+  });
+
+  it("keeps a genuine 0 as a real zero-height bar, distinct from missing", () => {
+    const model = buildSummaryChartModel(
+      { actualYears: [2025], groups: [{ actuals: { 2025: 0 } }], totals: { actuals: { 2025: 0 } } },
+      { actualYears: [2025], groups: [{ actuals: { 2025: -600 } }], totals: { actuals: { 2025: -600 } } },
+    );
+    const bar = model.columns[0].bars[0];
+
+    expect(bar.missing).toBe(false);
+    expect(bar.value).toBe(0);
+    expect(bar.heightPercent).toBe(0);
+  });
+
+  it("takes the year axis from the union of both series", () => {
+    const model = buildSummaryChartModel(
+      { actualYears: [2023, 2025], groups: [], totals: { actuals: { 2023: 1, 2025: 2 } } },
+      { actualYears: [2024, 2025], groups: [], totals: { actuals: { 2024: -1, 2025: -2 } } },
+    );
+    expect(model.years).toEqual([2023, 2024, 2025]);
+  });
+
+  it("lays the two bars side by side inside their year without overlapping", () => {
+    const model = buildSummaryChartModel(income, expense);
+    for (const column of model.columns) {
+      const [first, second] = column.bars;
+      expect(first.widthPercent).toBeCloseTo(second.widthPercent, 10);
+      expect(second.xPercent).toBeGreaterThan(first.xPercent + first.widthPercent);
+    }
+    const last = model.columns[model.columns.length - 1].bars[1];
+    expect(last.xPercent + last.widthPercent).toBeLessThanOrEqual(100);
+  });
+
+  it("reports empty when neither series has an actual year", () => {
+    const model = buildSummaryChartModel(
+      { actualYears: [], groups: [], totals: { actuals: {} } },
+      { actualYears: [], groups: [], totals: { actuals: {} } },
+    );
+    expect(model.isEmpty).toBe(true);
+    expect(model.columns).toEqual([]);
+  });
+
+  it("does not crash on missing arguments", () => {
+    expect(buildSummaryChartModel(undefined, undefined).isEmpty).toBe(true);
+    expect(buildSummaryChartModel({}, {}).isEmpty).toBe(true);
+  });
+
+  it("feeds straight from the Tulot and Kulut view models", () => {
+    const accounts = [
+      { accountCode: "3000", name: "Hoitovastike", kind: "income", group: "HOITOVASTIKKEET" },
+      { accountCode: "5300", name: "Isännöinti", kind: "expense", group: "HALLINTOPALVELUT" },
+    ];
+    const entries = [
+      { accountCode: "3000", year: 2024, actualAmount: 40_666.93 },
+      { accountCode: "3000", year: 2025, actualAmount: 43_150.75 },
+      { accountCode: "5300", year: 2024, actualAmount: -7_885.63 },
+      { accountCode: "5300", year: 2025, actualAmount: -7_360.76 },
+    ];
+    const model = buildSummaryChartModel(
+      buildIncomeViewModel(accounts, entries),
+      buildExpenseGroupViewModel(accounts, entries),
+    );
+
+    expect(model.years).toEqual([2024, 2025]);
+    expect(model.columns[1].bars.map((bar) => bar.value)).toEqual([43_150.75, -7_360.76]);
+    expect(model.hasPartial).toBe(false);
   });
 });
 

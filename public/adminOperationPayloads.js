@@ -2372,8 +2372,81 @@ export function buildTrailing12mNote(computed, formatMoney) {
     `käytetään viimeisimmän vuoden toteumaa sellaisenaan.`;
 }
 
-/** Share of a column's width taken by its bar; the rest is the gap between bars. */
-const GROUP_CHART_BAR_WIDTH_RATIO = 0.62;
+/** Share of a column's width taken by its bars; the rest is the gap between columns. */
+const CHART_COLUMN_FILL_RATIO = 0.62;
+/** Gap between the bars inside one column, as a share of their shared width. */
+const CHART_INNER_GAP_RATIO = 0.08;
+
+/**
+ * Shared scaling and geometry for every bar chart in the app: the group
+ * detail chart (one bar per column) and the summary chart (two). Extracted
+ * rather than duplicated because the part that must never diverge is exactly
+ * the part that is easiest to re-derive slightly differently — the
+ * missing-versus-zero rule below. Two copies of it is how a "—" quietly turns
+ * back into a zero-height bar.
+ *
+ * DATA GAP: a `null` value means the figure is not known and yields
+ * `missing: true` with `heightPercent: null`, never a zero-height bar, which
+ * would read as "there were none". A real 0 is a different thing and keeps a
+ * genuine zero-height bar. The branch is written on `value === null` and not
+ * on falsiness precisely because 0 is falsy.
+ *
+ * Everything is a percentage of the plot area, because the charts render into
+ * an SVG with `preserveAspectRatio="none"` whose width is fluid and whose
+ * height is fixed in CSS.
+ *
+ * With one bar per column the layout reduces to `columnWidth * fill` centred
+ * in its column, which is what the group chart has always produced — its
+ * geometry tests are the regression guard on that.
+ *
+ * @param {ReadonlyArray<{ values: ReadonlyArray<number|null> }>} columns
+ * @returns {{
+ *   isEmpty: boolean,
+ *   maxAbsValue: number,
+ *   columns: Array<{ bars: Array<{
+ *     value: number|null, missing: boolean, heightPercent: number|null,
+ *     xPercent: number, widthPercent: number,
+ *   }> }>,
+ * }}
+ */
+function buildBarChartGeometry(columns) {
+  const list = Array.isArray(columns) ? columns : [];
+  if (list.length === 0) return { isEmpty: true, maxAbsValue: 0, columns: [] };
+
+  const allValues = list.flatMap((column) =>
+    (Array.isArray(column.values) ? column.values : []).filter((value) => value !== null)
+  );
+  const maxAbsValue = allValues.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+
+  const columnWidth = 100 / list.length;
+  const groupWidth = columnWidth * CHART_COLUMN_FILL_RATIO;
+
+  const laidOut = list.map((column, columnIndex) => {
+    const values = Array.isArray(column.values) ? column.values : [];
+    const barCount = Math.max(values.length, 1);
+    const innerGap = barCount > 1 ? groupWidth * CHART_INNER_GAP_RATIO : 0;
+    const barWidth = (groupWidth - innerGap * (barCount - 1)) / barCount;
+    const groupStart = columnIndex * columnWidth + (columnWidth - groupWidth) / 2;
+
+    return {
+      bars: values.map((value, barIndex) => ({
+        value,
+        missing: value === null,
+        // maxAbsValue is 0 only when every present value is 0, and then every
+        // bar is legitimately zero-height rather than NaN.
+        heightPercent: value === null
+          ? null
+          : maxAbsValue === 0
+            ? 0
+            : (Math.abs(value) / maxAbsValue) * 100,
+        xPercent: groupStart + barIndex * (barWidth + innerGap),
+        widthPercent: barWidth,
+      })),
+    };
+  });
+
+  return { isEmpty: false, maxAbsValue, columns: laidOut };
+}
 
 /**
  * Geometry and values for the group detail modal's bar chart (handoff
@@ -2382,23 +2455,18 @@ const GROUP_CHART_BAR_WIDTH_RATIO = 0.62;
  * accounts, and it returns everything the renderer needs so no arithmetic
  * happens in the SVG-building code.
  *
+ * One bar per column — the scaling, the DATA GAP rule and the layout all come
+ * from buildBarChartGeometry(), which the summary chart shares.
+ *
  * DATA GAP, the rule this function exists to protect (handoff §2): a year
  * with no figure gets `missing: true`, `value: null` and `heightPercent:
- * null` — never a zero-height bar. A zero bar tells the reader "there were no
+ * null`, never a zero-height bar. A zero bar tells the reader "there were no
  * costs" when the truth is "the figure is not known", and different groups
  * are missing different years (Henkilöstökulut has a 2023 actual, most groups
  * do not). A genuine 0,00 € is a different thing and does get a zero-height
- * bar, so the two must not be collapsed into one branch. buildGroupedFinance-
- * Core() already draws this distinction — `actuals[year]` is `undefined` for
- * absent and `0` for a real zero — so the job here is to carry it through
- * intact, not to reinvent it.
- *
- * Coordinates are percentages of the plot area (x and width of the column
- * layout, height of the bar) rather than pixels, because the chart renders
- * into an SVG with `preserveAspectRatio="none"` whose width is fluid and
- * whose height is fixed in CSS: bar heights stay pixel-accurate while the
- * columns stretch. Text is not part of the SVG at all — it would scale with
- * it — so this model carries no font or label geometry.
+ * bar. buildGroupedFinanceCore() already draws this distinction —
+ * `actuals[year]` is `undefined` for absent and `0` for a real zero — so the
+ * job here is to carry it through intact, not to reinvent it.
  *
  * Costs are stored negative. Math.abs applies only to bar length, which is
  * what a bar means; `value` keeps its original sign so the renderer formats a
@@ -2449,36 +2517,126 @@ export function buildGroupChartModel(group, actualYears, budgetYear) {
     columns.push({ year: Number(budgetYear), value: budget, isBudget: true });
   }
 
-  if (columns.length === 0) {
+  const geometry = buildBarChartGeometry(columns.map((column) => ({ values: [column.value] })));
+  if (geometry.isEmpty) {
     return { isEmpty: true, bars: [], maxAbsValue: 0, hasBudget: false };
   }
 
-  const maxAbsValue = columns.reduce(
-    (max, column) => (column.value === null ? max : Math.max(max, Math.abs(column.value))),
-    0,
-  );
-
-  const columnWidth = 100 / columns.length;
-  const barWidth = columnWidth * GROUP_CHART_BAR_WIDTH_RATIO;
   const bars = columns.map((column, index) => ({
     year: column.year,
-    value: column.value,
-    missing: column.value === null,
     isBudget: column.isBudget,
-    // Not `column.value && ...`: a genuine 0 is falsy and would fall through
-    // to null, which is exactly the missing-vs-zero conflation §2 forbids.
-    // maxAbsValue is 0 only when every present value is 0, and then every bar
-    // is legitimately zero-height rather than NaN.
-    heightPercent: column.value === null
-      ? null
-      : maxAbsValue === 0
-        ? 0
-        : (Math.abs(column.value) / maxAbsValue) * 100,
-    xPercent: index * columnWidth + (columnWidth - barWidth) / 2,
-    widthPercent: barWidth,
+    ...geometry.columns[index].bars[0],
   }));
 
-  return { isEmpty: false, bars, maxAbsValue, hasBudget };
+  return { isEmpty: false, bars, maxAbsValue: geometry.maxAbsValue, hasBudget };
+}
+
+/**
+ * Income and expenses side by side per year for the Yhteenveto view (handoff
+ * feature/summary-chart). The height difference between the pair *is* the
+ * hoitokate, which is why both series share one zero-based scale and why
+ * expenses are drawn upward on the same axis rather than mirrored: nobody
+ * reads a difference between bars pointing opposite ways. `value` keeps the
+ * stored sign so the label can still show costs as negative.
+ *
+ * Totals come from the view models the Tulot and Kulut views already use, so
+ * this view cannot disagree with them. The year axis is the union of both
+ * series' actual years, because the two are not missing the same years.
+ *
+ * PARTIAL YEARS, the subtlety this function exists to handle. `totals.actuals`
+ * sums whichever groups reported and is `undefined` only when none did. A year
+ * that is half-imported therefore yields a real number that looks like a total
+ * without being one — 2023 expenses currently sum to −360,00 € from one group
+ * of ten, against a true total of 34 271,63 €. Drawn unmarked that is the same
+ * failure as a zero bar for a missing year: the unknown presented as known.
+ * So a year whose reporting groups are fewer than the series' total is flagged
+ * `partial: true` with the counts, for the renderer to mark and label. The
+ * test is coverage — how many groups reported — not a guess about whether a
+ * financial year is "finished".
+ *
+ * @param {{ isEmpty?: boolean, actualYears?: ReadonlyArray<number>, groups?: ReadonlyArray<{ actuals?: Record<number, number|undefined> }>, totals?: { actuals?: Record<number, number|undefined> } }} [incomeVm]
+ * @param {{ isEmpty?: boolean, actualYears?: ReadonlyArray<number>, groups?: ReadonlyArray<{ actuals?: Record<number, number|undefined> }>, totals?: { actuals?: Record<number, number|undefined> } }} [expenseVm]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   maxAbsValue: number,
+ *   hasPartial: boolean,
+ *   years: number[],
+ *   columns: Array<{
+ *     year: number,
+ *     bars: Array<{
+ *       series: "income"|"expense",
+ *       value: number|null,
+ *       missing: boolean,
+ *       partial: boolean,
+ *       reportingGroups: number,
+ *       totalGroups: number,
+ *       heightPercent: number|null,
+ *       xPercent: number,
+ *       widthPercent: number,
+ *     }>,
+ *   }>,
+ * }}
+ */
+export function buildSummaryChartModel(incomeVm, expenseVm) {
+  const series = [
+    { name: /** @type {const} */ ("income"), vm: incomeVm },
+    { name: /** @type {const} */ ("expense"), vm: expenseVm },
+  ].map(({ name, vm }) => {
+    const source = vm && typeof vm === "object" ? vm : {};
+    return {
+      name,
+      years: Array.isArray(source.actualYears) ? source.actualYears : [],
+      groups: Array.isArray(source.groups) ? source.groups : [],
+      totals: source.totals && source.totals.actuals ? source.totals.actuals : {},
+    };
+  });
+
+  const years = [...new Set(series.flatMap((entry) => entry.years.map(Number)))]
+    .sort((a, b) => a - b);
+  if (years.length === 0) {
+    return { isEmpty: true, maxAbsValue: 0, hasPartial: false, years: [], columns: [] };
+  }
+
+  const cells = years.map((year) =>
+    series.map((entry) => {
+      const total = entry.totals[year];
+      const value = typeof total === "number" ? total : null;
+      const reportingGroups = entry.groups.filter(
+        (group) => group && group.actuals && group.actuals[year] !== undefined,
+      ).length;
+      const totalGroups = entry.groups.length;
+      return {
+        series: entry.name,
+        value,
+        reportingGroups,
+        totalGroups,
+        partial: value !== null && totalGroups > 0 && reportingGroups < totalGroups,
+      };
+    })
+  );
+
+  const geometry = buildBarChartGeometry(
+    cells.map((columnCells) => ({ values: columnCells.map((cell) => cell.value) })),
+  );
+
+  const columns = years.map((year, index) => ({
+    year,
+    bars: cells[index].map((cell, barIndex) => ({
+      series: cell.series,
+      partial: cell.partial,
+      reportingGroups: cell.reportingGroups,
+      totalGroups: cell.totalGroups,
+      ...geometry.columns[index].bars[barIndex],
+    })),
+  }));
+
+  return {
+    isEmpty: false,
+    maxAbsValue: geometry.maxAbsValue,
+    hasPartial: columns.some((column) => column.bars.some((bar) => bar.partial)),
+    years,
+    columns,
+  };
 }
 
 /**
