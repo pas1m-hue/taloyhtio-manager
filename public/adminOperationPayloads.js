@@ -2372,6 +2372,115 @@ export function buildTrailing12mNote(computed, formatMoney) {
     `käytetään viimeisimmän vuoden toteumaa sellaisenaan.`;
 }
 
+/** Share of a column's width taken by its bar; the rest is the gap between bars. */
+const GROUP_CHART_BAR_WIDTH_RATIO = 0.62;
+
+/**
+ * Geometry and values for the group detail modal's bar chart (handoff
+ * feature/group-chart §3). Pure: it consumes a group that
+ * buildExpenseGroupViewModel() has already totalled rather than re-summing
+ * accounts, and it returns everything the renderer needs so no arithmetic
+ * happens in the SVG-building code.
+ *
+ * DATA GAP, the rule this function exists to protect (handoff §2): a year
+ * with no figure gets `missing: true`, `value: null` and `heightPercent:
+ * null` — never a zero-height bar. A zero bar tells the reader "there were no
+ * costs" when the truth is "the figure is not known", and different groups
+ * are missing different years (Henkilöstökulut has a 2023 actual, most groups
+ * do not). A genuine 0,00 € is a different thing and does get a zero-height
+ * bar, so the two must not be collapsed into one branch. buildGroupedFinance-
+ * Core() already draws this distinction — `actuals[year]` is `undefined` for
+ * absent and `0` for a real zero — so the job here is to carry it through
+ * intact, not to reinvent it.
+ *
+ * Coordinates are percentages of the plot area (x and width of the column
+ * layout, height of the bar) rather than pixels, because the chart renders
+ * into an SVG with `preserveAspectRatio="none"` whose width is fluid and
+ * whose height is fixed in CSS: bar heights stay pixel-accurate while the
+ * columns stretch. Text is not part of the SVG at all — it would scale with
+ * it — so this model carries no font or label geometry.
+ *
+ * Costs are stored negative. Math.abs applies only to bar length, which is
+ * what a bar means; `value` keeps its original sign so the renderer formats a
+ * truthful figure.
+ *
+ * The budget bar shares the row with the actuals as its last column, which is
+ * what makes the comparison legible (KORJAUKSET: 9 680 € budgeted against a
+ * 3 881,55 € actual). It is marked `isBudget: true` here rather than being
+ * inferred from position by the renderer, and it counts toward the scale
+ * maximum — a budget larger than every actual must not overflow the plot.
+ * A budget year that also has actuals legitimately appears twice, once as
+ * each, mirroring the table's separate actual and budget columns.
+ *
+ * @param {{ actuals?: Record<number, number|undefined>, budget?: number|undefined }} [group]
+ * @param {ReadonlyArray<number>} [actualYears]
+ * @param {number|null} [budgetYear]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   bars: Array<{
+ *     year: number,
+ *     value: number|null,
+ *     missing: boolean,
+ *     isBudget: boolean,
+ *     heightPercent: number|null,
+ *     xPercent: number,
+ *     widthPercent: number,
+ *   }>,
+ *   maxAbsValue: number,
+ *   hasBudget: boolean,
+ * }}
+ */
+export function buildGroupChartModel(group, actualYears, budgetYear) {
+  const years = Array.isArray(actualYears) ? actualYears : [];
+  const actuals = group && typeof group === "object" && group.actuals ? group.actuals : {};
+  const budget = group && typeof group === "object" ? group.budget : undefined;
+  const hasBudget = typeof budgetYear === "number" && typeof budget === "number";
+
+  /** @type {Array<{ year: number, value: number|null, isBudget: boolean }>} */
+  const columns = years.map((year) => {
+    const value = actuals[year];
+    return {
+      year: Number(year),
+      value: typeof value === "number" ? value : null,
+      isBudget: false,
+    };
+  });
+  if (hasBudget) {
+    columns.push({ year: Number(budgetYear), value: budget, isBudget: true });
+  }
+
+  if (columns.length === 0) {
+    return { isEmpty: true, bars: [], maxAbsValue: 0, hasBudget: false };
+  }
+
+  const maxAbsValue = columns.reduce(
+    (max, column) => (column.value === null ? max : Math.max(max, Math.abs(column.value))),
+    0,
+  );
+
+  const columnWidth = 100 / columns.length;
+  const barWidth = columnWidth * GROUP_CHART_BAR_WIDTH_RATIO;
+  const bars = columns.map((column, index) => ({
+    year: column.year,
+    value: column.value,
+    missing: column.value === null,
+    isBudget: column.isBudget,
+    // Not `column.value && ...`: a genuine 0 is falsy and would fall through
+    // to null, which is exactly the missing-vs-zero conflation §2 forbids.
+    // maxAbsValue is 0 only when every present value is 0, and then every bar
+    // is legitimately zero-height rather than NaN.
+    heightPercent: column.value === null
+      ? null
+      : maxAbsValue === 0
+        ? 0
+        : (Math.abs(column.value) / maxAbsValue) * 100,
+    xPercent: index * columnWidth + (columnWidth - barWidth) / 2,
+    widthPercent: barWidth,
+  }));
+
+  return { isEmpty: false, bars, maxAbsValue, hasBudget };
+}
+
 /**
  * View model for "Budjetti vs. toteuma" for one selected year (spec §6.4,
  * the only view comparing historical budget to actual). Column order is
