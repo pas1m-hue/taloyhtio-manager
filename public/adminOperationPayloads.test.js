@@ -27,6 +27,7 @@ import {
   buildSaveFinancialAccountOperation,
   buildSaveFinancialEntryOperation,
   buildSaveHousingCompanyOperation,
+  buildTrailing12mNote,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
@@ -2503,6 +2504,65 @@ describe("computeTrailing12mOperatingCosts", () => {
     };
     const ratios = computeBalanceRatios(balanceSnapshot, { trailing12mOperatingCosts: 34_029.46 });
     expect(Number(ratios.monthsOfCash.toFixed(1))).toBe(7.8);
+  });
+});
+
+describe("buildTrailing12mNote", () => {
+  const euro = (value) => `${value.toFixed(2).replace(".", ",")} €`;
+
+  it("names the year, the parts, and how many years the repair mean covers", () => {
+    const computed = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
+    const note = buildTrailing12mNote(computed, euro);
+
+    expect(note).toContain("38644,50 €");
+    expect(note).toContain("vuoden 2025 kulut ilman korjauksia");
+    expect(note).toContain("34029,46 €");
+    expect(note).toContain("vuosilta 2024–2025");
+    expect(note).toContain("4615,04 €");
+    expect(note).toContain("2 vuotta");
+    expect(note).not.toContain("paikkamerkki");
+  });
+
+  it("says \"vuodelta\" and \"1 vuosi\" for a single-year repair mean", () => {
+    const oneYear = TRAILING_ENTRIES.filter((entry) => entry.year === 2025);
+    const note = buildTrailing12mNote(
+      computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, oneYear),
+      euro,
+    );
+
+    expect(note).toContain("vuodelta 2025");
+    expect(note).toContain("1 vuosi");
+  });
+
+  it("names the missing group and says a zero is not assumed", () => {
+    const renamed = TRAILING_ACCOUNTS.map((account) =>
+      account.group === "KORJAUKSET" ? { ...account, group: "REMONTIT" } : account
+    );
+    const note = buildTrailing12mNote(
+      computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES),
+      euro,
+    );
+
+    expect(note).toContain("KORJAUKSET");
+    expect(note).toContain("ei oleteta nollaksi");
+  });
+
+  it("tells the user to import cost data when there is none", () => {
+    const note = buildTrailing12mNote(computeTrailing12mOperatingCosts([], []), euro);
+    expect(note).toContain("Liitä tilidataa");
+  });
+
+  it("explains a repair actual missing from the latest actual year", () => {
+    const entries = TRAILING_ENTRIES.filter(
+      (entry) => !(entry.accountCode === "6100" && entry.year === 2025),
+    );
+    const note = buildTrailing12mNote(
+      computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, entries),
+      euro,
+    );
+
+    expect(note).toContain("viimeisimmältä toteumavuodelta");
+    expect(note).toContain("arvausta ei käytetä");
   });
 });
 

@@ -2328,6 +2328,51 @@ export function computeTrailing12mOperatingCosts(accounts, entries) {
 }
 
 /**
+ * The Finnish note shown beside "Kassa kuukausina hoitokuluja", saying what
+ * the divisor actually contains (handoff feature/trailing-12m §6). This is
+ * not cosmetic: the formula is deliberately asymmetric — one year for every
+ * stable group, a multi-year mean for repairs — and no reader can infer that
+ * from the number alone.
+ *
+ * Money formatting is injected rather than done here so this module stays
+ * free of Intl and view concerns; app.js passes its own `money()`.
+ *
+ * @param {ReturnType<typeof computeTrailing12mOperatingCosts>} computed
+ * @param {(value: number) => string} formatMoney
+ * @returns {string}
+ */
+export function buildTrailing12mNote(computed, formatMoney) {
+  if (computed.status !== "available") {
+    if (computed.reason === "no_expense_actuals") {
+      return "Kassa kuukausina hoitokuluja: ei vielä kulutoteumia, joten 12 kk hoitokuluja " +
+        "ei voi laskea. Tuo tilikauden kulut Liitä tilidataa -näkymästä.";
+    }
+    if (computed.reason === "repair_actual_missing_for_latest_year") {
+      return `Kassa kuukausina hoitokuluja: viimeisimmältä toteumavuodelta puuttuu ` +
+        `${REPAIR_GROUP_NAME}-ryhmän toteuma, joten korjauksia ei voi erottaa muista ` +
+        `kuluista. Tunnusluku näytetään vasta kun ryhmän toteuma on tuotu — ` +
+        `arvausta ei käytetä.`;
+    }
+    return `Kassa kuukausina hoitokuluja: kuluryhmää "${REPAIR_GROUP_NAME}" ei löydy ` +
+      `tilidatasta, joten korjauksia ei voi erottaa muista kuluista. Tunnusluku ` +
+      `näytetään vasta kun ryhmä löytyy — korjauksia ei oleteta nollaksi, koska se ` +
+      `antaisi liian pienen jakajan ja liian hyvän näköisen tunnusluvun.`;
+  }
+
+  const years = computed.repairYears;
+  const yearsLabel = years.length === 1
+    ? `vuodelta ${years[0]}`
+    : `vuosilta ${years[0]}–${years[years.length - 1]}`;
+  return `Kassa kuukausina hoitokuluja: jakaja ${formatMoney(computed.value)} on laskettu ` +
+    `tilidatasta = vuoden ${computed.latestActualYear} kulut ilman korjauksia ` +
+    `(${formatMoney(computed.latestYearCostsExRepairs)}) + korjausten keskiarvo ` +
+    `${yearsLabel} (${formatMoney(computed.repairAverage)}, ${years.length} ` +
+    `${years.length === 1 ? "vuosi" : "vuotta"}). Korjaukset normalisoidaan keskiarvolla, ` +
+    `koska ne eivät noudata tilikautta; muut kuluryhmät ovat vakaita ja niistä ` +
+    `käytetään viimeisimmän vuoden toteumaa sellaisenaan.`;
+}
+
+/**
  * View model for "Budjetti vs. toteuma" for one selected year (spec §6.4,
  * the only view comparing historical budget to actual). Column order is
  * fixed to Budjetti → Toteuma → Erotus (the "Budjetti näkyy ennen toteumaa"

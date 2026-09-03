@@ -23,8 +23,10 @@ import {
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
+  buildTrailing12mNote,
   computeBalanceRatios,
   computeBalanceReconciliation,
+  computeTrailing12mOperatingCosts,
   copyScheduleRowToAllScenarios,
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
@@ -2833,17 +2835,28 @@ function renderBalancePosition() {
   const comparison = buildBalanceComparisonViewModel(snapshot, olderSnapshot);
 
   const reconciliation = computeBalanceReconciliation(snapshot);
-  const ratios = computeBalanceRatios(snapshot, state.admin.latestLiquidityBaseline);
+  // The trailing-12m divisor is derived from account data, never from the
+  // liquidity baseline's hand-entered figure (handoff feature/trailing-12m
+  // §5): that value aged unnoticed and is exactly why this is computed.
+  // The baseline still supplies the other liquidity inputs, and the operating
+  // buffer / cash path still read its stored figure - see
+  // docs/claude-code-handoff-likviditeetin-jakaja.md.
+  const trailing12m = computeTrailing12mOperatingCosts(
+    state.admin.financialAccounts,
+    state.admin.financialEntries,
+  );
+  const ratios = computeBalanceRatios(
+    snapshot,
+    trailing12m.status === "available"
+      ? { trailing12mOperatingCosts: trailing12m.value }
+      : undefined,
+  );
 
-  const baseline = state.admin.latestLiquidityBaseline;
-  const baselineIsPlaceholder = typeof baseline?.notes === "string" && baseline.notes.includes("PLACEHOLDER");
-  const baselineDateMismatch = baseline && baseline.asOfDate !== snapshot.asOfDate;
-  const kpiNotes = [];
-  if (baselineIsPlaceholder) {
-    kpiNotes.push("Kassa kuukausina hoitokuluja perustuu paikkamerkki-arvoon (34 029,46 €) — vain suuntaa-antava kunnes oikea 12 kk hoitokulu on syötetty.");
-  }
-  if (baselineDateMismatch) {
-    kpiNotes.push(`Likviditeetin lähtötieto on päivätty ${escapeHtml(baseline.asOfDate)}, tase ${escapeHtml(snapshot.asOfDate)} — kassa kuukausina -tunnusluku yhdistää eri ajankohtien lukuja.`);
+  const kpiNotes = [buildTrailing12mNote(trailing12m, money)];
+  const balanceYear = Number(String(snapshot.asOfDate).slice(0, 4));
+  if (trailing12m.status === "available" && Number.isInteger(balanceYear) &&
+      trailing12m.latestActualYear !== balanceYear) {
+    kpiNotes.push(`Kulutoteumat ovat vuodelta ${trailing12m.latestActualYear}, tase ${escapeHtml(snapshot.asOfDate)} — kassa kuukausina -tunnusluku yhdistää eri ajankohtien lukuja.`);
   }
 
   const kpis = `
