@@ -16,6 +16,7 @@ import {
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
   buildGroupBudgetId,
+  buildGroupChartModel,
   buildGroupBudgetImportOperations,
   buildGroupBudgetVsActualViewModel,
   buildIncomeViewModel,
@@ -2563,6 +2564,166 @@ describe("buildTrailing12mNote", () => {
 
     expect(note).toContain("viimeisimmältä toteumavuodelta");
     expect(note).toContain("arvausta ei käytetä");
+  });
+});
+
+describe("buildGroupChartModel", () => {
+  /** Hallintopalvelut: no account-level 2023 actual yet, 2026 budget present. */
+  const HALLINTO = {
+    actuals: { 2023: undefined, 2024: -7_885.63, 2025: -7_360.76 },
+    budget: -7_972.32,
+  };
+  const YEARS = [2023, 2024, 2025];
+
+  it("puts the budget last in the same row and marks it in the model", () => {
+    const model = buildGroupChartModel(HALLINTO, YEARS, 2026);
+
+    expect(model.isEmpty).toBe(false);
+    expect(model.hasBudget).toBe(true);
+    expect(model.bars.map((bar) => bar.year)).toEqual([2023, 2024, 2025, 2026]);
+    expect(model.bars.map((bar) => bar.isBudget)).toEqual([false, false, false, true]);
+  });
+
+  it("leaves a missing year on the axis with no bar at all — never a zero bar", () => {
+    // The regression this whole feature turns on (handoff §2): a zero-height
+    // bar reads as "there were no costs" when the truth is "the figure is not
+    // known". If someone later "simplifies" missing to 0, this fails.
+    const model = buildGroupChartModel(HALLINTO, YEARS, 2026);
+    const gap = model.bars.find((bar) => bar.year === 2023);
+
+    expect(gap.missing).toBe(true);
+    expect(gap.value).toBeNull();
+    expect(gap.heightPercent).toBeNull();
+    expect(gap.heightPercent).not.toBe(0);
+  });
+
+  it("keeps the missing year's column width and position on the axis", () => {
+    const model = buildGroupChartModel(HALLINTO, YEARS, 2026);
+    const [gap, second] = model.bars;
+
+    expect(gap.widthPercent).toBeCloseTo(second.widthPercent, 10);
+    expect(gap.xPercent).toBeLessThan(second.xPercent);
+  });
+
+  it("draws a genuine 0,00 € as a zero-height bar, distinct from missing", () => {
+    const withRealZero = { actuals: { 2024: 0, 2025: -7_360.76 }, budget: undefined };
+    const model = buildGroupChartModel(withRealZero, [2024, 2025], null);
+    const zero = model.bars.find((bar) => bar.year === 2024);
+
+    expect(zero.missing).toBe(false);
+    expect(zero.value).toBe(0);
+    expect(zero.heightPercent).toBe(0);
+  });
+
+  it("scales bar heights from zero to the largest absolute value", () => {
+    const model = buildGroupChartModel(
+      { actuals: { 2024: -5_000, 2025: -10_000 }, budget: undefined },
+      [2024, 2025],
+      null,
+    );
+
+    expect(model.maxAbsValue).toBe(10_000);
+    expect(model.bars[1].heightPercent).toBe(100);
+    expect(model.bars[0].heightPercent).toBe(50);
+  });
+
+  it("includes the budget in the scale so an over-budget year cannot overflow", () => {
+    // KORJAUKSET: 9 680 € budgeted against a 3 881,55 € actual.
+    const korjaukset = { actuals: { 2024: -5_348.53, 2025: -3_881.55 }, budget: -9_680 };
+    const model = buildGroupChartModel(korjaukset, [2024, 2025], 2026);
+
+    expect(model.maxAbsValue).toBe(9_680);
+    const budgetBar = model.bars.find((bar) => bar.isBudget);
+    expect(budgetBar.heightPercent).toBe(100);
+    for (const bar of model.bars) expect(bar.heightPercent).toBeLessThanOrEqual(100);
+  });
+
+  it("uses absolute value for bar length but keeps the stored sign in value", () => {
+    const model = buildGroupChartModel({ actuals: { 2025: -600 }, budget: undefined }, [2025], null);
+
+    expect(model.bars[0].value).toBe(-600);
+    expect(model.bars[0].heightPercent).toBe(100);
+  });
+
+  it("handles a single year of data without special-casing it", () => {
+    const model = buildGroupChartModel({ actuals: { 2025: -360 }, budget: undefined }, [2025], null);
+
+    expect(model.isEmpty).toBe(false);
+    expect(model.bars).toHaveLength(1);
+    expect(model.bars[0].heightPercent).toBe(100);
+    expect(model.bars[0].xPercent).toBeCloseTo((100 - model.bars[0].widthPercent) / 2, 10);
+  });
+
+  it("reports empty when there are no years and no budget", () => {
+    const model = buildGroupChartModel({ actuals: {}, budget: undefined }, [], null);
+
+    expect(model.isEmpty).toBe(true);
+    expect(model.bars).toEqual([]);
+  });
+
+  it("does not crash on a missing group or missing arguments", () => {
+    expect(buildGroupChartModel(undefined, undefined, undefined).isEmpty).toBe(true);
+    expect(buildGroupChartModel({}, [2025], null).bars[0].missing).toBe(true);
+  });
+
+  it("yields zero-height bars rather than NaN when every value is zero", () => {
+    const model = buildGroupChartModel({ actuals: { 2024: 0, 2025: 0 }, budget: undefined }, [2024, 2025], null);
+
+    expect(model.maxAbsValue).toBe(0);
+    for (const bar of model.bars) {
+      expect(bar.heightPercent).toBe(0);
+      expect(Number.isNaN(bar.heightPercent)).toBe(false);
+    }
+  });
+
+  it("renders a year that has both an actual and a budget as two bars", () => {
+    const model = buildGroupChartModel(
+      { actuals: { 2025: -7_360.76 }, budget: -7_972.32 },
+      [2025],
+      2025,
+    );
+
+    expect(model.bars).toHaveLength(2);
+    expect(model.bars.map((bar) => bar.year)).toEqual([2025, 2025]);
+    expect(model.bars.map((bar) => bar.isBudget)).toEqual([false, true]);
+  });
+
+  it("omits the budget bar when the group has no budget figure", () => {
+    const model = buildGroupChartModel({ actuals: { 2025: -360 }, budget: undefined }, [2025], 2026);
+
+    expect(model.hasBudget).toBe(false);
+    expect(model.bars.some((bar) => bar.isBudget)).toBe(false);
+  });
+
+  it("lays the columns out left to right without overlapping", () => {
+    const model = buildGroupChartModel(HALLINTO, YEARS, 2026);
+
+    for (let i = 1; i < model.bars.length; i += 1) {
+      const previous = model.bars[i - 1];
+      expect(model.bars[i].xPercent).toBeGreaterThan(previous.xPercent + previous.widthPercent);
+    }
+    const last = model.bars[model.bars.length - 1];
+    expect(last.xPercent + last.widthPercent).toBeLessThanOrEqual(100);
+  });
+
+  it("feeds straight from buildExpenseGroupViewModel without re-summing accounts", () => {
+    const accounts = [
+      { accountCode: "5300", name: "Isännöinti", kind: "expense", group: "HALLINTOPALVELUT" },
+      { accountCode: "5301", name: "Kokouspalkkiot", kind: "expense", group: "HALLINTOPALVELUT" },
+    ];
+    const entries = [
+      { accountCode: "5300", year: 2024, actualAmount: -6_985.63 },
+      { accountCode: "5301", year: 2024, actualAmount: -900 },
+      { accountCode: "5300", year: 2025, actualAmount: -6_460.76 },
+      { accountCode: "5301", year: 2025, actualAmount: -900 },
+      { accountCode: "5300", year: 2026, budgetAmount: -7_972.32 },
+    ];
+    const vm = buildExpenseGroupViewModel(accounts, entries);
+    const group = vm.groups.find((g) => g.group === "HALLINTOPALVELUT");
+    const model = buildGroupChartModel(group, vm.actualYears, vm.budgetYear);
+
+    expect(model.bars.map((bar) => bar.value)).toEqual([-7_885.63, -7_360.76, -7_972.32]);
+    expect(model.bars[2].isBudget).toBe(true);
   });
 });
 
