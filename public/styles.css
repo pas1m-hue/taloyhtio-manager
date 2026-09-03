@@ -287,6 +287,20 @@ tbody tr.is-gap { background: #fdf3ea; }
 .group-chart-value { font-size: .78rem; font-weight: 650; }
 .group-chart-year { font-size: .72rem; color: var(--muted); }
 .group-chart-label.is-missing .group-chart-value { color: var(--muted); font-weight: 400; }
+/* Summary chart (handoff feature/summary-chart): same structure, two series.
+   Partial years are faded, never hatched or dashed — both of those already
+   mean "budget, a forecast" in the group chart, and reusing a mark for a
+   second meaning is worse than leaving it unused. */
+.summary-chart { margin-bottom: 1rem; }
+.group-chart-caption { font-size: .8rem; color: var(--muted); }
+.group-chart-bar.is-income { fill: var(--ok); }
+.group-chart-bar.is-expense { fill: var(--accent); }
+.group-chart-bar.is-partial { opacity: .38; }
+.group-chart-partial { color: var(--warning); font-weight: 400; }
+.group-chart-swatch.is-income { background: var(--ok); }
+.group-chart-swatch.is-expense { background: var(--accent); }
+.group-chart-swatch.is-partial-key { background: var(--accent); opacity: .38; }
+.summary-chart .group-chart-value { display: block; }
 .group-chart-legend {
   display: flex; flex-wrap: wrap; gap: .3rem .9rem;
   font-size: .74rem; color: var(--muted);

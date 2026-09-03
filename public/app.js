@@ -21,6 +21,7 @@ import {
   buildSaveBuildingEventOperation,
   buildSaveCostEvidenceOperation,
   buildSaveHousingCompanyOperation,
+  buildSummaryChartModel,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
@@ -2075,13 +2076,102 @@ async function submitEventForm(formEvent, mode) {
 }
 
 function renderFinancePlaceholders() {
+  // The chart below is computed from the imported account data, so the old
+  // "this view does not use account data yet" text would contradict what is
+  // on the same screen. The block stays — the rest of a summary view is still
+  // to come — but says what is actually true.
   for (const host of $$("[data-finance]")) {
-    host.innerHTML = stateBlock({
+    host.innerHTML = renderSummaryChart() + stateBlock({
       kind: "not-modelled",
-      title: "Näkymä ei vielä käytä tilikohtaista dataa",
-      body: "Yhteenveto ei ole vielä oma laskettu näkymä. Tulot, Kulut ryhmittäin, Kulut tileittäin, Budjetti vs. toteuma ja Taloudellinen asema käyttävät jo tuotua dataa.",
+      title: "Yhteenveto on vielä osittainen",
+      body: "Kaavio yllä on laskettu tuodusta tilidatasta. Muu yhteenveto ei ole vielä oma laskettu näkymä; Tulot, Kulut ryhmittäin, Kulut tileittäin, Budjetti vs. toteuma ja Taloudellinen asema käyttävät jo tuotua dataa.",
     });
   }
+}
+
+const SUMMARY_SERIES_LABELS = { income: "Tulot", expense: "Kulut" };
+
+/**
+ * Tulot ja kulut -kaavio Yhteenveto-näkymään (handoff feature/summary-chart).
+ * Shares buildBarChartGeometry() with the group detail chart through
+ * buildSummaryChartModel(), and reuses the same .group-chart markup, CSS,
+ * fixed-height SVG and HTML label row — see renderGroupChart() for why the
+ * text is not inside the SVG.
+ *
+ * Two bars per year on one shared scale, both drawn upward: their height
+ * difference is the hoitokate, and nobody reads a difference between bars
+ * pointing opposite ways. The label keeps the stored sign, so costs still
+ * read as negative.
+ *
+ * The series are distinguished by colour AND by the label row naming both,
+ * never by colour alone. A partially reported year is marked by a faded fill
+ * plus the group count in its label — deliberately neither a dashed outline
+ * nor hatching, both of which already mean "budget, a forecast" in the group
+ * chart. Reusing a mark for a second meaning is worse than leaving it unused.
+ */
+function renderSummaryChart() {
+  if (!state.admin) return "";
+  const model = buildSummaryChartModel(
+    buildIncomeViewModel(state.admin.financialAccounts, state.admin.financialEntries),
+    buildExpenseGroupViewModel(state.admin.financialAccounts, state.admin.financialEntries),
+  );
+  if (model.isEmpty) return "";
+
+  const bars = model.columns.flatMap((column) => column.bars)
+    .filter((bar) => !bar.missing)
+    .map((bar) => {
+      const classes = ["group-chart-bar", `is-${bar.series}`];
+      if (bar.partial) classes.push("is-partial");
+      return `<rect class="${classes.join(" ")}" x="${bar.xPercent.toFixed(3)}" ` +
+        `y="${(100 - bar.heightPercent).toFixed(3)}" width="${bar.widthPercent.toFixed(3)}" ` +
+        `height="${bar.heightPercent.toFixed(3)}" vector-effect="non-scaling-stroke" />`;
+    }).join("");
+
+  const labels = model.columns.map((column) => {
+    const values = column.bars.map((bar) => {
+      const name = SUMMARY_SERIES_LABELS[bar.series];
+      const amount = bar.missing ? "—" : moneyCompact(bar.value);
+      const partialNote = bar.partial
+        ? ` <span class="group-chart-partial">osittainen (${bar.reportingGroups}/${bar.totalGroups} ryhmää)</span>`
+        : "";
+      const missingClass = bar.missing ? " is-missing" : "";
+      return `<span class="group-chart-value${missingClass}">${escapeHtml(`${name} ${amount}`)}${partialNote}</span>`;
+    }).join("");
+    return `<div class="group-chart-label">
+      ${values}
+      <span class="group-chart-year">${escapeHtml(String(column.year))}</span>
+    </div>`;
+  }).join("");
+
+  const summary = model.columns.map((column) => {
+    const parts = column.bars.map((bar) => {
+      const name = SUMMARY_SERIES_LABELS[bar.series].toLowerCase();
+      if (bar.missing) return `${name}: ei tietoa`;
+      const partial = bar.partial ? ` (osittainen, ${bar.reportingGroups}/${bar.totalGroups} ryhmää)` : "";
+      return `${name}: ${moneyCompact(bar.value)}${partial}`;
+    });
+    return `${column.year} ${parts.join(", ")}`;
+  }).join("; ");
+  const hasMissing = model.columns.some((column) => column.bars.some((bar) => bar.missing));
+
+  return `<figure class="group-chart summary-chart">
+    <figcaption class="group-chart-caption">Tulot ja kulut vuosittain (toteumat). Pylväiden korkeusero on hoitokate.</figcaption>
+    <svg class="group-chart-plot" viewBox="0 0 100 100" preserveAspectRatio="none"
+         role="img" aria-label="${escapeHtml(`Pylväskaavio, tulot ja kulut vuosittain: ${summary}.`)}">
+      ${bars}
+      <line class="group-chart-baseline" x1="0" y1="100" x2="100" y2="100"
+            vector-effect="non-scaling-stroke" />
+    </svg>
+    <div class="group-chart-labels" style="grid-template-columns: repeat(${model.columns.length}, minmax(0, 1fr));">
+      ${labels}
+    </div>
+    <figcaption class="group-chart-legend">
+      <span class="group-chart-key"><span class="group-chart-swatch is-income"></span>Tulot</span>
+      <span class="group-chart-key"><span class="group-chart-swatch is-expense"></span>Kulut (piirretty ylöspäin, luku miinusmerkkinen)</span>
+      ${model.hasPartial ? `<span class="group-chart-key"><span class="group-chart-swatch is-partial-key"></span>Haalea = osittain tuotu vuosi, ei koko vuoden summa</span>` : ""}
+      ${hasMissing ? `<span class="group-chart-key">— = lukua ei ole, ei nolla</span>` : ""}
+    </figcaption>
+  </figure>`;
 }
 
 function renderAccountCosts() {
