@@ -180,6 +180,33 @@ describe("V2.2 workspace and immutable publication", () => {
     expect(second.housingCompany.name).toBe(updatedCompany.name);
   });
 
+  it("carries the maintenance-plan coverage to the visitor side", async () => {
+    // The coverage rides along inside housingCompany, so no publishing-pipeline
+    // field of its own is needed - but it must actually arrive, and changing
+    // only the coverage must count as a publishable content change.
+    const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+    const first = await publishAdminData(repository, publishCommand());
+    expect(first.housingCompany.maintenancePlanCoverageThroughYear)
+      .toBeUndefined();
+
+    await commitAdminBatch(repository, adminCommand([{
+      type: "save_housing_company",
+      value: {
+        ...adminBaselineSnapshot.housingCompany,
+        maintenancePlanCoverageThroughYear: 2030,
+      },
+      ...metadata(),
+    }]));
+    const second = await publishAdminData(repository, {
+      ...publishCommand(1, 1),
+      publishedAt: "2026-07-17T19:00:00+03:00",
+    });
+
+    expect(second.housingCompany.maintenancePlanCoverageThroughYear).toBe(2030);
+    expect(second.contentFingerprint).not.toBe(first.contentFingerprint);
+    validatePublishedDataSnapshot(second);
+  });
+
   it("retains immutable earlier publication versions", async () => {
     const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
     const first = await publishAdminData(repository, publishCommand());

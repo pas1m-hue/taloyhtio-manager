@@ -16,6 +16,7 @@ import {
   loadVisitorScenario,
 } from "../application/visitorApplicationService.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
+import { buildSnapshotCalculations } from "../readModels/calculationReadModel.js";
 import {
   loadPostgresMigrations,
   runPostgresMigrations,
@@ -374,6 +375,62 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     ]) {
       expect(collection).toEqual([]);
     }
+  });
+
+  it("loads a snapshot written before the maintenance-plan coverage existed", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    const horizon = { startYear: 2026, endYear: 2050 } as const;
+    // Write the key first, so stripping it below is a real removal rather
+    // than a no-op against a fixture that never carried it.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = jsonb_set(
+         payload,
+         '{housingCompany,maintenancePlanCoverageThroughYear}',
+         '2030'::jsonb
+       )
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+    const withCoverage = await publications.load(COMPANY_ID);
+    expect(withCoverage!.housingCompany.maintenancePlanCoverageThroughYear)
+      .toBe(2030);
+    const covered = buildSnapshotCalculations(withCoverage!, horizon);
+    if (covered.liquidity.status !== "available") {
+      throw new Error("fixture requires liquidity");
+    }
+    expect(
+      covered.liquidity.forecast.scenarios.base.cashPath.years
+        .some((year) => !year.costsKnown),
+    ).toBe(true);
+
+    // Unlike the collections above, this one is an optional scalar on an
+    // object that always exists, so withDefaultedAdminCollections() has
+    // nothing to default. The old row must still load, and the missing key
+    // must stay unknown coverage - never a claim that the plan reaches the
+    // horizon end.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = jsonb_set(
+         payload,
+         '{housingCompany}',
+         (payload -> 'housingCompany') - 'maintenancePlanCoverageThroughYear'
+       )
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.housingCompany.maintenancePlanCoverageThroughYear)
+      .toBeUndefined();
+    const calculations = buildSnapshotCalculations(loaded!, horizon);
+    expect(calculations.liquidity.status).toBe("available");
+    if (calculations.liquidity.status !== "available") return;
+    const cashPath = calculations.liquidity.forecast.scenarios.base.cashPath;
+    expect(cashPath.years.every((year) => year.costsKnown)).toBe(true);
+    expect(cashPath.maintenancePlanCoverageThroughYear).toBeUndefined();
   });
 
   it("round-trips a delete audit entry, which has no `after` value to store", async () => {

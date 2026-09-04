@@ -236,6 +236,27 @@ describe("V2.1 admin manual entry", () => {
     ]))).toThrowError(/Liquidity baseline/);
   });
 
+  it("accepts any year as maintenance-plan coverage but rejects a non-year", () => {
+    const company = adminBaselineSnapshot.housingCompany;
+
+    for (const year of [2020, 2030, 2060]) {
+      const next = applyAdminBatch(adminBaselineSnapshot, command([
+        operation({
+          type: "save_housing_company",
+          value: { ...company, maintenancePlanCoverageThroughYear: year },
+        }),
+      ]));
+      expect(next.housingCompany.maintenancePlanCoverageThroughYear).toBe(year);
+    }
+
+    expect(() => applyAdminBatch(adminBaselineSnapshot, command([
+      operation({
+        type: "save_housing_company",
+        value: { ...company, maintenancePlanCoverageThroughYear: 2030.5 },
+      }),
+    ]))).toThrowError(/Housing company/);
+  });
+
   it("uses neutral document_update provenance instead of an AI-specific origin", () => {
     const documentEvent: BuildingEvent = {
       ...newEvent,
