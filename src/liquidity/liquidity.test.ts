@@ -249,6 +249,162 @@ describe("projectCashPath and findFundingNeed", () => {
   });
 });
 
+describe("maintenance plan coverage in the cash path", () => {
+  const coverageHorizon = { startYear: 2027, endYear: 2039 } as const;
+
+  function optimisticPath(coverage?: number) {
+    return projectCashPath({
+      projection: waterHeaterProjection().scenarios.optimistic,
+      horizon: coverageHorizon,
+      initialCash: correctedWorkbookLiquidityBaseline.currentCash,
+      annualRepairCollection: 1_000,
+      operatingBufferTarget: workbookBuffer().operatingBufferTarget,
+      ...(coverage === undefined
+        ? {}
+        : { maintenancePlanCoverageThroughYear: coverage }),
+    });
+  }
+
+  it("keeps a genuine zero inside the coverage a zero", () => {
+    // The whole point of the feature: 2028 has no planned repair and 2035 is
+    // not planned at all. Before this they rendered identically.
+    const path = optimisticPath(2033);
+
+    const genuineZero = path.years.find((year) => year.year === 2028);
+    expect(genuineZero).toMatchObject({
+      costsKnown: true,
+      knownRepairCosts: 0,
+      bufferShortfall: 0,
+    });
+    expect(genuineZero?.closingCash).toBeTypeOf("number");
+    expect(genuineZero?.dataGaps).toEqual([]);
+
+    const unplanned = path.years.find((year) => year.year === 2035);
+    expect(unplanned).toMatchObject({ year: 2035, costsKnown: false });
+    expect(unplanned?.knownRepairCosts).toBeUndefined();
+    expect(unplanned?.closingCash).toBeUndefined();
+    expect(unplanned?.bufferShortfall).toBeUndefined();
+    expect(unplanned?.cashAboveBuffer).toBeUndefined();
+    expect(unplanned?.dataGaps).toBeUndefined();
+  });
+
+  it("computes covered years, marks the rest and keeps every year visible", () => {
+    const path = optimisticPath(2033);
+
+    expect(path.years).toHaveLength(13);
+    expect(path.years.filter((year) => year.costsKnown).map((year) => year.year))
+      .toEqual([2027, 2028, 2029, 2030, 2031, 2032, 2033]);
+    expect(path.years.filter((year) => !year.costsKnown).map((year) => year.year))
+      .toEqual([2034, 2035, 2036, 2037, 2038, 2039]);
+    expect(path.maintenancePlanCoverageThroughYear).toBe(2033);
+  });
+
+  it("breaks the opening-cash chain exactly once, at the coverage edge", () => {
+    const path = optimisticPath(2033);
+
+    const lastCovered = path.years.find((year) => year.year === 2033);
+    const firstUncovered = path.years.find((year) => year.year === 2034);
+    // 2034's opening cash is 2033's closing cash - known, so it is shown.
+    expect(firstUncovered?.openingCash).toBe(lastCovered?.closingCash);
+    expect(path.years.find((year) => year.year === 2035)?.openingCash)
+      .toBeUndefined();
+  });
+
+  it("counts what it leaves out instead of dropping it silently", () => {
+    // Optimistic schedules 2036 and 2039 past a 2033 coverage: those rows are
+    // real, they just cannot complete an uncovered year's total.
+    const path = optimisticPath(2033);
+
+    expect(path.beyondCoverage).toEqual({
+      firstYear: 2034,
+      yearCount: 6,
+      scheduledCostTotal: 3_300,
+    });
+    // 2027, 2030 and 2033 are inside the coverage; 2036 and 2039 are not.
+    expect(path.knownRepairCostsTotal).toBe(4_950);
+    expect(path.finalCash).toBeUndefined();
+  });
+
+  it("computes every year when no coverage is set, exactly as before", () => {
+    const withoutCoverage = optimisticPath();
+    const legacyShape = projectCashPath({
+      projection: waterHeaterProjection().scenarios.optimistic,
+      horizon: coverageHorizon,
+      initialCash: correctedWorkbookLiquidityBaseline.currentCash,
+      annualRepairCollection: 1_000,
+      operatingBufferTarget: workbookBuffer().operatingBufferTarget,
+    });
+
+    expect(withoutCoverage).toEqual(legacyShape);
+    expect(withoutCoverage.years.every((year) => year.costsKnown)).toBe(true);
+    expect(withoutCoverage.maintenancePlanCoverageThroughYear).toBeUndefined();
+    expect(withoutCoverage.beyondCoverage).toBeUndefined();
+    expect(withoutCoverage.finalCash).toBeTypeOf("number");
+  });
+
+  it("computes every year when the coverage reaches past the horizon", () => {
+    const path = optimisticPath(2060);
+
+    expect(path.years.every((year) => year.costsKnown)).toBe(true);
+    expect(path.beyondCoverage).toBeUndefined();
+    expect(path.finalCash).toBe(optimisticPath().finalCash);
+  });
+
+  it("marks every year when the coverage already lapsed", () => {
+    const path = optimisticPath(2020);
+
+    expect(path.years.every((year) => !year.costsKnown)).toBe(true);
+    expect(path.years[0]?.openingCash).toBe(22_208.49);
+    expect(path.years[1]?.openingCash).toBeUndefined();
+    expect(path.knownRepairCostsTotal).toBe(0);
+    expect(path.finalCash).toBeUndefined();
+    expect(path.beyondCoverage).toEqual({
+      firstYear: 2027,
+      yearCount: 13,
+      scheduledCostTotal: 8_250,
+    });
+  });
+
+  it("rejects a coverage year that is not a year", () => {
+    expectDomainError(
+      () => optimisticPath(2033.5),
+      "INVALID_MAINTENANCE_PLAN_COVERAGE",
+    );
+  });
+
+  it("does not read an uncovered year as a satisfied buffer", () => {
+    // The guard that matters: `undefined > 0` is false and Math.min with an
+    // undefined is NaN, so an unguarded scan would report "no funding need"
+    // and a NaN minimum without ever throwing.
+    const path = projectCashPath({
+      projection: waterHeaterProjection().scenarios.base,
+      horizon: coverageHorizon,
+      initialCash: correctedWorkbookLiquidityBaseline.currentCash,
+      annualRepairCollection: 0,
+      operatingBufferTarget: workbookBuffer().operatingBufferTarget,
+      maintenancePlanCoverageThroughYear: 2031,
+    });
+    const signal = findFundingNeed(path);
+
+    expect(signal.firstFundingNeedYear).toBe(2031);
+    expect(signal.ownFundingSufficientForKnownCosts).toBe(false);
+    expect(Number.isNaN(signal.minimumClosingCash)).toBe(false);
+    expect(signal.minimumClosingCash).toBe(9_008.49);
+    expect(Number.isNaN(signal.maximumBufferShortfall)).toBe(false);
+    expect(signal.maximumBufferShortfall).toBe(916.77);
+  });
+
+  it("reports no funding need from covered years alone when they hold", () => {
+    const signal = findFundingNeed(optimisticPath(2020));
+
+    // Nothing is known at all, so nothing may claim a shortfall - and the
+    // minimum closing cash falls back to the initial cash rather than NaN.
+    expect(signal.ownFundingSufficientForKnownCosts).toBe(true);
+    expect(signal.maximumBufferShortfall).toBe(0);
+    expect(signal.minimumClosingCash).toBe(22_208.49);
+  });
+});
+
 describe("calculateRequiredCollection", () => {
   it("solves the minimum flat annual collection for the real heater base path", () => {
     const result = calculateRequiredCollection({
@@ -422,7 +578,7 @@ describe("calculateRequiredCollection", () => {
           operatingBufferTarget: item.buffer,
         });
         expect(
-          lowerPath.years.some((year) => year.bufferShortfall > 0),
+          lowerPath.years.some((year) => (year.bufferShortfall ?? 0) > 0),
           `case ${caseIndex} should fail one cent below the minimum`,
         ).toBe(true);
       }

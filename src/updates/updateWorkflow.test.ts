@@ -604,8 +604,10 @@ describe("workflow integration", () => {
 
     expect(after.scenarios.base.cashPath.knownRepairCostsTotal -
       before.scenarios.base.cashPath.knownRepairCostsTotal).toBe(3_500);
-    expect(before.scenarios.base.cashPath.finalCash -
-      after.scenarios.base.cashPath.finalCash).toBe(3_500);
+    // No coverage year is configured here, so both paths are fully covered
+    // and final cash is a number on both sides.
+    expect(before.scenarios.base.cashPath.finalCash! -
+      after.scenarios.base.cashPath.finalCash!).toBe(3_500);
   });
 
   it("keeps document-update proposals as review objects and never infers event dependencies", () => {

@@ -181,6 +181,41 @@ describe("validateCompanyInput apartment count", () => {
   });
 });
 
+describe("validateCompanyInput maintenance plan coverage", () => {
+  const base = { id: "c", name: "Nimi", apartmentCount: "13" };
+
+  it("omits the field entirely when it is left empty", () => {
+    const result = validateCompanyInput(base);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Absent, not defaulted: an empty field is unknown coverage, and a
+    // number here would be a silent claim about which years are planned.
+    expect("maintenancePlanCoverageThroughYear" in result.value).toBe(false);
+  });
+
+  it("accepts a year, including one already in the past", () => {
+    for (const year of ["2030", "2020", "2060"]) {
+      const result = validateCompanyInput({
+        ...base,
+        maintenancePlanCoverageThroughYear: year,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.maintenancePlanCoverageThroughYear).toBe(Number(year));
+    }
+  });
+
+  it.each(["2030.5", "abc", "-"])("rejects %j as a coverage year", (value) => {
+    const result = validateCompanyInput({
+      ...base,
+      maintenancePlanCoverageThroughYear: value,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.maintenancePlanCoverageThroughYear).toBeTruthy();
+  });
+});
+
 describe("buildSaveAssetOperation", () => {
   const validRaw = {
     id: "asset_roof",

@@ -296,6 +296,41 @@ describe("V2.3 visitor session workspace", () => {
       .toBe(9_680);
   });
 
+  it("truncates the visitor cash path at the published coverage year", async () => {
+    // Admin and visitor read the same coverage from the same publication, so
+    // the visitor cannot see a longer projected cash path than the admin does.
+    const publications = new InMemoryPublishingRepository([{
+      ...adminBaselineSnapshot,
+      housingCompany: {
+        ...adminBaselineSnapshot.housingCompany,
+        maintenancePlanCoverageThroughYear: 2030,
+      },
+    }]);
+    await publishAdminData(publications, publishCommand());
+    const sessions = new InMemorySessionWorkspaceRepository();
+    await startVisitorSession(publications, sessions, sessionCommand());
+
+    const model = await buildVisitorSessionModel(
+      publications,
+      sessions,
+      "visitor-session-1",
+      AS_OF,
+    );
+    if (model.liquidity.status !== "available") {
+      throw new Error("fixture requires liquidity");
+    }
+    const cashPath = model.liquidity.forecast.scenarios.base.cashPath;
+
+    expect(cashPath.maintenancePlanCoverageThroughYear).toBe(2030);
+    expect(cashPath.years.find((year) => year.year === 2030)?.costsKnown)
+      .toBe(true);
+    expect(cashPath.years.find((year) => year.year === 2031)?.costsKnown)
+      .toBe(false);
+    expect(cashPath.years.find((year) => year.year === 2031)?.closingCash)
+      .toBeUndefined();
+    expect(cashPath.finalCash).toBeUndefined();
+  });
+
   it("supports session-only cash and operating-buffer assumptions", async () => {
     const { publications, sessions } = await publishedRepositories();
     await startVisitorSession(publications, sessions, sessionCommand());
