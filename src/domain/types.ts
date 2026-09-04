@@ -73,6 +73,14 @@ export interface HousingCompany {
   readonly apartmentCount: number;
   readonly chargeableAreaM2?: number;
   readonly operatingBuffer?: OperatingBufferSettings;
+  /**
+   * Last year the maintenance plan actually covers. User-entered; the app
+   * never infers it from the last scheduled event, because a plan that ends
+   * in 2030 and an event schedule reaching 2039 are different facts. When it
+   * is absent the coverage is simply unknown - it is never defaulted to the
+   * horizon end, which would silently claim every year is planned.
+   */
+  readonly maintenancePlanCoverageThroughYear?: number;
 }
 
 export interface FinancialYear {

@@ -105,7 +105,9 @@ export function validateHousingCompany(value: HousingCompany): void {
           value.operatingBuffer.bufferMonths <= 0)) ||
       (value.operatingBuffer?.userOverride !== undefined &&
         (!Number.isFinite(value.operatingBuffer.userOverride) ||
-          value.operatingBuffer.userOverride < 0))) {
+          value.operatingBuffer.userOverride < 0)) ||
+      (value.maintenancePlanCoverageThroughYear !== undefined &&
+        !Number.isInteger(value.maintenancePlanCoverageThroughYear))) {
     throw invalid(`Housing company ${value.id || "<empty>"} is invalid`);
   }
 }
