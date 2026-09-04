@@ -751,7 +751,9 @@ function renderCompanyForm() {
       ${numberField("company-area", "Laskutettava pinta-ala (m²)", company.chargeableAreaM2 ?? "", { min: 0, step: "0.01" })}
       ${numberField("company-buffer-months", "Käyttöpuskuri (kk)", buffer.bufferMonths ?? "", { min: 0, step: "0.1" })}
       ${numberField("company-buffer-override", "Puskurin override (€)", buffer.userOverride ?? "", { min: 0, step: "0.01" })}
+      ${numberField("company-plan-coverage", "Kunnossapitosuunnitelma kattaa vuoteen", company.maintenancePlanCoverageThroughYear ?? "", { step: 1 })}
     </div>
+    <p class="form-hint">Kunnossapitosuunnitelman kate rajaa kassapolun: sen jälkeisiä vuosia ei esitetä laskettuina. Tyhjä kenttä tarkoittaa ettei katetta ole asetettu — ei sitä että suunnitelma kattaisi koko horisontin.</p>
     <fieldset class="form-grid">
       <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
       ${textField("company-source-ids", "Lähdetunnisteet (pilkuin eroteltu)", "", { required: true })}
@@ -773,6 +775,7 @@ async function submitCompanyForm(event) {
     chargeableAreaM2: fieldValue("company-area"),
     bufferMonths: fieldValue("company-buffer-months"),
     userOverride: fieldValue("company-buffer-override"),
+    maintenancePlanCoverageThroughYear: fieldValue("company-plan-coverage"),
     sourceIds: fieldValue("company-source-ids"),
     explanation: fieldValue("company-explanation"),
   };
@@ -782,6 +785,7 @@ async function submitCompanyForm(event) {
       name: "company-name", apartmentCount: "company-apartments",
       chargeableAreaM2: "company-area", bufferMonths: "company-buffer-months",
       userOverride: "company-buffer-override", sourceIds: "company-source-ids",
+      maintenancePlanCoverageThroughYear: "company-plan-coverage",
       explanation: "company-explanation",
     }, result.errors);
     setFeedback("#company-feedback", "Korjaa merkityt kentät.", "error");
@@ -3143,18 +3147,23 @@ function renderCashpath() {
   const cashPath = liquidity.forecast.scenarios[scenario].cashPath;
   const tabs = SCENARIOS.map((s) =>
     `<button type="button" class="mode-tab${s === scenario ? " active" : ""}" data-cashpath="${s}">${s}</button>`).join("");
-  const rows = cashPath.years.map((year) => `<tr>
+  const rows = cashPath.years.map((year) => `<tr${year.costsKnown ? "" : " class=\"beyond-coverage\""}>
     <td>${year.year}</td>
-    <td class="num">${money(year.openingCash)}</td>
+    <td class="num">${unknownOr(year.openingCash)}</td>
     <td class="num">${money(year.annualRepairCollection)}</td>
-    <td class="num">${money(year.knownRepairCosts)}</td>
-    <td class="num">${money(year.closingCash)}</td>
+    <td class="num">${unknownOr(year.knownRepairCosts)}</td>
+    <td class="num">${unknownOr(year.closingCash)}</td>
     <td class="num">${money(year.operatingBufferTarget)}</td>
-    <td class="num">${year.bufferShortfall > 0 ? `<span class="warning">${money(year.bufferShortfall)}</span>` : money(0)}</td>
-    <td class="num">${year.dataGaps.length}</td>
+    <td class="num">${year.bufferShortfall === undefined
+      ? unknownCell()
+      : year.bufferShortfall > 0
+        ? `<span class="warning">${money(year.bufferShortfall)}</span>`
+        : money(0)}</td>
+    <td class="num">${year.dataGaps === undefined ? unknownCell() : year.dataGaps.length}</td>
   </tr>`).join("");
   host.innerHTML = `
     <div class="mode-switch" style="margin-bottom:1rem">${tabs}</div>
+    ${cashpathCoverageNote(cashPath)}
     <div class="table-wrap"><table>
       <thead><tr><th>Vuosi</th><th class="num">Avaava kassa</th><th class="num">Vuosikeräys</th><th class="num">Tunnetut kulut</th><th class="num">Päättävä kassa</th><th class="num">Puskuritavoite</th><th class="num">Puskurivaje</th><th class="num">DATA GAP</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -3162,6 +3171,49 @@ function renderCashpath() {
   for (const button of $$("#cashpath-body [data-cashpath]")) {
     button.addEventListener("click", () => { state.cashpathScenario = button.dataset.cashpath; renderCashpath(); });
   }
+}
+
+/**
+ * The legend is the only thing separating "the plan covers every year" from
+ * "nobody has said what the plan covers", because both render every row as a
+ * computed number. It is deliberately the same state-block in both cases, not
+ * a footnote in the unset one.
+ */
+function cashpathCoverageNote(cashPath) {
+  const coverage = cashPath.maintenancePlanCoverageThroughYear;
+  if (coverage === undefined) {
+    return stateBlock({
+      kind: "warning",
+      title: "Kunnossapitosuunnitelman katetta ei ole asetettu",
+      body: "Kaikki horisontin vuodet näytetään laskettuina. Se ei ole väite " +
+        "siitä että suunnitelma kattaisi ne — asettamaton kate on tuntematon, " +
+        "ei koko horisontti. Aseta kate Taloyhtiön perustiedoissa.",
+    });
+  }
+  const beyond = cashPath.beyondCoverage;
+  const items = [];
+  if (beyond !== undefined) {
+    items.push(
+      `${beyond.firstYear}–${beyond.firstYear + beyond.yearCount - 1}: ` +
+        `${beyond.yearCount} vuotta ilman suunnitelmaa.`,
+    );
+    if (beyond.scheduledCostTotal > 0) {
+      items.push(
+        `Näille vuosille on jo aikataulutettu ${money(beyond.scheduledCostTotal)} ` +
+          "korjauksia. Niitä ei lasketa kassapolkuun, koska vuoden kokonaiskulu " +
+          "on silti tuntematon — luvut näkyvät Skenaariot-näkymässä.",
+      );
+    }
+  }
+  return stateBlock({
+    kind: beyond === undefined ? "unavailable" : "warning",
+    title: `Kunnossapitosuunnitelma kattaa vuoteen ${coverage} asti`,
+    body: beyond === undefined
+      ? "Suunnitelma kattaa koko horisontin, joten jokainen vuosi on laskettu."
+      : "Katteen jälkeisiä vuosia ei ole suunniteltu. Rivit näkyvät, mutta " +
+        "kuluja, päättävää kassaa ja puskurivajetta ei esitetä laskettuina.",
+    items,
+  });
 }
 
 function renderRequiredCollection() {
@@ -3598,6 +3650,13 @@ function optionalNumber(value) {
 }
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+/** An unknown figure renders as an em dash, never as 0,00 €. */
+function unknownCell() {
+  return "<span class=\"muted\" title=\"Ei tiedossa\">—</span>";
+}
+function unknownOr(value) {
+  return value === undefined ? unknownCell() : money(value);
 }
 function money(value) {
   return new Intl.NumberFormat("fi-FI", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(value);

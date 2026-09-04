@@ -19,6 +19,7 @@
  * @property {number} apartmentCount
  * @property {number} [chargeableAreaM2]
  * @property {{ bufferMonths?: number, userOverride?: number }} [operatingBuffer]
+ * @property {number} [maintenancePlanCoverageThroughYear]
  */
 
 /**
@@ -221,6 +222,16 @@ export function validateCompanyInput(raw) {
       "Puskurin euromääräinen override ei voi olla negatiivinen.";
   }
 
+  // No range check on the year: a plan whose coverage already lapsed and one
+  // reaching past the horizon are both legitimate answers, and the cash path
+  // handles each. Only "not a year" is rejected.
+  const coverageYear = optionalNumber(raw.maintenancePlanCoverageThroughYear);
+  if (coverageYear.present &&
+      (!coverageYear.valid || !Number.isInteger(coverageYear.value))) {
+    errors.maintenancePlanCoverageThroughYear =
+      "Kunnossapitosuunnitelman katteen on oltava vuosiluku.";
+  }
+
   if (Object.keys(errors).length > 0) return { ok: false, errors };
 
   /** @type {HousingCompanyValue} */
@@ -232,6 +243,9 @@ export function validateCompanyInput(raw) {
   if (userOverride.present) operatingBuffer.userOverride = userOverride.value;
   if (Object.keys(operatingBuffer).length > 0) {
     value.operatingBuffer = operatingBuffer;
+  }
+  if (coverageYear.present) {
+    value.maintenancePlanCoverageThroughYear = coverageYear.value;
   }
   return { ok: true, value };
 }

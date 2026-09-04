@@ -355,3 +355,9 @@ tbody tr.is-gap { background: #fdf3ea; }
   .topbar-controls { width: 100%; }
   .asset-card { flex-direction: column; align-items: flex-start; gap: .4rem; }
 }
+
+/* Cash-path years past the maintenance plan's coverage: visible rows whose
+   figures are unknown, not zero. */
+tr.beyond-coverage td { color: var(--muted); background: var(--soft); }
+tr.beyond-coverage td:first-child { font-style: italic; }
+.state-block + .table-wrap { margin-top: 1rem; }
