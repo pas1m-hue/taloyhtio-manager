@@ -14,6 +14,12 @@ export interface ProjectCashPathInput {
   readonly initialCash: number;
   readonly annualRepairCollection: number;
   readonly operatingBufferTarget: number;
+  /**
+   * Last year the maintenance plan covers. Omitted means unknown coverage, in
+   * which case every horizon year is computed as before - absence is not a
+   * claim that the plan reaches the horizon end.
+   */
+  readonly maintenancePlanCoverageThroughYear?: number;
 }
 
 /**
@@ -22,6 +28,12 @@ export interface ProjectCashPathInput {
  * The annual collection is assumed to be available before that year's
  * explicitly scheduled repair costs. No loan or other external financing is
  * injected; closing cash may therefore fall below the protected buffer.
+ *
+ * Years beyond the maintenance plan's coverage still get a row - the year
+ * stays visible, as a missing year stays on a chart axis - but every
+ * cost-dependent figure is left undefined. Projecting cash through years
+ * nobody has planned would turn "no plan yet" into "no costs", which is the
+ * exact reading this guards against.
  */
 export function projectCashPath(
   input: ProjectCashPathInput,
@@ -45,19 +57,46 @@ export function projectCashPath(
   const costByYear = validatedCostMap(input.projection, input.horizon);
   const gapsByYear = withinGapMap(input.projection, input.horizon);
 
+  const coverage = validatedCoverage(input.maintenancePlanCoverageThroughYear);
+
   const years: CashPathYear[] = [];
-  let openingCashCents = initialCashCents;
+  let openingCashCents: number | undefined = initialCashCents;
   let knownRepairCostsTotalCents = 0;
+  let lastCoveredClosingCashCents: number | undefined;
+  let beyondCoverageFirstYear: number | undefined;
+  let beyondCoverageYearCount = 0;
+  let beyondCoverageScheduledCents = 0;
 
   for (let year = input.horizon.startYear; year <= input.horizon.endYear; year += 1) {
+    const covered = coverage === undefined || year <= coverage;
+
+    if (!covered) {
+      beyondCoverageFirstYear ??= year;
+      beyondCoverageYearCount += 1;
+      beyondCoverageScheduledCents += costByYear.get(year) ?? 0;
+      years.push({
+        year,
+        ...(openingCashCents === undefined
+          ? {}
+          : { openingCash: fromCents(openingCashCents) }),
+        annualRepairCollection: fromCents(annualCollectionCents),
+        operatingBufferTarget: fromCents(bufferCents),
+        costsKnown: false,
+      });
+      // The chain breaks exactly once: this row could still show an opening
+      // cash carried from the last covered year, the next one cannot.
+      openingCashCents = undefined;
+      continue;
+    }
+
     const knownRepairCostCents = costByYear.get(year) ?? 0;
-    const closingCashCents = openingCashCents + annualCollectionCents -
+    const closingCashCents: number = openingCashCents! + annualCollectionCents -
       knownRepairCostCents;
     const shortfallCents = Math.max(0, bufferCents - closingCashCents);
 
     years.push({
       year,
-      openingCash: fromCents(openingCashCents),
+      openingCash: fromCents(openingCashCents!),
       annualRepairCollection: fromCents(annualCollectionCents),
       knownRepairCosts: fromCents(knownRepairCostCents),
       closingCash: fromCents(closingCashCents),
@@ -65,13 +104,18 @@ export function projectCashPath(
       cashAboveBuffer: fromCents(Math.max(0, closingCashCents - bufferCents)),
       bufferShortfall: fromCents(shortfallCents),
       dataGaps: gapsByYear.get(year) ?? [],
+      costsKnown: true,
     });
 
     knownRepairCostsTotalCents += knownRepairCostCents;
     openingCashCents = closingCashCents;
+    lastCoveredClosingCashCents = closingCashCents;
   }
 
-  const finalCashCents = openingCashCents;
+  const fullyCovered = years.every((row) => row.costsKnown);
+  const finalCashCents = years.length === 0
+    ? initialCashCents
+    : lastCoveredClosingCashCents;
 
   return {
     scenario: input.projection.scenario,
@@ -81,9 +125,36 @@ export function projectCashPath(
     operatingBufferTarget: fromCents(bufferCents),
     knownRepairCostsTotal: fromCents(knownRepairCostsTotalCents),
     collectionTotal: fromCents(annualCollectionCents * years.length),
-    finalCash: fromCents(finalCashCents),
+    ...(fullyCovered && finalCashCents !== undefined
+      ? { finalCash: fromCents(finalCashCents) }
+      : {}),
     blockingDataGaps: blockingGaps(input.projection),
+    ...(coverage === undefined
+      ? {}
+      : { maintenancePlanCoverageThroughYear: coverage }),
+    ...(beyondCoverageFirstYear === undefined
+      ? {}
+      : {
+          beyondCoverage: {
+            firstYear: beyondCoverageFirstYear,
+            yearCount: beyondCoverageYearCount,
+            scheduledCostTotal: fromCents(beyondCoverageScheduledCents),
+          },
+        }),
   };
+}
+
+function validatedCoverage(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value)) {
+    throw new DomainValidationError(
+      "INVALID_MAINTENANCE_PLAN_COVERAGE",
+      `Maintenance plan coverage year ${value} is not an integer.`,
+    );
+  }
+  return value;
 }
 
 function validateHorizon(horizon: Horizon): void {

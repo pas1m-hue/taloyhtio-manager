@@ -655,16 +655,33 @@ export interface OperatingBufferResult {
   readonly basis: OperatingBufferBasis;
 }
 
+/**
+ * One cash-path year.
+ *
+ * Every field that depends on the year's repair costs is `undefined` - never
+ * zero - once the year lies beyond the maintenance plan's coverage. An
+ * unplanned year is unknown, not free: rendering it as 0,00 EUR would make
+ * "nothing is planned" and "nothing is known" look identical, and the second
+ * one is the dangerous half. `costsKnown` says which case this row is, so a
+ * genuine zero inside the covered range stays a zero.
+ */
 export interface CashPathYear {
   readonly year: number;
-  readonly openingCash: number;
+  /**
+   * Known for every covered year, and for the first uncovered year, whose
+   * opening cash is the last covered year's closing cash. Unknown after that:
+   * the chain breaks exactly once, where the knowledge does.
+   */
+  readonly openingCash?: number;
   readonly annualRepairCollection: number;
-  readonly knownRepairCosts: number;
-  readonly closingCash: number;
+  readonly knownRepairCosts?: number;
+  readonly closingCash?: number;
   readonly operatingBufferTarget: number;
-  readonly cashAboveBuffer: number;
-  readonly bufferShortfall: number;
-  readonly dataGaps: readonly EventDataGap[];
+  readonly cashAboveBuffer?: number;
+  readonly bufferShortfall?: number;
+  readonly dataGaps?: readonly EventDataGap[];
+  /** False when the year is beyond the maintenance plan's coverage. */
+  readonly costsKnown: boolean;
 }
 
 export interface ScenarioCashPath {
@@ -673,11 +690,33 @@ export interface ScenarioCashPath {
   readonly initialCash: number;
   readonly annualRepairCollection: number;
   readonly operatingBufferTarget: number;
+  /** Summed over covered years only; uncovered years contribute unknowns. */
   readonly knownRepairCostsTotal: number;
+  /** Collection is a known input every year, so this spans the whole horizon. */
   readonly collectionTotal: number;
-  readonly finalCash: number;
+  /** Undefined when the plan's coverage ends before the horizon does. */
+  readonly finalCash?: number;
   /** Unknown-cost rows before or within the planning horizon. */
   readonly blockingDataGaps: readonly EventDataGap[];
+  /** Echoed from the housing company so views can caption the table. */
+  readonly maintenancePlanCoverageThroughYear?: number;
+  /** Present only when the horizon reaches past the plan's coverage. */
+  readonly beyondCoverage?: BeyondCoverageSummary;
+}
+
+/**
+ * What the cash path deliberately stops computing past the coverage year.
+ *
+ * Some events are already scheduled into those years (the water-heater
+ * replacement runs to 2039 against a plan covering 2030). Their amounts are
+ * left out of the cash path - a year's total cost is unknown even when one of
+ * its rows is known - but they are counted here so the omission is stated
+ * rather than silent.
+ */
+export interface BeyondCoverageSummary {
+  readonly firstYear: number;
+  readonly yearCount: number;
+  readonly scheduledCostTotal: number;
 }
 
 export interface FundingNeedSignal {
@@ -876,6 +915,7 @@ export type ValidationCode =
   | "INVALID_CASH_INPUT"
   | "INVALID_COLLECTION_INPUT"
   | "INVALID_SCENARIO_PROJECTION"
+  | "INVALID_MAINTENANCE_PLAN_COVERAGE"
   | "INVALID_CHARGE_BASIS"
   | "DUPLICATE_CHANGE_PROPOSAL_ID"
   | "INVALID_CHANGE_PROPOSAL"

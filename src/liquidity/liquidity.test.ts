@@ -422,7 +422,7 @@ describe("calculateRequiredCollection", () => {
           operatingBufferTarget: item.buffer,
         });
         expect(
-          lowerPath.years.some((year) => year.bufferShortfall > 0),
+          lowerPath.years.some((year) => (year.bufferShortfall ?? 0) > 0),
           `case ${caseIndex} should fail one cent below the minimum`,
         ).toBe(true);
       }
