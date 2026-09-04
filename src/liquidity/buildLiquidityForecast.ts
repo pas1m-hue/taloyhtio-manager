@@ -21,6 +21,8 @@ export interface BuildLiquidityForecastInput {
   readonly operatingBufferSettings?: OperatingBufferSettings;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
+  /** Last year the maintenance plan covers; omitted means unknown coverage. */
+  readonly maintenancePlanCoverageThroughYear?: number;
 }
 
 /**
@@ -47,7 +49,16 @@ export function buildLiquidityForecast(
       initialCash: input.currentCash,
       annualRepairCollection: input.currentAnnualRepairCollection,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
+      ...(input.maintenancePlanCoverageThroughYear === undefined
+        ? {}
+        : {
+            maintenancePlanCoverageThroughYear:
+              input.maintenancePlanCoverageThroughYear,
+          }),
     });
+    // Required collection deliberately keeps reading the projection over the
+    // whole horizon: coverage changes what the cash path may claim, not what
+    // the known-cost lower bound is.
     const requiredCollection = calculateRequiredCollection({
       projection,
       horizon: input.horizon,

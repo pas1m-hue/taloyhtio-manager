@@ -76,7 +76,12 @@ export function buildSessionLiquidityModel(
   return {
     status: "available",
     assumptions,
-    forecast: buildForecast(projection, workspace, assumptions),
+    forecast: buildForecast(
+      projection,
+      workspace,
+      assumptions,
+      publication.housingCompany.maintenancePlanCoverageThroughYear,
+    ),
   };
 }
 
@@ -84,6 +89,7 @@ function buildForecast(
   projection: ProjectionResult,
   workspace: VisitorSessionWorkspace,
   assumptions: EffectiveSessionLiquidityAssumptions,
+  maintenancePlanCoverageThroughYear: number | undefined,
 ): LiquidityForecastResult {
   const operatingBuffer = calculateOperatingBuffer({
     trailing12mOperatingCosts: assumptions.trailing12mOperatingCosts,
@@ -100,6 +106,9 @@ function buildForecast(
       initialCash: assumptions.currentCash,
       annualRepairCollection,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
+      ...(maintenancePlanCoverageThroughYear === undefined
+        ? {}
+        : { maintenancePlanCoverageThroughYear }),
     });
     const requiredCollection = calculateRequiredCollection({
       projection: scenarioProjection,

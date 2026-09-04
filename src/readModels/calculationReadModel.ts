@@ -69,6 +69,13 @@ export function buildSnapshotCalculations(
             ? {}
             : { totalChargeableAreaM2: snapshot.housingCompany.chargeableAreaM2 }),
           apartmentCount: snapshot.housingCompany.apartmentCount,
+          ...(snapshot.housingCompany.maintenancePlanCoverageThroughYear ===
+              undefined
+            ? {}
+            : {
+                maintenancePlanCoverageThroughYear:
+                  snapshot.housingCompany.maintenancePlanCoverageThroughYear,
+              }),
         }),
       };
   return structuredClone({ horizon, projection, liquidity });
