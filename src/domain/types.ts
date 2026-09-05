@@ -773,10 +773,36 @@ export interface BeyondCoverageSummary {
   readonly scheduledCostTotal: number;
 }
 
+/**
+ * Why a forecast is not complete. Two distinct causes already exist and they
+ * need different work from the user, which is why this is a list of reasons
+ * rather than one boolean: a DATA GAP is fixed by entering a cost, an
+ * uncovered horizon by extending — or declaring — the maintenance plan.
+ *
+ * `coverage_unset` and `coverage_ends_before_horizon` stay apart for the same
+ * reason. "The plan runs to 2030 and the horizon to 2050" and "nobody has said
+ * how far the plan runs" are different sentences and different next steps.
+ */
+export const FORECAST_INCOMPLETENESS_REASONS = [
+  "data_gap",
+  "coverage_unset",
+  "coverage_ends_before_horizon",
+] as const;
+export type ForecastIncompletenessReason =
+  (typeof FORECAST_INCOMPLETENESS_REASONS)[number];
+
 export interface FundingNeedSignal {
   readonly scenario: Scenario;
   readonly ownFundingSufficientForKnownCosts: boolean;
+  /**
+   * True only when the forecast covers its horizon: no DATA GAPs AND a
+   * maintenance plan that is declared and reaches the horizon's last year.
+   * Derived from `forecastIncompleteReasons` being empty rather than computed
+   * separately, so the flag and the explanation cannot disagree.
+   */
   readonly forecastComplete: boolean;
+  /** Why not, when not. Empty exactly when `forecastComplete` is true. */
+  readonly forecastIncompleteReasons: readonly ForecastIncompletenessReason[];
   readonly amountAtFirstNeed: number;
   readonly maximumBufferShortfall: number;
   readonly minimumClosingCash: number;
@@ -794,7 +820,10 @@ export interface RequiredCollectionResult {
   readonly requiredMonthlyCollection: number;
   readonly additionalMonthlyCollection: number;
   readonly planningYearCount: number;
+  /** See FundingNeedSignal.forecastComplete — the same rule, the same source. */
   readonly forecastComplete: boolean;
+  /** Why not, when not. Empty exactly when `forecastComplete` is true. */
+  readonly forecastIncompleteReasons: readonly ForecastIncompletenessReason[];
   readonly blockingDataGaps: readonly EventDataGap[];
   readonly currentMonthlyPerM2?: number;
   readonly requiredMonthlyPerM2?: number;

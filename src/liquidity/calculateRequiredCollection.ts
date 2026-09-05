@@ -5,6 +5,7 @@ import {
   type RequiredCollectionResult,
   type ScenarioProjection,
 } from "../domain/types.js";
+import { forecastIncompletenessReasons } from "./forecastCompleteness.js";
 import { fromCents, roundRate, toCents } from "./money.js";
 
 export interface CalculateRequiredCollectionInput {
@@ -15,6 +16,14 @@ export interface CalculateRequiredCollectionInput {
   readonly currentAnnualRepairCollection: number;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
+  /**
+   * Last year the maintenance plan covers. It does not change the arithmetic —
+   * the known-cost lower bound still reads the whole horizon from the
+   * projection, deliberately — only what the result may claim about its own
+   * completeness. Omitted means nobody has said, which is itself a reason the
+   * forecast is incomplete.
+   */
+  readonly maintenancePlanCoverageThroughYear?: number;
 }
 
 /**
@@ -65,6 +74,16 @@ export function calculateRequiredCollection(
     requiredAnnualCents - currentCollectionCents,
   );
   const blockingDataGaps = blockingGaps(input.projection);
+  const forecastIncompleteReasons = forecastIncompletenessReasons({
+    blockingDataGaps,
+    horizon: input.horizon,
+    ...(input.maintenancePlanCoverageThroughYear === undefined
+      ? {}
+      : {
+          maintenancePlanCoverageThroughYear:
+            input.maintenancePlanCoverageThroughYear,
+        }),
+  });
   const base = {
     scenario: input.projection.scenario,
     knownCostRequiredAnnualCollection: fromCents(requiredAnnualCents),
@@ -74,7 +93,8 @@ export function calculateRequiredCollection(
     requiredMonthlyCollection: fromCents(Math.ceil(requiredAnnualCents / 12)),
     additionalMonthlyCollection: fromCents(Math.ceil(additionalAnnualCents / 12)),
     planningYearCount,
-    forecastComplete: blockingDataGaps.length === 0,
+    forecastComplete: forecastIncompleteReasons.length === 0,
+    forecastIncompleteReasons,
     blockingDataGaps,
   } satisfies Omit<
     RequiredCollectionResult,
