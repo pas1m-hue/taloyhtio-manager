@@ -262,6 +262,16 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
     }
   });
 
+  it("explains why a forecast is incomplete in both the admin and visitor cards", () => {
+    // The visitor card used to show only "N DATA GAPia", which reads as "all
+    // is well" at zero — the same false reassurance in different words. Both
+    // cards build their lines from their own scenario's cash path, so the
+    // years quoted are the ones that card is about.
+    expect(js).toContain("buildForecastCompletenessLines(\n      rc.forecastIncompleteReasons,");
+    expect(js).toContain("buildForecastCompletenessLines(liq.requiredCollection.forecastIncompleteReasons, liq.cashPath)");
+    expect(js).not.toContain("Ennuste puutteellinen (DATA GAP)");
+  });
+
   it("feeds the Yhteenveto chart group-level actuals, not raw account sums", () => {
     // The chart must not go back to buildIncomeViewModel/buildExpenseGroupViewModel:
     // those sum accounts, and a group whose source itemised only part of its
