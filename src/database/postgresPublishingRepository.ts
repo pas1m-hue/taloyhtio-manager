@@ -8,6 +8,7 @@ import {
 } from "../domain/types.js";
 import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
+import { instantMillis, integer } from "./postgresValues.js";
 
 interface AdminRow extends Record<string, unknown> {
   company_id: string;
@@ -360,33 +361,7 @@ function parsePayload<T>(value: unknown, label: string): T {
 }
 
 
-function instantMillis(value: Date | string, label: string): number {
-  if (value instanceof Date) {
-    const millis = value.getTime();
-    if (!Number.isFinite(millis)) {
-      throw integrityError(`Stored ${label} timestamp is invalid.`);
-    }
-    return millis;
-  }
 
-  const text = value.trim();
-  const normalized = text
-    .replace(" ", "T")
-    .replace(/([+-]\d{2})$/, "$1:00");
-  const millis = Date.parse(normalized);
-  if (!Number.isFinite(millis)) {
-    throw integrityError(`Stored ${label} timestamp is invalid.`);
-  }
-  return millis;
-}
-
-function integer(value: unknown, label: string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw integrityError(`Stored ${label} is not a safe integer.`);
-  }
-  return parsed;
-}
 
 function adminRevisionConflict(
   companyId: string,

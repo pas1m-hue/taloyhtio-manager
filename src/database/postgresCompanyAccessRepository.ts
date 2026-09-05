@@ -5,6 +5,7 @@ import type {
 import type { CompanyAccessRepository } from "../auth/companyAccessRepository.js";
 import { validateCompanyAccessGrant } from "../auth/authorization.js";
 import type { SqlPool } from "./sql.js";
+import { instantIso } from "./postgresValues.js";
 
 interface GrantRow extends Record<string, unknown> {
   company_id: string;
@@ -95,22 +96,15 @@ function parseGrant(row: GrantRow): CompanyAccessGrant {
     subjectId: row.subject_id,
     role: "admin",
     active: row.active,
-    grantedAt: timestamp(row.granted_at),
+    grantedAt: instantIso(row.granted_at, "access-grant granted_at"),
     grantedBy: row.granted_by,
-    ...(row.revoked_at === null ? {} : { revokedAt: timestamp(row.revoked_at) }),
+    ...(row.revoked_at === null ? {} : { revokedAt: instantIso(row.revoked_at, "access-grant revoked_at") }),
     ...(row.revoked_by === null ? {} : { revokedBy: row.revoked_by }),
   };
   validateCompanyAccessGrant(grant);
   return structuredClone(grant);
 }
 
-function timestamp(value: Date | string): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) {
-    throw integrityError("Stored access-control timestamp is invalid.");
-  }
-  return date.toISOString();
-}
 
 function integrityError(message: string): DomainValidationError {
   return new DomainValidationError("DATABASE_INTEGRITY_ERROR", message);

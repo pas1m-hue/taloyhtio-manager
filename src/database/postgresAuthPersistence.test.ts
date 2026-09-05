@@ -28,26 +28,26 @@ import type {
 } from "./sql.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
-const NOW = "2026-07-17T20:00:00+03:00";
+const NOW = "2026-07-17T20:00:00.317+03:00";
 const IDENTITY: VerifiedIdentity = {
   subjectId: "user:pasi",
   provider: "test-oidc",
-  authenticatedAt: "2026-07-17T19:00:00+03:00",
-  expiresAt: "2026-07-18T19:00:00+03:00",
+  authenticatedAt: "2026-07-17T19:00:00.451+03:00",
+  expiresAt: "2026-07-18T19:00:00.773+03:00",
 };
 const GRANT: CompanyAccessGrant = {
   companyId: COMPANY_ID,
   subjectId: IDENTITY.subjectId,
   role: "admin",
   active: true,
-  grantedAt: "2026-07-01T10:00:00+03:00",
+  grantedAt: "2026-07-01T10:00:00.108+03:00",
   grantedBy: "deployment:bootstrap",
 };
 const SESSION_COMMAND: ProtectedCreateVisitorSessionCommand = {
   companyId: COMPANY_ID,
   publicationVersion: 1,
   createdAt: NOW,
-  expiresAt: "2026-07-18T20:00:00+03:00",
+  expiresAt: "2026-07-18T20:00:00.884+03:00",
   horizon: { startYear: 2026, endYear: 2057 },
 };
 
