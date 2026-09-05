@@ -7,6 +7,7 @@ import {
   buildBalanceSheetViewModel,
   buildCostEvidenceListViewModel,
   buildDeletionOperations,
+  describeApiError,
   detectBalanceImportValueDrops,
   detectFinancialImportValueDrops,
   buildEventListViewModel,
@@ -3848,7 +3849,11 @@ function toast(message, isError = false) {
 }
 function showError(error) {
   console.error(error);
-  toast(`${error.code ? `${error.code}: ` : ""}${error.message}`, true);
+  // describeApiError, not error.message: a 500 arrives with its message
+  // replaced by "Internal server error." and only its code intact, so the raw
+  // message is the least useful thing available for exactly the failures that
+  // most need explaining.
+  toast(`${error.code ? `${error.code}: ` : ""}${describeApiError(error)}`, true);
 }
 
 boot();

@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type PoolConfig } from "pg";
+import { asDatabaseError } from "./postgresErrors.js";
 
 export interface SqlQueryResult<
   Row extends Record<string, unknown> = Record<string, unknown>,
@@ -34,11 +35,19 @@ export class NodePostgresPool implements SqlPool {
     text: string,
     values: readonly unknown[] = [],
   ): Promise<SqlQueryResult<Row>> {
-    const result = await this.#pool.query<Row>(text, [...values]);
-    return {
-      rows: result.rows,
-      rowCount: result.rowCount ?? result.rows.length,
-    };
+    // Translated here rather than in each repository's catch: a row-level
+    // security rejection is not specific to any one statement, and the
+    // repositories only match the constraint codes they own, so it fell
+    // through all of them as a bare 500.
+    try {
+      const result = await this.#pool.query<Row>(text, [...values]);
+      return {
+        rows: result.rows,
+        rowCount: result.rowCount ?? result.rows.length,
+      };
+    } catch (error) {
+      throw asDatabaseError(error);
+    }
   }
 
   public async connect(): Promise<SqlTransactionClient> {
@@ -61,11 +70,15 @@ class NodePostgresClient implements SqlTransactionClient {
     text: string,
     values: readonly unknown[] = [],
   ): Promise<SqlQueryResult<Row>> {
-    const result = await this.#client.query<Row>(text, [...values]);
-    return {
-      rows: result.rows,
-      rowCount: result.rowCount ?? result.rows.length,
-    };
+    try {
+      const result = await this.#client.query<Row>(text, [...values]);
+      return {
+        rows: result.rows,
+        rowCount: result.rowCount ?? result.rows.length,
+      };
+    } catch (error) {
+      throw asDatabaseError(error);
+    }
   }
 
   public release(): void {

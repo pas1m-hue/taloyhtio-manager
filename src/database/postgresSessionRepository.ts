@@ -7,6 +7,7 @@ import type { ProtectedSessionWorkspaceRepository } from "../auth/protectedSessi
 import { validateVisitorSessionWorkspace } from "../session/sessionWorkspace.js";
 import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
+import { postgresErrorCode } from "./postgresErrors.js";
 
 interface SessionRow extends Record<string, unknown> {
   session_id: string;
@@ -430,13 +431,6 @@ function invalidCredential(): DomainValidationError {
 
 function integrityError(message: string): DomainValidationError {
   return new DomainValidationError("DATABASE_INTEGRITY_ERROR", message);
-}
-
-function postgresErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  return typeof error.code === "string" ? error.code : undefined;
 }
 
 function validDate(value: string): boolean {

@@ -5,6 +5,7 @@ import type {
 import type { CompanyAccessRepository } from "../auth/companyAccessRepository.js";
 import { validateCompanyAccessGrant } from "../auth/authorization.js";
 import type { SqlPool } from "./sql.js";
+import { postgresErrorCode } from "./postgresErrors.js";
 
 interface GrantRow extends Record<string, unknown> {
   company_id: string;
@@ -114,11 +115,4 @@ function timestamp(value: Date | string): string {
 
 function integrityError(message: string): DomainValidationError {
   return new DomainValidationError("DATABASE_INTEGRITY_ERROR", message);
-}
-
-function postgresErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  return typeof error.code === "string" ? error.code : undefined;
 }

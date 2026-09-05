@@ -2905,6 +2905,37 @@ export function buildBudgetVsActualViewModel(accounts, entries, year) {
 }
 
 /**
+ * Server error codes the browser can explain better than the server may.
+ *
+ * A 500's message never reaches the browser — httpErrors replaces it with
+ * "Internal server error." on purpose, so internals do not leak — but `code`
+ * does come through. For these codes the code is therefore the only thing the
+ * user has, and without a mapping they see a bare "Internal server error."
+ * with no cause and no next step. That is exactly what the first publication
+ * failure looked like.
+ * @type {Record<string, string>}
+ */
+export const API_ERROR_MESSAGES = {
+  DATABASE_ACCESS_POLICY_ERROR:
+    "Tietokanta torjui kirjoituksen käyttöoikeuskäytännön takia. Tämä on " +
+    "palvelimen konfiguraatiovirhe, ei sinun tietojesi ongelma — tietoja ei " +
+    "muutettu. Aja tietokantamigraatio 004 ja yritä uudelleen.",
+};
+
+/**
+ * The most useful message available for a failed API call: the mapped
+ * explanation when the server could not send one, otherwise the server's own.
+ * @param {{ code?: string, message?: string } | null | undefined} error
+ * @returns {string}
+ */
+export function describeApiError(error) {
+  if (error && API_ERROR_MESSAGES[error.code] !== undefined) {
+    return API_ERROR_MESSAGES[error.code];
+  }
+  return (error && error.message) ? error.message : "Tuntematon virhe.";
+}
+
+/**
  * Interpretation of a failed admin save (decision 6). A 409 revision conflict
  * must surface a clear reload path, never a silent overwrite.
  * @param {{ code?: string, message?: string } | null | undefined} error
@@ -2919,6 +2950,11 @@ export function interpretRevisionConflict(error) {
       message:
         "Poistettavaa tietuetta ei enää ole. Lataa työtila uudelleen ja tarkista tilanne.",
     };
+  }
+  // Not a conflict: reloading the workspace will not clear a database policy,
+  // and offering that would send the user round a loop with no exit.
+  if (error && API_ERROR_MESSAGES[error.code] !== undefined) {
+    return { isConflict: false, message: API_ERROR_MESSAGES[error.code] };
   }
   if (error && error.code === "ADMIN_REVISION_CONFLICT") {
     return {

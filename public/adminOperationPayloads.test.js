@@ -43,6 +43,7 @@ import {
   buildGroupActualId,
   buildGroupActualSeries,
   buildGroupActualImportOperations,
+  describeApiError,
   deriveComparableGroupBudgetYears,
   interpretRevisionConflict,
   isCostEvidenceExpired,
@@ -4233,5 +4234,54 @@ describe("buildSummaryChartModel with group-level actuals", () => {
     expect(incomeBar.partial).toBe(true);
     expect(incomeBar.reportingGroups).toBe(2);
     expect(incomeBar.totalGroups).toBe(3);
+  });
+});
+
+describe("interpretRevisionConflict — database access policy", () => {
+  it("explains a policy rejection the browser can only identify by its code", () => {
+    // A 500's message is replaced with "Internal server error." before it
+    // leaves the server, so without this the user saw exactly that and had no
+    // way to know the cause or the fix. The code survives; the message does not.
+    const result = interpretRevisionConflict({
+      code: "DATABASE_ACCESS_POLICY_ERROR",
+      message: "Internal server error.",
+    });
+
+    expect(result.message).toContain("konfiguraatiovirhe");
+    expect(result.message).toContain("migraatio 004");
+    expect(result.message).toContain("tietoja ei muutettu");
+  });
+
+  it("does not call it a conflict, because reloading cannot fix it", () => {
+    // isConflict drives a "reload the workspace and try again" prompt. Nothing
+    // about reloading clears a row-level security policy, so offering it would
+    // send the user round a loop with no exit.
+    expect(interpretRevisionConflict({ code: "DATABASE_ACCESS_POLICY_ERROR" }).isConflict)
+      .toBe(false);
+  });
+
+  it("leaves the revision conflict untouched", () => {
+    const result = interpretRevisionConflict({ code: "ADMIN_REVISION_CONFLICT" });
+    expect(result.isConflict).toBe(true);
+    expect(result.message).toContain("Lataa työtila uudelleen");
+  });
+});
+
+describe("describeApiError", () => {
+  it("explains a code whose message the server withheld", () => {
+    expect(describeApiError({
+      code: "DATABASE_ACCESS_POLICY_ERROR",
+      message: "Internal server error.",
+    })).toContain("migraatio 004");
+  });
+
+  it("prefers the server's own message when there is a real one", () => {
+    expect(describeApiError({ code: "INVALID_HTTP_REQUEST", message: "Vuosi puuttuu." }))
+      .toBe("Vuosi puuttuu.");
+  });
+
+  it("falls back rather than rendering undefined", () => {
+    expect(describeApiError(undefined)).toBe("Tuntematon virhe.");
+    expect(describeApiError({})).toBe("Tuntematon virhe.");
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "../domain/types.js";
 import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
+import { postgresErrorCode } from "./postgresErrors.js";
 
 interface AdminRow extends Record<string, unknown> {
   company_id: string;
@@ -412,13 +413,6 @@ function publishedVersionConflict(
 
 function integrityError(message: string): DomainValidationError {
   return new DomainValidationError("DATABASE_INTEGRITY_ERROR", message);
-}
-
-function postgresErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  return typeof error.code === "string" ? error.code : undefined;
 }
 
 function clone<T>(value: T): T {
