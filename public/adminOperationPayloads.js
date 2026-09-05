@@ -2546,6 +2546,107 @@ export function buildGroupChartModel(group, actualYears, budgetYear) {
 }
 
 /**
+ * The smallest difference in euros that counts as un-itemised money rather
+ * than float noise. A group total pasted as one figure is compared against a
+ * sum of dozens of separately parsed floats, so -34271.63 and
+ * -34271.629999999997 must read as equal — otherwise every group would carry
+ * a phantom sub-cent gap and the marking would become noise the user learns
+ * to ignore. Half a cent: below that nothing can be real money.
+ */
+const GROUP_ACTUAL_EPSILON = 0.005;
+
+/**
+ * Group-level actuals of one kind for a (kind, group, year), keyed
+ * `group::year`. Only `active` rows count, mirroring how GroupBudget rows are
+ * filtered — retiring a row must remove its effect without deleting history.
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown, year?: unknown, actualAmount?: unknown, active?: unknown}>} [groupActuals]
+ * @param {"income"|"expense"} kind
+ * @returns {Map<string, number>}
+ */
+function indexGroupActuals(groupActuals, kind) {
+  /** @type {Map<string, number>} */
+  const index = new Map();
+  for (const groupActual of Array.isArray(groupActuals) ? groupActuals : []) {
+    if (groupActual.active === false) continue;
+    if ((groupActual.kind === "income" ? "income" : "expense") !== kind) continue;
+    const year = Number(groupActual.year);
+    if (!Number.isFinite(year)) continue;
+    if (typeof groupActual.actualAmount !== "number") continue;
+    index.set(`${String(groupActual.group ?? "")}::${year}`, groupActual.actualAmount);
+  }
+  return index;
+}
+
+/**
+ * One kind's actuals per group per year with group-level figures taking
+ * precedence over the account sum (feature/group-level-actuals handoff §4.3).
+ * Returns the shape buildSummaryChartModel already consumes, so the chart's
+ * partiality logic is unchanged — a group "reports" for a year if it has
+ * either a group-level actual or at least one account actual.
+ *
+ * WHY A SEPARATE LAYER over buildGroupedFinanceCore rather than a flag inside
+ * it: the account-level views (Tulot, Kulut ryhmittäin, Kulut tileittäin)
+ * describe the tilierittely specifically and must keep showing account sums.
+ * Leaving the core untouched makes that structural instead of a promise.
+ *
+ * Groups with no accounts at all are unioned in. Rental income exists in the
+ * source but was never itemised into the chart of accounts; excluding it would
+ * leave 720 EUR of known income out of the yearly total, which is the same
+ * "unknown presented as known" failure in the other direction — and it would
+ * be inconsistent across years, since the group is absent from every year
+ * equally.
+ *
+ * @param {Parameters<typeof buildIncomeViewModel>[0]} [accounts]
+ * @param {Parameters<typeof buildIncomeViewModel>[1]} [entries]
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown, year?: unknown, actualAmount?: unknown, active?: unknown}>} [groupActuals]
+ * @param {"income"|"expense"} [kind]
+ * @returns {{
+ *   isEmpty: boolean,
+ *   actualYears: number[],
+ *   groups: Array<{ group: string, actuals: Record<number, number|undefined> }>,
+ *   totals: { actuals: Record<number, number|undefined> },
+ * }}
+ */
+export function buildGroupActualSeries(accounts, entries, groupActuals, kind) {
+  const seriesKind = kind === "income" ? "income" : "expense";
+  const core = buildGroupedFinanceCore(accounts, entries, seriesKind);
+  const index = indexGroupActuals(groupActuals, seriesKind);
+
+  const years = new Set(core.actualYears.map(Number));
+  const groupNames = new Set(core.groups.map((group) => group.group));
+  for (const key of index.keys()) {
+    const separator = key.lastIndexOf("::");
+    groupNames.add(key.slice(0, separator));
+    years.add(Number(key.slice(separator + 2)));
+  }
+
+  const actualYears = [...years].sort((a, b) => a - b);
+  if (actualYears.length === 0 || groupNames.size === 0) {
+    return { isEmpty: true, actualYears: [], groups: [], totals: { actuals: {} } };
+  }
+
+  const coreByGroup = new Map(core.groups.map((group) => [group.group, group]));
+  const groups = [...groupNames].sort((a, b) => a.localeCompare(b)).map((group) => {
+    /** @type {Record<number, number|undefined>} */
+    const actuals = {};
+    for (const year of actualYears) {
+      const groupLevel = index.get(`${group}::${year}`);
+      actuals[year] = groupLevel !== undefined ? groupLevel : coreByGroup.get(group)?.actuals[year];
+    }
+    return { group, actuals };
+  });
+
+  /** @type {Record<number, number|undefined>} */
+  const totals = {};
+  for (const year of actualYears) {
+    const values = groups.map((group) => group.actuals[year]).filter((v) => v !== undefined);
+    totals[year] = values.length > 0 ? values.reduce((sum, v) => sum + v, 0) : undefined;
+  }
+
+  return { isEmpty: false, actualYears, groups, totals: { actuals: totals } };
+}
+
+/**
  * Income and expenses side by side per year for the Yhteenveto view (handoff
  * feature/summary-chart). The height difference between the pair *is* the
  * hoitokate, which is why both series share one zero-based scale and why
@@ -2553,20 +2654,29 @@ export function buildGroupChartModel(group, actualYears, budgetYear) {
  * reads a difference between bars pointing opposite ways. `value` keeps the
  * stored sign so the label can still show costs as negative.
  *
- * Totals come from the view models the Tulot and Kulut views already use, so
- * this view cannot disagree with them. The year axis is the union of both
+ * Totals come from buildGroupActualSeries, which layers group-level actuals
+ * over the same grouping core the Tulot and Kulut views use, so this view can
+ * disagree with them only where a group-level total is known to differ from
+ * its account sum — which is the point. The year axis is the union of both
  * series' actual years, because the two are not missing the same years.
  *
  * PARTIAL YEARS, the subtlety this function exists to handle. `totals.actuals`
  * sums whichever groups reported and is `undefined` only when none did. A year
  * that is half-imported therefore yields a real number that looks like a total
- * without being one — 2023 expenses currently sum to −360,00 € from one group
- * of ten, against a true total of 34 271,63 €. Drawn unmarked that is the same
- * failure as a zero bar for a missing year: the unknown presented as known.
- * So a year whose reporting groups are fewer than the series' total is flagged
- * `partial: true` with the counts, for the renderer to mark and label. The
- * test is coverage — how many groups reported — not a guess about whether a
- * financial year is "finished".
+ * without being one. Drawn unmarked that is the same failure as a zero bar for
+ * a missing year: the unknown presented as known. So a year whose reporting
+ * groups are fewer than the series' total is flagged `partial: true` with the
+ * counts, for the renderer to mark and label. The test is coverage — how many
+ * groups reported — not a guess about whether a financial year is "finished".
+ *
+ * There is exactly ONE partiality concept here, not two, even though the
+ * feed now carries group-level actuals (buildGroupActualSeries). A group-level
+ * actual does not mark a bar partial — it *repairs* it. Once the group's true
+ * total is known the bar is a total, and the shortfall in its account
+ * itemisation is a tili-level fact that belongs in the tili-level views. All
+ * that changes here is what counts as a group having reported: a group-level
+ * actual counts, exactly as an account actual does. 2023 income is 1/1
+ * reporting and unmarked either way; only its height was wrong before.
  *
  * @param {{ isEmpty?: boolean, actualYears?: ReadonlyArray<number>, groups?: ReadonlyArray<{ actuals?: Record<number, number|undefined> }>, totals?: { actuals?: Record<number, number|undefined> } }} [incomeVm]
  * @param {{ isEmpty?: boolean, actualYears?: ReadonlyArray<number>, groups?: ReadonlyArray<{ actuals?: Record<number, number|undefined> }>, totals?: { actuals?: Record<number, number|undefined> } }} [expenseVm]
@@ -3821,13 +3931,19 @@ export function buildGroupActualImportOperations(parsed, opMeta) {
  * one-sided rows rather than hiding them).
  * @param {ReadonlyArray<{accountCode?: unknown, group?: unknown, kind?: unknown}>} [accounts]
  * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown}>} [entries]
+ * A group-level actual counts as an actual for its year exactly as an account
+ * actual does — otherwise a group with no accounts at all (rental income) could
+ * never make its year selectable, and the year would silently drop out of the
+ * filter despite having a budget and a known total.
  * @param {ReadonlyArray<{kind?: unknown, group?: unknown, year?: unknown, active?: unknown}>} [groupBudgets]
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown, year?: unknown, actualAmount?: unknown, active?: unknown}>} [groupActuals]
  * @returns {number[]}
  */
-export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets) {
+export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets, groupActuals) {
   const accountList = Array.isArray(accounts) ? accounts : [];
   const entryList = Array.isArray(entries) ? entries : [];
   const groupBudgetList = Array.isArray(groupBudgets) ? groupBudgets : [];
+  const groupActualList = Array.isArray(groupActuals) ? groupActuals : [];
   const accountsByCode = new Map(accountList.map((a) => [String(a.accountCode ?? ""), a]));
 
   /** @type {Map<string, Set<number>>} */
@@ -3851,6 +3967,17 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
       set.add(year);
       accountsBudgetYearsByGroup.set(key, set);
     }
+  }
+
+  for (const groupActual of groupActualList) {
+    if (groupActual.active === false) continue;
+    const kind = groupActual.kind === "income" ? "income" : "expense";
+    const key = `${kind}::${String(groupActual.group ?? "")}`;
+    const year = Number(groupActual.year);
+    if (!Number.isFinite(year)) continue;
+    const set = actualYearsByGroup.get(key) ?? new Set();
+    set.add(year);
+    actualYearsByGroup.set(key, set);
   }
 
   /** @type {Map<string, Set<number>>} */
@@ -3892,7 +4019,10 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  * @property {number|undefined} budget
  * @property {"group"|"accounts"|undefined} budgetSource Which source won (feature/group-budget handoff §1): an active GroupBudget always wins over a tili-summed budget when both exist for the row.
  * @property {number|undefined} overriddenAccountsBudget The tili-summed budget that was *not* used, only set when budgetSource is "group" and a tili-summed figure also existed — surfaced so the precedence rule is visible in the UI, not hidden in the calculation.
- * @property {number|undefined} actual
+ * @property {number|undefined} actual The group's authoritative actual: the group-level figure when one exists, else the account sum.
+ * @property {"group"|"accounts"|undefined} actualSource Which source the actual came from, exposed for the same reason as budgetSource — the precedence rule stays visible instead of hidden in the number.
+ * @property {number|undefined} accountsActual The account sum, always present when any account reported, even when the group-level figure won. The detail panel needs it to explain why its rows do not add up to the group total.
+ * @property {number|undefined} unitemizedActual The part of the group's total that no account accounts for: groupActual - accountsActual, set only when both exist and differ by more than rounding. `undefined` when they agree (nothing is missing) and when there are no accounts at all (nothing was ever itemised, so nothing is *un*-itemised).
  * @property {number|undefined} diffAmount
  * @property {number|undefined} diffPercent
  * @property {boolean|undefined} favorable
@@ -3910,8 +4040,6 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
 
 /**
  * Ryhmätason "Budjetti vs. toteuma" (feature/group-budget handoff §1). The
- * group's actual is always derived from FinancialEntry.actualAmount, summed
- * per (kind, group, year) from the accounts belonging to that group. The
  * group's budget prefers an active GroupBudget for that (kind, group, year)
  * — the yhtiökokous-approved figure — and falls back to the tili-level
  * FinancialEntry.budgetAmount summed per group when no GroupBudget exists
@@ -3921,6 +4049,22 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  * exposed on every row rather than folded into the number, per the
  * handoff's explicit requirement that the precedence rule stays visible to
  * the user, not hidden in the calculation.
+ *
+ * THE ACTUAL follows the same precedence, one level down (handoff
+ * feature/group-level-actuals): an active GroupActual for the (kind, group,
+ * year) wins over the sum of FinancialEntry.actualAmount across the group's
+ * accounts. This exists because a partial account sum is indistinguishable
+ * from a complete one — an account with no entry for a year usually means "no
+ * such cost", not "not itemised" — so the group's true total has to come from
+ * outside the data. Hoitovastikkeet 2023 summed to 3 527,50 EUR from the one
+ * account the source itemised, against a true 36 237,38 EUR, and the view
+ * reported it as a 90,1 % shortfall against budget.
+ *
+ * `unitemizedActual` carries the difference so the user sees both the right
+ * total and how much of it no account explains. It is set only when the two
+ * figures actually differ; the mechanism therefore checks itself, since a
+ * group-level actual that matches the account sum (2023 expenses do, to the
+ * cent) marks nothing and changes nothing.
  *
  * A row is included whenever the group has *either* a budget or an actual
  * for the year — not only when both are present (handoff §3 clarification:
@@ -3939,6 +4083,7 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  * @param {ReadonlyArray<{accountCode?: unknown, name?: unknown, kind?: unknown, group?: unknown}>} [accounts]
  * @param {ReadonlyArray<{accountCode?: unknown, year?: unknown, budgetAmount?: unknown, actualAmount?: unknown, notes?: unknown}>} [entries]
  * @param {ReadonlyArray<{id?: unknown, kind?: unknown, group?: unknown, year?: unknown, budgetAmount?: unknown, active?: unknown}>} [groupBudgets]
+ * @param {ReadonlyArray<{id?: unknown, kind?: unknown, group?: unknown, year?: unknown, actualAmount?: unknown, active?: unknown}>} [groupActuals]
  * @param {number|string} [year]
  * KPI totals are split by kind (income vs. expense): summing budget or
  * actual euros across both would add figures of opposite dominant sign
@@ -3961,13 +4106,17 @@ export function deriveComparableGroupBudgetYears(accounts, entries, groupBudgets
  *   emptyMessage: string,
  * }}
  */
-export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudgets, year) {
+export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudgets, groupActuals, year) {
   const accountList = Array.isArray(accounts) ? accounts : [];
   const entryList = Array.isArray(entries) ? entries : [];
   const groupBudgetList = Array.isArray(groupBudgets) ? groupBudgets : [];
+  const groupActualList = Array.isArray(groupActuals) ? groupActuals : [];
   const accountsByCode = new Map(accountList.map((a) => [String(a.accountCode ?? ""), a]));
 
-  if (accountList.length === 0 || year === undefined || year === null || year === "") {
+  // A group-level actual can stand alone, so the view is not empty just
+  // because no accounts exist — rental income has a total and no accounts.
+  if ((accountList.length === 0 && groupActualList.length === 0) ||
+      year === undefined || year === null || year === "") {
     return { isEmpty: true, year: null, sections: [], kpis: null, emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE };
   }
   const selectedYear = Number(year);
@@ -3991,6 +4140,20 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
     activeGroupBudgetsThisYear.map((groupBudget) => [
       `${groupBudget.kind === "income" ? "income" : "expense"}::${String(groupBudget.group ?? "")}`,
       groupBudget,
+    ])
+  );
+
+  const activeGroupActualsThisYear = groupActualList.filter((groupActual) =>
+    groupActual.active !== false && Number(groupActual.year) === selectedYear
+  );
+  for (const groupActual of activeGroupActualsThisYear) {
+    const kind = groupActual.kind === "income" ? "income" : "expense";
+    groupKeys.set(`${kind}::${String(groupActual.group ?? "")}`, { kind, group: String(groupActual.group ?? "") });
+  }
+  const groupActualByKey = new Map(
+    activeGroupActualsThisYear.map((groupActual) => [
+      `${groupActual.kind === "income" ? "income" : "expense"}::${String(groupActual.group ?? "")}`,
+      groupActual,
     ])
   );
 
@@ -4030,7 +4193,18 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
       .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
 
     const actualValues = accountRows.map((r) => r.actual).filter((v) => v !== undefined);
-    const actual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+    const accountsActual = actualValues.length > 0 ? actualValues.reduce((s, v) => s + v, 0) : undefined;
+    const groupActual = groupActualByKey.get(key);
+    const actual = groupActual !== undefined
+      ? (typeof groupActual.actualAmount === "number" ? groupActual.actualAmount : undefined)
+      : accountsActual;
+    const actualSource = actual === undefined
+      ? undefined
+      : (groupActual !== undefined ? "group" : "accounts");
+    const unitemizedActual = actualSource === "group" && accountsActual !== undefined &&
+        Math.abs(actual - accountsActual) >= GROUP_ACTUAL_EPSILON
+      ? actual - accountsActual
+      : undefined;
     const accountsBudgetValues = accountRows.map((r) => r.budget).filter((v) => v !== undefined);
     const accountsBudget = accountsBudgetValues.length > 0
       ? accountsBudgetValues.reduce((s, v) => s + v, 0)
@@ -4064,6 +4238,9 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
       budgetSource,
       overriddenAccountsBudget,
       actual,
+      actualSource,
+      accountsActual,
+      unitemizedActual,
       diffAmount,
       diffPercent,
       favorable,

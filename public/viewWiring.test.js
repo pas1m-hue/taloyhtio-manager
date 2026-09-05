@@ -263,7 +263,7 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
   });
 
   it("derives the Budjetti vs. toteuma year filter options from the data (deriveComparableGroupBudgetYears, feature/group-budget)", () => {
-    expect(js).toContain("deriveComparableGroupBudgetYears(accounts, entries, groupBudgets)");
+    expect(js).toContain("deriveComparableGroupBudgetYears(accounts, entries, groupBudgets, groupActuals)");
     expect(js).toContain('$("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual)');
   });
 });

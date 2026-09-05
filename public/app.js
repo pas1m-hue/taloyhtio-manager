@@ -157,7 +157,7 @@ function selectionStillExists(selection, model) {
   if (selection.view === "finance-budget") {
     const year = $("#finance-budget-filter-year")?.value;
     if (!year) return false;
-    const vm = buildGroupBudgetVsActualViewModel(model.financialAccounts, model.financialEntries, model.groupBudgets, year);
+    const vm = buildGroupBudgetVsActualViewModel(model.financialAccounts, model.financialEntries, model.groupBudgets, model.groupActuals, year);
     return vm.sections.some((section) =>
       section.groups.some((g) => `${section.kind}::${g.group}` === selection.id));
   }
@@ -2543,9 +2543,9 @@ function renderGroupChart(group, vm) {
 
 /** -------- Budjetti vs. toteuma (spec §6.4) -------- */
 
-function populateFinanceBudgetYearFilter(accounts, entries, groupBudgets) {
+function populateFinanceBudgetYearFilter(accounts, entries, groupBudgets, groupActuals) {
   const select = $("#finance-budget-filter-year");
-  const years = deriveComparableGroupBudgetYears(accounts, entries, groupBudgets);
+  const years = deriveComparableGroupBudgetYears(accounts, entries, groupBudgets, groupActuals);
   const current = select.value;
   select.innerHTML = `<option value="">Valitse vuosi</option>` +
     years.map((year) => `<option value="${year}">${year}</option>`).join("");
@@ -2576,13 +2576,14 @@ function currentBudgetVsActualViewModel() {
     state.admin.financialAccounts,
     state.admin.financialEntries,
     state.admin.groupBudgets,
+    state.admin.groupActuals,
     year,
   );
 }
 
 function renderBudgetVsActual() {
   if (!state.admin) return;
-  populateFinanceBudgetYearFilter(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupBudgets);
+  populateFinanceBudgetYearFilter(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupBudgets, state.admin.groupActuals);
   const vm = currentBudgetVsActualViewModel();
   const host = $("#finance-budget-body");
 
