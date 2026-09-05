@@ -19,6 +19,7 @@ import {
   type FinancialAccount,
   type FinancialEntry,
   type FinancialYear,
+  type GroupActual,
   type GroupBudget,
   type HousingCompany,
   type LiquidityBaselineRecord,
@@ -54,6 +55,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   );
   uniqueBy(state.balanceSheetSnapshots, (item) => item.id, "balance sheet snapshot");
   uniqueBy(state.groupBudgets, (item) => item.id, "group budget");
+  uniqueBy(state.groupActuals, (item) => item.id, "group actual");
 
   const assets = new Map(state.assets.map((item) => [item.id, item]));
   const events = new Map(state.events.map((item) => [item.id, item]));
@@ -79,6 +81,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   );
   state.balanceSheetSnapshots.forEach(validateBalanceSheetSnapshot);
   state.groupBudgets.forEach(validateGroupBudget);
+  state.groupActuals.forEach(validateGroupActual);
 
   // projectEvents is the calculation boundary validator. Suggested events are
   // validated as approved copies here so manual drafts cannot retain broken
@@ -180,6 +183,23 @@ function validateGroupBudget(value: GroupBudget): void {
       !Number.isInteger(value.year) || !Number.isFinite(value.budgetAmount) ||
       typeof value.active !== "boolean" || !validSources(value.sourceIds)) {
     throw invalid(`Group budget ${value.id || "<empty>"} is invalid`);
+  }
+}
+
+/**
+ * `actualAmount` only has to be finite: 0,00 EUR is a legitimate group total
+ * (a group that genuinely had no activity that year) and must stay
+ * expressible, since telling a real zero apart from an unreported year is the
+ * whole point of this collection. The sign is not constrained either — the
+ * parser warns about a suspicious one, but a genuinely negative income group
+ * (a credit note year) has to remain storable.
+ */
+function validateGroupActual(value: GroupActual): void {
+  if (!isNonEmpty(value.id) || !isNonEmpty(value.group) ||
+      !FINANCIAL_ACCOUNT_KINDS.includes(value.kind) ||
+      !Number.isInteger(value.year) || !Number.isFinite(value.actualAmount) ||
+      typeof value.active !== "boolean" || !validSources(value.sourceIds)) {
+    throw invalid(`Group actual ${value.id || "<empty>"} is invalid`);
   }
 }
 

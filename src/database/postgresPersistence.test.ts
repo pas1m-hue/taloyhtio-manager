@@ -347,9 +347,30 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.groupBudgets).toEqual([]);
   });
 
+  it("defaults groupActuals missing from a pre-existing stored row instead of throwing", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    // Same regression as above (feature/group-level-actuals handoff §4.1), for
+    // the collection field added in this feature: a row written before
+    // groupActuals existed has no such JSONB key. Without
+    // withDefaultedAdminCollections() defaulting it to [], loading that row
+    // throws "values is not iterable" from validateAdminDataSnapshot's
+    // uniqueBy() call — the bug that took the workspace down once in 3A.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = payload - 'groupActuals'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.groupActuals).toEqual([]);
+  });
+
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
-    // The three tests above each pin one field, which means a future field
+    // The tests above each pin one field, which means a future field
     // added without a matching test is unprotected. This one strips every
     // collection key withDefaultedAdminCollections() knows about, so deleting
     // any single `?? []` from it fails here even if nobody adds a test.
@@ -359,7 +380,7 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
          - 'financialYears' - 'liquidityBaselines' - 'assets' - 'observations'
          - 'costEvidence' - 'priceLevelConfirmations' - 'events'
          - 'financialAccounts' - 'financialEntries' - 'balanceSheetSnapshots'
-         - 'groupBudgets' - 'auditTrail'
+         - 'groupBudgets' - 'groupActuals' - 'auditTrail'
        WHERE company_id = $1`,
       [COMPANY_ID],
     );
@@ -371,7 +392,8 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
       loaded!.financialYears, loaded!.liquidityBaselines, loaded!.assets,
       loaded!.observations, loaded!.costEvidence, loaded!.priceLevelConfirmations,
       loaded!.events, loaded!.financialAccounts, loaded!.financialEntries,
-      loaded!.balanceSheetSnapshots, loaded!.groupBudgets, loaded!.auditTrail,
+      loaded!.balanceSheetSnapshots, loaded!.groupBudgets, loaded!.groupActuals,
+      loaded!.auditTrail,
     ]) {
       expect(collection).toEqual([]);
     }

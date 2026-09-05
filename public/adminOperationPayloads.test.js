@@ -40,11 +40,15 @@ import {
   deriveDataGapAssets,
   deriveEventYearOptions,
   groupScheduleByScenario,
+  buildGroupActualId,
+  buildGroupActualSeries,
+  buildGroupActualImportOperations,
   deriveComparableGroupBudgetYears,
   interpretRevisionConflict,
   isCostEvidenceExpired,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
+  parseGroupActualPasteInput,
   parseGroupBudgetPasteInput,
   parseSourceIds,
   detectBalanceImportValueDrops,
@@ -3104,6 +3108,130 @@ describe("buildGroupBudgetImportOperations", () => {
   });
 });
 
+describe("buildGroupActualId", () => {
+  it("is deterministic per kind+group+year, so re-import updates instead of duplicating", () => {
+    expect(buildGroupActualId("expense", "Sähkö", 2024)).toBe(buildGroupActualId("expense", "Sähkö", 2024));
+    expect(buildGroupActualId("income", "Sähkö", 2024)).not.toBe(buildGroupActualId("expense", "Sähkö", 2024));
+  });
+});
+
+describe("parseGroupActualPasteInput", () => {
+  const accounts = [
+    { accountCode: "5400", kind: "expense", group: "Sähkö" },
+    { accountCode: "3000", kind: "income", group: "Hoitovastikkeet" },
+  ];
+
+  it("parses valid rows and skips a recognized header row", () => {
+    const text = [
+      "kind\tryhmä\tvuosi\ttoteuma",
+      "kulu\tSähkö\t2023\t-9500,50",
+      "tulo\tHoitovastikkeet\t2023\t36237,38",
+    ].join("\n");
+    const parsed = parseGroupActualPasteInput(text, accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual([]);
+    expect(parsed.groupActuals).toEqual([
+      { id: "expense::Sähkö::2023", kind: "expense", group: "Sähkö", year: 2023, actualAmount: -9500.5 },
+      { id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38 },
+    ]);
+  });
+
+  it("accepts a genuine 0,00 € total, which is a real figure and not a missing one", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t0", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(0);
+  });
+
+  it("rejects an unknown kind", () => {
+    const parsed = parseGroupActualPasteInput("meno\tSähkö\t2023\t-9500", accounts);
+    expect(parsed.groupActuals).toEqual([]);
+    expect(parsed.errors[0].message).toMatch(/tuntematon kind/);
+  });
+
+  it("rejects a missing group", () => {
+    const parsed = parseGroupActualPasteInput("kulu\t\t2023\t-9500", accounts);
+    expect(parsed.errors[0].message).toMatch(/ryhmä puuttuu/);
+  });
+
+  it("rejects a non-integer year", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023.5\t-9500", accounts);
+    expect(parsed.errors[0].message).toMatch(/vuosi/);
+  });
+
+  it("rejects a missing actual", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t", accounts);
+    expect(parsed.errors[0].message).toMatch(/toteuma puuttuu/);
+  });
+
+  it("rejects a non-numeric actual", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\tabc", accounts);
+    expect(parsed.errors[0].message).toMatch(/ei ole luku/);
+  });
+
+  it("rejects a duplicate kind+group+year, reporting the second row's number", () => {
+    const text = "kulu\tSähkö\t2023\t-9500\nkulu\tSähkö\t2023\t-9600";
+    const parsed = parseGroupActualPasteInput(text, accounts);
+    expect(parsed.groupActuals).toHaveLength(1);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].row).toBe(2);
+    expect(parsed.errors[0].message).toMatch(/esiintyy jo aiemmalla rivillä/);
+  });
+
+  it("rejects a row with the wrong column count, naming the row", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023", accounts);
+    expect(parsed.errors[0].row).toBe(1);
+    expect(parsed.errors[0].message).toMatch(/saraketta/);
+  });
+
+  it("warns but does not block on a group matching no account, since an un-itemised group is legitimate here", () => {
+    // Rental income exists in the source but was never itemised into the chart
+    // of accounts. Blocking it would present known income as nonexistent; the
+    // warning is there so a genuine typo still stands out.
+    const parsed = parseGroupActualPasteInput("tulo\tVuokratuotot\t2023\t720", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals).toHaveLength(1);
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0].message).toMatch(/ei täsmää mihinkään tiliryhmään/);
+  });
+
+  it("warns on a positive expense, the sign the source Excel prints", () => {
+    // The source table gives "Kulut yhteensä 34 271,63" positive while tilidata
+    // stores costs negative. Pasted unchanged that would read as a group short
+    // by twice its own total, so the mismatch is caught at import.
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t9500", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(9500);
+    expect(parsed.warnings[0].message).toMatch(/kulut negatiivisina/);
+  });
+
+  it("warns on a negative income but stores the sign as pasted, never Math.abs", () => {
+    // A credit-note year is real. Normalising the sign is the mistake that had
+    // to be undone in the balance sheet, so the value is stored verbatim.
+    const parsed = parseGroupActualPasteInput("tulo\tHoitovastikkeet\t2023\t-500", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(-500);
+    expect(parsed.warnings[0].message).toMatch(/negatiivinen/);
+  });
+
+  it("does not warn about the sign on a zero", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t0", accounts);
+    expect(parsed.warnings).toEqual([]);
+  });
+});
+
+describe("buildGroupActualImportOperations", () => {
+  it("builds save_group_actual operations defaulting active: true", () => {
+    const parsed = { groupActuals: [{ id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38 }] };
+    const ops = buildGroupActualImportOperations(parsed, { sourceIds: ["tp2023"], explanation: "Tuonti" });
+    expect(ops).toEqual([{
+      type: "save_group_actual",
+      value: { id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38, active: true, sourceIds: ["tp2023"] },
+      sourceIds: ["tp2023"],
+      explanation: "Tuonti",
+    }]);
+  });
+});
+
 const GROUP_BUDGET_ACCOUNTS = [
   { accountCode: "5400", name: "Sähkölasku", kind: "expense", group: "Sähkö" },
   { accountCode: "5401", name: "Sähkösopimus", kind: "expense", group: "Sähkö" },
@@ -3115,40 +3243,40 @@ describe("deriveComparableGroupBudgetYears", () => {
   it("includes a year when a group has both actual and an active GroupBudget", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
-    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets)).toEqual([2024]);
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [])).toEqual([2024]);
   });
 
   it("includes a year when a group has both actual and a tili-summed budget (no GroupBudget)", () => {
     const entries = [{ accountCode: "5400", year: 2025, actualAmount: -9000, budgetAmount: -10000 }];
-    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [])).toEqual([2025]);
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [], [])).toEqual([2025]);
   });
 
   it("excludes a year when only actual exists (no budget from either source)", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
-    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [])).toEqual([]);
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, [], [])).toEqual([]);
   });
 
   it("excludes a year when only a GroupBudget exists with no actual anywhere in the group", () => {
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
-    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, [], groupBudgets)).toEqual([]);
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, [], groupBudgets, [])).toEqual([]);
   });
 
   it("ignores an inactive GroupBudget", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: false }];
-    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets)).toEqual([]);
+    expect(deriveComparableGroupBudgetYears(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [])).toEqual([]);
   });
 });
 
 describe("buildGroupBudgetVsActualViewModel", () => {
   it("is empty with no accounts or no year selected", () => {
-    expect(buildGroupBudgetVsActualViewModel([], [], [], 2024).isEmpty).toBe(true);
-    expect(buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, [], [], undefined).isEmpty).toBe(true);
+    expect(buildGroupBudgetVsActualViewModel([], [], [], [], 2024).isEmpty).toBe(true);
+    expect(buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, [], [], [], undefined).isEmpty).toBe(true);
   });
 
   it("is empty when the selected year has no data from either source", () => {
     const entries = [{ accountCode: "5400", year: 2023, actualAmount: -9000 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     expect(vm.isEmpty).toBe(true);
     expect(vm.year).toBe(2024);
   });
@@ -3159,7 +3287,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "5401", year: 2024, actualAmount: -3000, budgetAmount: -4000 },
     ];
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [], 2024);
     const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
     expect(sahko.budget).toBe(-10000);
     expect(sahko.budgetSource).toBe("group");
@@ -3169,7 +3297,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
 
   it("falls back to the tili-summed budget when no active GroupBudget exists for the row", () => {
     const entries = [{ accountCode: "5500", year: 2024, actualAmount: -1500, budgetAmount: -2000 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
     expect(korjaukset.budget).toBe(-2000);
     expect(korjaukset.budgetSource).toBe("accounts");
@@ -3179,7 +3307,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
   it("ignores an inactive GroupBudget and falls back to the tili-summed budget", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 }];
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: false }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [], 2024);
     const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
     expect(sahko.budget).toBe(-5000);
     expect(sahko.budgetSource).toBe("accounts");
@@ -3190,7 +3318,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
     // Another group needs *some* actual data this year so the view isn't
     // considered empty overall.
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -1000, budgetAmount: -1000 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [], 2024);
     const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
     expect(korjaukset.budget).toBe(-5000);
     expect(korjaukset.actual).toBeUndefined();
@@ -3201,7 +3329,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
 
   it("includes a row with actual but no budget from either source (one-sided, handoff §3(b))", () => {
     const entries = [{ accountCode: "5500", year: 2024, actualAmount: -3200 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     const korjaukset = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Korjaukset");
     expect(korjaukset.actual).toBe(-3200);
     expect(korjaukset.budget).toBeUndefined();
@@ -3213,7 +3341,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
   it("sign convention: an expense group that came in under budget shows a positive diffAmount and favorable: true", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000 }];
     const groupBudgets = [{ id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [], 2024);
     const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
     expect(sahko.diffAmount).toBe(1000); // -9000 - (-10000)
     expect(sahko.favorable).toBe(true); // |−9000| <= |−10000|: alitus, edullinen
@@ -3222,7 +3350,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
   it("sign convention: an income group that came in under budget shows a negative diffAmount and favorable: false", () => {
     const entries = [{ accountCode: "3200", year: 2024, actualAmount: 28000 }];
     const groupBudgets = [{ id: "income::Vuokrat::2024", kind: "income", group: "Vuokrat", year: 2024, budgetAmount: 30000, active: true }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, groupBudgets, [], 2024);
     const vuokrat = vm.sections.find((s) => s.kind === "income").groups.find((g) => g.group === "Vuokrat");
     expect(vuokrat.diffAmount).toBe(-2000); // 28000 - 30000
     expect(vuokrat.favorable).toBe(false); // tulot jäivät, epäedullinen
@@ -3230,7 +3358,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
 
   it("exposes the tili-level breakdown on rows for the detail panel", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -6000, budgetAmount: -5000 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     const sahko = vm.sections.find((s) => s.kind === "expense").groups.find((g) => g.group === "Sähkö");
     expect(sahko.rows).toEqual([{ accountCode: "5400", name: "Sähkölasku", budget: -5000, actual: -6000, diffAmount: -1000, diffPercent: 20 }]);
   });
@@ -3240,7 +3368,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // expense
       { accountCode: "3200", year: 2024, actualAmount: 28000, budgetAmount: 30000 }, // income
     ];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     expect(vm.kpis.expense).toEqual({ totalBudget: -10000, totalActual: -9000, netDiff: 1000, avgAbsDeviationPercent: 10 });
     expect(vm.kpis.income).toEqual({ totalBudget: 30000, totalActual: 28000, netDiff: -2000, avgAbsDeviationPercent: (2000 / 30000) * 100 });
   });
@@ -3248,7 +3376,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
   it("kpis.<kind> is null when that kind has no accounts at all (mirrors sections not having that kind)", () => {
     const expenseOnlyAccounts = GROUP_BUDGET_ACCOUNTS.filter((a) => a.kind === "expense");
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }];
-    const vm = buildGroupBudgetVsActualViewModel(expenseOnlyAccounts, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(expenseOnlyAccounts, entries, [], [], 2024);
     expect(vm.sections.some((s) => s.kind === "income")).toBe(false);
     expect(vm.kpis.income).toBeNull();
     expect(vm.kpis.expense).not.toBeNull();
@@ -3266,7 +3394,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "5500", year: 2025, actualAmount: -6730, budgetAmount: -5000 }, // Korjaukset: |diffPercent| = 34.6
       { accountCode: "3200", year: 2025, actualAmount: 30690, budgetAmount: 30000 }, // Vuokrat: |diffPercent| = 2.3
     ];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2025);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2025);
     expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(37.3, 6);
     expect(vm.kpis.income.avgAbsDeviationPercent).toBeCloseTo(2.3, 6);
     // and not the combined (40 + 34.6 + 2.3) / 3 the old top-level KPI showed
@@ -3278,7 +3406,7 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }, // Sähkö: |diffPercent| = 10
       { accountCode: "5500", year: 2024, actualAmount: -3200 }, // Korjaukset, one-sided: no budget, diffPercent undefined
     ];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(10, 6);
   });
 
@@ -3287,14 +3415,14 @@ describe("buildGroupBudgetVsActualViewModel", () => {
       { accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 },
       { accountCode: "3200", year: 2024, actualAmount: 28000 }, // income, one-sided only
     ];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     expect(vm.kpis.income.avgAbsDeviationPercent).toBeUndefined();
     expect(vm.kpis.expense.avgAbsDeviationPercent).toBeCloseTo(10, 6);
   });
 
   it("kpis has no top-level avgAbsDeviationPercent any more (it lives on each kind)", () => {
     const entries = [{ accountCode: "5400", year: 2024, actualAmount: -9000, budgetAmount: -10000 }];
-    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], 2024);
+    const vm = buildGroupBudgetVsActualViewModel(GROUP_BUDGET_ACCOUNTS, entries, [], [], 2024);
     expect(vm.kpis.avgAbsDeviationPercent).toBeUndefined();
     expect(Object.keys(vm.kpis).sort()).toEqual(["expense", "income"]);
   });
@@ -3771,7 +3899,7 @@ describe("views after a deletion (regression)", () => {
     // independent row — and the comparison still renders it, now without an
     // actual, rather than crashing on the missing account.
     const budget = buildGroupBudgetVsActualViewModel(
-      next.financialAccounts, next.financialEntries, next.groupBudgets, 2025,
+      next.financialAccounts, next.financialEntries, next.groupBudgets, next.groupActuals, 2025,
     );
     const sahko = budget.sections
       .flatMap((section) => section.groups)
@@ -3779,5 +3907,331 @@ describe("views after a deletion (regression)", () => {
     expect(sahko?.budget).toBe(-10000);
     expect(sahko?.actual).toBeUndefined();
     expect(sahko?.diffPercent).toBeUndefined();
+  });
+});
+
+/**
+ * The production shape this feature exists for (handoff §0/§2), trimmed to the
+ * accounts that matter. Hoitovastikkeet 2023 was itemised only for 3030 in the
+ * source, so its account sum is 3 527,50 € against a true 36 237,38 €.
+ * Hallintopalvelut 2023 is the control: fewer accounts report than in other
+ * years, yet the year is complete.
+ */
+const GROUP_ACTUAL_ACCOUNTS = [
+  { accountCode: "3000", name: "Hoitovastike, asunnot", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "3002", name: "Hoitovastike, autokatokset", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "3030", name: "Kulutusperusteinen vastike", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "3050", name: "Hoitovastike, kaapeli-TV", kind: "income", group: "Hoitovastikkeet" },
+  { accountCode: "5310", name: "Isännöinnin erill. korv.", kind: "expense", group: "Hallintopalvelut" },
+  { accountCode: "5320", name: "Isännöintipalkkio", kind: "expense", group: "Hallintopalvelut" },
+  { accountCode: "5373", name: "Postikulut", kind: "expense", group: "Hallintopalvelut" },
+];
+
+/** 2023 as the source itemised it: one income account, two of three admin accounts. */
+const GROUP_ACTUAL_ENTRIES_2023 = [
+  { accountCode: "3030", year: 2023, actualAmount: 3_527.5, budgetAmount: 3_600 },
+  { accountCode: "3000", year: 2023, budgetAmount: 32_009.69 },
+  { accountCode: "5320", year: 2023, actualAmount: -7_800, budgetAmount: -7_800 },
+  { accountCode: "5373", year: 2023, actualAmount: -203.7, budgetAmount: -200 },
+];
+
+/** @param {string} group @param {number} amount */
+const incomeActual2023 = (group, amount) => ({
+  id: `income::${group}::2023`, kind: "income", group, year: 2023, actualAmount: amount, active: true,
+});
+/** @param {string} group @param {number} amount */
+const expenseActual2023 = (group, amount) => ({
+  id: `expense::${group}::2023`, kind: "expense", group, year: 2023, actualAmount: amount, active: true,
+});
+
+/** @param {ReturnType<typeof buildGroupBudgetVsActualViewModel>} vm @param {string} group */
+function findGroupRow(vm, group) {
+  return vm.sections.flatMap((section) => section.groups).find((row) => row.group === group);
+}
+
+describe("buildGroupBudgetVsActualViewModel — group-level actuals", () => {
+  it("prefers the group-level actual over a partial account sum and reports what is un-itemised", () => {
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [incomeActual2023("Hoitovastikkeet", 36_237.38)], 2023,
+    );
+    const row = findGroupRow(vm, "Hoitovastikkeet");
+
+    expect(row.actual).toBe(36_237.38);
+    expect(row.actualSource).toBe("group");
+    // The account sum is kept, not discarded: the detail panel has to explain
+    // why its rows do not add up to the group total.
+    expect(row.accountsActual).toBe(3_527.5);
+    expect(row.unitemizedActual).toBeCloseTo(32_709.88, 6);
+  });
+
+  it("computes the comparison against the true total, not the partial sum", () => {
+    // Before this, the view read budget 35 609,69 / toteuma 3 527,50 / −90,1 %,
+    // as if 32 000 € of vastike had gone uncollected. The budget was exceeded.
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [incomeActual2023("Hoitovastikkeet", 36_237.38)], 2023,
+    );
+    const row = findGroupRow(vm, "Hoitovastikkeet");
+
+    expect(row.budget).toBeCloseTo(35_609.69, 6);
+    expect(row.diffAmount).toBeCloseTo(627.69, 6);
+    expect(row.diffPercent).toBeCloseTo(1.7627, 3);
+    expect(row.favorable).toBe(true);
+  });
+
+  it("carries the corrected actual into the kind's KPIs", () => {
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [incomeActual2023("Hoitovastikkeet", 36_237.38)], 2023,
+    );
+
+    expect(vm.kpis.income.totalActual).toBe(36_237.38);
+    expect(vm.kpis.income.netDiff).toBeCloseTo(627.69, 6);
+    expect(vm.kpis.income.avgAbsDeviationPercent).toBeCloseTo(1.7627, 3);
+  });
+
+  it("marks nothing when the group-level actual agrees with the account sum", () => {
+    // The mechanism checks itself: 2023 expenses match to the cent in the real
+    // data, so importing them changes nothing anywhere. Only a genuine
+    // shortfall stands out, which is what keeps the marking worth reading.
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [expenseActual2023("Hallintopalvelut", -8_003.7)], 2023,
+    );
+    const row = findGroupRow(vm, "Hallintopalvelut");
+
+    expect(row.actual).toBe(-8_003.7);
+    expect(row.actualSource).toBe("group");
+    expect(row.unitemizedActual).toBeUndefined();
+  });
+
+  it("REGRESSION (handoff §2): a group with fewer accounts reporting than other years is NOT partial", () => {
+    // Hallintopalvelut 2023 reports 2 of its 3 accounts here (8 of 11 in
+    // production) and is nonetheless complete — the missing accounts are
+    // genuine zeros: 5310 Isännöinnin erill. korv. had no cost that year, and
+    // 5373 Postikulut is absent from other years for the same reason.
+    //
+    // This test exists to stop the obvious fix from coming back. Counting how
+    // many of a group's accounts reported looks like the natural way to detect
+    // a partial year, and it is wrong: "no such cost" and "not itemised" are
+    // numerically identical, so the count would flag this complete group and
+    // train the user to ignore the marking. The only thing that separates the
+    // two cases is the group's true total, and it agrees with the account sum
+    // here — so nothing is marked.
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [expenseActual2023("Hallintopalvelut", -8_003.7)], 2023,
+    );
+    const row = findGroupRow(vm, "Hallintopalvelut");
+
+    expect(row.rows).toHaveLength(2);
+    expect(row.rows.length).toBeLessThan(
+      GROUP_ACTUAL_ACCOUNTS.filter((a) => a.group === "Hallintopalvelut").length,
+    );
+    expect(row.unitemizedActual).toBeUndefined();
+  });
+
+  it("treats a sub-cent difference as rounding, not as un-itemised money", () => {
+    // The group total is one pasted figure; the account side is a sum of many
+    // separately parsed floats. Without a tolerance every group would carry a
+    // phantom gap and the marking would become noise.
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [expenseActual2023("Hallintopalvelut", -8_003.7001)], 2023,
+    );
+
+    expect(findGroupRow(vm, "Hallintopalvelut").unitemizedActual).toBeUndefined();
+  });
+
+  it("does not mark a group whose actual is a genuine 0,00 €", () => {
+    const entries = [{ accountCode: "5320", year: 2023, actualAmount: 0, budgetAmount: -500 }];
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, entries, [], [expenseActual2023("Hallintopalvelut", 0)], 2023,
+    );
+    const row = findGroupRow(vm, "Hallintopalvelut");
+
+    expect(row.actual).toBe(0);
+    expect(row.actualSource).toBe("group");
+    expect(row.unitemizedActual).toBeUndefined();
+  });
+
+  it("renders a group that has no accounts at all, with nothing marked un-itemised", () => {
+    // Rental income exists in the source but was never itemised into the chart
+    // of accounts. Nothing was ever itemised, so nothing is *un*-itemised —
+    // the row is complete, not partial.
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [incomeActual2023("Vuokratuotot", 720)], 2023,
+    );
+    const row = findGroupRow(vm, "Vuokratuotot");
+
+    expect(row.actual).toBe(720);
+    expect(row.actualSource).toBe("group");
+    expect(row.accountsActual).toBeUndefined();
+    expect(row.unitemizedActual).toBeUndefined();
+    expect(row.budget).toBeUndefined();
+  });
+
+  it("falls back to the account sum when no group-level actual exists (backward compatibility)", () => {
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023, [], [], 2023,
+    );
+    const row = findGroupRow(vm, "Hoitovastikkeet");
+
+    expect(row.actual).toBe(3_527.5);
+    expect(row.actualSource).toBe("accounts");
+    expect(row.unitemizedActual).toBeUndefined();
+  });
+
+  it("ignores an inactive group-level actual and falls back to the account sum", () => {
+    const retired = { ...incomeActual2023("Hoitovastikkeet", 36_237.38), active: false };
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023, [], [retired], 2023,
+    );
+    const row = findGroupRow(vm, "Hoitovastikkeet");
+
+    expect(row.actual).toBe(3_527.5);
+    expect(row.actualSource).toBe("accounts");
+  });
+
+  it("ignores a group-level actual from a different year", () => {
+    const vm = buildGroupBudgetVsActualViewModel(
+      GROUP_ACTUAL_ACCOUNTS, GROUP_ACTUAL_ENTRIES_2023,
+      [], [{ ...incomeActual2023("Hoitovastikkeet", 40_666.93), id: "income::Hoitovastikkeet::2024", year: 2024 }],
+      2023,
+    );
+
+    expect(findGroupRow(vm, "Hoitovastikkeet").actual).toBe(3_527.5);
+  });
+});
+
+describe("deriveComparableGroupBudgetYears — group-level actuals", () => {
+  it("counts a group-level actual as an actual, so a year with no account actuals is still selectable", () => {
+    const entries = [{ accountCode: "3000", year: 2023, budgetAmount: 32_000 }];
+    const groupActuals = [incomeActual2023("Hoitovastikkeet", 36_237.38)];
+    expect(deriveComparableGroupBudgetYears(GROUP_ACTUAL_ACCOUNTS, entries, [], groupActuals))
+      .toEqual([2023]);
+  });
+
+  it("ignores an inactive group-level actual", () => {
+    const entries = [{ accountCode: "3000", year: 2023, budgetAmount: 32_000 }];
+    const groupActuals = [{ ...incomeActual2023("Hoitovastikkeet", 36_237.38), active: false }];
+    expect(deriveComparableGroupBudgetYears(GROUP_ACTUAL_ACCOUNTS, entries, [], groupActuals))
+      .toEqual([]);
+  });
+});
+
+describe("buildGroupActualSeries", () => {
+  const entries = [
+    { accountCode: "3030", year: 2023, actualAmount: 3_527.5 },
+    { accountCode: "3000", year: 2024, actualAmount: 40_666.93 },
+  ];
+
+  it("overrides the account sum with the group-level figure per year", () => {
+    const series = buildGroupActualSeries(
+      GROUP_ACTUAL_ACCOUNTS, entries, [incomeActual2023("Hoitovastikkeet", 36_237.38)], "income",
+    );
+
+    expect(series.actualYears).toEqual([2023, 2024]);
+    expect(series.totals.actuals[2023]).toBe(36_237.38);
+    // 2024 has no group-level figure, so it stays the account sum.
+    expect(series.totals.actuals[2024]).toBe(40_666.93);
+  });
+
+  it("unions in a group that has no accounts, so known income is not left out", () => {
+    const series = buildGroupActualSeries(
+      GROUP_ACTUAL_ACCOUNTS, entries,
+      [incomeActual2023("Hoitovastikkeet", 36_237.38), incomeActual2023("Vuokratuotot", 720)],
+      "income",
+    );
+
+    expect(series.groups.map((g) => g.group)).toEqual(["Hoitovastikkeet", "Vuokratuotot"]);
+    expect(series.totals.actuals[2023]).toBeCloseTo(36_957.38, 6);
+    // Absent from 2024 rather than counted as zero there.
+    expect(series.groups.find((g) => g.group === "Vuokratuotot").actuals[2024]).toBeUndefined();
+  });
+
+  it("leaves the account sum untouched when no group-level actuals exist", () => {
+    const series = buildGroupActualSeries(GROUP_ACTUAL_ACCOUNTS, entries, [], "income");
+    expect(series.totals.actuals[2023]).toBe(3_527.5);
+  });
+
+  it("ignores group-level actuals of the other kind", () => {
+    const series = buildGroupActualSeries(
+      GROUP_ACTUAL_ACCOUNTS, entries, [expenseActual2023("Hoitovastikkeet", -99)], "income",
+    );
+    expect(series.totals.actuals[2023]).toBe(3_527.5);
+  });
+
+  it("is empty when there is neither account data nor a group-level actual", () => {
+    expect(buildGroupActualSeries([], [], [], "income").isEmpty).toBe(true);
+  });
+});
+
+describe("buildSummaryChartModel with group-level actuals", () => {
+  const accounts = [
+    { accountCode: "3030", name: "Kulutusvastike", kind: "income", group: "Hoitovastikkeet" },
+    { accountCode: "5320", name: "Isännöinti", kind: "expense", group: "Hallintopalvelut" },
+  ];
+  const entries = [
+    { accountCode: "3030", year: 2023, actualAmount: 3_527.5 },
+    { accountCode: "5320", year: 2023, actualAmount: -34_271.63 },
+  ];
+  const groupActuals = [
+    incomeActual2023("Hoitovastikkeet", 36_237.38),
+    incomeActual2023("Vuokratuotot", 720),
+    expenseActual2023("Hallintopalvelut", -34_271.63),
+  ];
+
+  it("draws the 2023 income bar at its true height and turns hoitokate positive", () => {
+    // Before this the chart showed income 3 528 € against expenses −34 272 €,
+    // a hoitokate near −30 744 € for a year that was in surplus.
+    const model = buildSummaryChartModel(
+      buildGroupActualSeries(accounts, entries, groupActuals, "income"),
+      buildGroupActualSeries(accounts, entries, groupActuals, "expense"),
+    );
+    const [incomeBar, expenseBar] = model.columns.find((c) => c.year === 2023).bars;
+
+    expect(incomeBar.value).toBeCloseTo(36_957.38, 6);
+    expect(expenseBar.value).toBe(-34_271.63);
+    expect(incomeBar.value + expenseBar.value).toBeGreaterThan(0);
+  });
+
+  it("does not mark the corrected year partial: a group-level actual repairs a bar, it does not flag one", () => {
+    // There is one partiality concept, not two. Coverage still asks how many
+    // groups reported; a group-level actual simply counts as reporting. The
+    // un-itemised remainder is a tili-level fact and stays in the tili-level
+    // views.
+    const model = buildSummaryChartModel(
+      buildGroupActualSeries(accounts, entries, groupActuals, "income"),
+      buildGroupActualSeries(accounts, entries, groupActuals, "expense"),
+    );
+    const year2023 = model.columns.find((c) => c.year === 2023);
+
+    expect(model.hasPartial).toBe(false);
+    for (const bar of year2023.bars) {
+      expect(bar.partial).toBe(false);
+      expect(bar.reportingGroups).toBe(bar.totalGroups);
+    }
+  });
+
+  it("still marks a year where a group reports through neither source", () => {
+    // The existing coverage rule is untouched: a group that has no account
+    // actual and no group-level actual for a year leaves the bar partial.
+    const withUncoveredGroup = [
+      ...accounts,
+      { accountCode: "3200", name: "Autopaikat", kind: "income", group: "Autopaikkatuotot" },
+    ];
+    const withOtherYear = [...entries, { accountCode: "3200", year: 2024, actualAmount: 1_200 }];
+    const model = buildSummaryChartModel(
+      buildGroupActualSeries(withUncoveredGroup, withOtherYear, groupActuals, "income"),
+      buildGroupActualSeries(withUncoveredGroup, withOtherYear, groupActuals, "expense"),
+    );
+    const incomeBar = model.columns.find((c) => c.year === 2023).bars[0];
+
+    expect(incomeBar.partial).toBe(true);
+    expect(incomeBar.reportingGroups).toBe(2);
+    expect(incomeBar.totalGroups).toBe(3);
   });
 });

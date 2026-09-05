@@ -89,6 +89,7 @@ export function validatePublishedDataSnapshot(
     financialEntries: [],
     balanceSheetSnapshots: [],
     groupBudgets: [],
+    groupActuals: [],
     auditTrail: [],
     updatedAt: snapshot.publishedAt,
     updatedBy: snapshot.publishedBy,
