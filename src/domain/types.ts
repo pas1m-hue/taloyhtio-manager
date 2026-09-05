@@ -153,6 +153,56 @@ export interface GroupBudget {
 }
 
 /**
+ * A group-level *actual* figure (handoff feature/group-level-actuals §3). The
+ * counterpart to GroupBudget, and deliberately a separate collection rather
+ * than a fifth column on it, for two reasons found during planning:
+ *
+ *  1. `save_group_budget` upserts the whole row by id. Sharing one row would
+ *     mean a later budget-only import for the same kind+group+year silently
+ *     wipes the actual — no error, no warning. That is exactly the failure
+ *     class this feature exists to remove.
+ *  2. `GroupBudget.budgetAmount` would have to become optional, because a
+ *     group can have an actual for a year with no group-level budget (every
+ *     historical year currently is that case).
+ *
+ * WHY THIS EXISTS AT ALL. A group's actual is normally summed from its
+ * accounts. When the source report itemised only *some* of a group's accounts
+ * for a year, that sum is partial but indistinguishable from a complete one:
+ * an account with no entry for a year means "no such cost" far more often
+ * than "not itemised", and the two are numerically identical (handoff §2).
+ * The only thing that tells them apart is the group's true total, which lives
+ * in the source document and nowhere in the data — so it is entered, never
+ * inferred. A group-level actual that *equals* the account sum marks nothing;
+ * only a genuine shortfall stands out.
+ *
+ * `id` is derived from kind/group/year (buildGroupActualId in
+ * adminOperationPayloads.js), mirroring GroupBudget, so re-importing the same
+ * group+year updates the row instead of duplicating it — and so a typo'd
+ * group name yields a different id that can only be removed by delete_entity.
+ *
+ * `actualAmount` keeps the sign as pasted (expenses negative, per
+ * ohje-tilinpaatosdatan-syotto.md). It is never normalised with Math.abs:
+ * that blunt fix had to be undone in the balance sheet
+ * (handoff-korjaus-tase-etumerkki) because it destroys genuinely negative
+ * figures. The parser warns on a suspicious sign instead.
+ *
+ * A group with no FinancialAccounts at all is legitimate here: rental income
+ * exists in the source but was never itemised into the chart of accounts, and
+ * refusing to store it would present 720 EUR of known income as nonexistent.
+ * Group-level consumers union such groups in; the account-level views do not.
+ */
+export interface GroupActual {
+  readonly id: string;
+  readonly group: string;
+  readonly kind: FinancialAccountKind;
+  readonly year: number;
+  readonly actualAmount: number;
+  readonly active: boolean;
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
+/**
  * Balance-sheet section (spec §11, handoff vaihe-4A §4). Five enum values
  * rather than the three top-level groups so 4B's liquidity ratios (which
  * need "vaihtuvat vastaavat" specifically, not all assets) can be computed
@@ -490,6 +540,7 @@ export const ADMIN_ENTITY_TYPES = [
   "financial_entry",
   "balance_sheet_snapshot",
   "group_budget",
+  "group_actual",
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
@@ -518,7 +569,8 @@ export type AdminEntitySnapshot =
   | FinancialAccount
   | FinancialEntry
   | BalanceSheetSnapshot
-  | GroupBudget;
+  | GroupBudget
+  | GroupActual;
 
 export interface AdminAuditEntry {
   readonly id: string;
@@ -554,6 +606,7 @@ export interface AdminDataSnapshot {
   readonly financialEntries: readonly FinancialEntry[];
   readonly balanceSheetSnapshots: readonly BalanceSheetSnapshot[];
   readonly groupBudgets: readonly GroupBudget[];
+  readonly groupActuals: readonly GroupActual[];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly updatedAt: string;
   readonly updatedBy: string;
@@ -577,6 +630,7 @@ export type AdminDataOperation =
   | ({ readonly type: "save_financial_entry"; readonly value: FinancialEntry } & AdminOperationMetadata)
   | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata)
   | ({ readonly type: "save_group_budget"; readonly value: GroupBudget } & AdminOperationMetadata)
+  | ({ readonly type: "save_group_actual"; readonly value: GroupActual } & AdminOperationMetadata)
   | ({
       readonly type: "delete_entity";
       readonly entityType: DeletableAdminEntityType;

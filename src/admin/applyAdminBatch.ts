@@ -12,6 +12,7 @@ import {
   type FinancialEntry,
   type BalanceSheetSnapshot,
   type DeletableAdminEntityType,
+  type GroupActual,
   type GroupBudget,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
@@ -29,6 +30,7 @@ export interface CreateAdminSnapshotInput {
   readonly financialEntries?: AdminDataSnapshot["financialEntries"];
   readonly balanceSheetSnapshots?: AdminDataSnapshot["balanceSheetSnapshots"];
   readonly groupBudgets?: AdminDataSnapshot["groupBudgets"];
+  readonly groupActuals?: AdminDataSnapshot["groupActuals"];
   readonly updatedAt: string;
   readonly updatedBy: string;
 }
@@ -51,6 +53,7 @@ export function createAdminDataSnapshot(
     financialEntries: clone(input.financialEntries ?? []),
     balanceSheetSnapshots: clone(input.balanceSheetSnapshots ?? []),
     groupBudgets: clone(input.groupBudgets ?? []),
+    groupActuals: clone(input.groupActuals ?? []),
     auditTrail: [],
     updatedAt: input.updatedAt,
     updatedBy: input.updatedBy,
@@ -156,6 +159,7 @@ interface MutableAdminState {
   financialEntries: FinancialEntry[];
   balanceSheetSnapshots: BalanceSheetSnapshot[];
   groupBudgets: GroupBudget[];
+  groupActuals: GroupActual[];
   auditTrail: AdminAuditEntry[];
   updatedAt: string;
   updatedBy: string;
@@ -242,6 +246,8 @@ function describeOperation(operation: AdminDataOperation): {
       return { entityType: "balance_sheet_snapshot", entityKey: operation.value.id };
     case "save_group_budget":
       return { entityType: "group_budget", entityKey: operation.value.id };
+    case "save_group_actual":
+      return { entityType: "group_actual", entityKey: operation.value.id };
     case "delete_entity":
       return { entityType: operation.entityType, entityKey: operation.entityKey };
   }
@@ -309,6 +315,9 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
     case "save_group_budget":
       state.groupBudgets = upsertById(state.groupBudgets, operation.value);
       return;
+    case "save_group_actual":
+      state.groupActuals = upsertById(state.groupActuals, operation.value);
+      return;
     case "delete_entity":
       throw new DomainValidationError(
         "INVALID_ADMIN_OPERATION",
@@ -365,6 +374,9 @@ function deleteOperation(
     case "group_budget":
       state.groupBudgets = state.groupBudgets.filter((item) => item.id !== key);
       return;
+    case "group_actual":
+      state.groupActuals = state.groupActuals.filter((item) => item.id !== key);
+      return;
   }
 }
 
@@ -400,6 +412,8 @@ function findCurrent(
       return state.balanceSheetSnapshots.find((item) => item.id === key);
     case "group_budget":
       return state.groupBudgets.find((item) => item.id === key);
+    case "group_actual":
+      return state.groupActuals.find((item) => item.id === key);
   }
 }
 
@@ -428,6 +442,7 @@ function normalize(state: MutableAdminState): Omit<AdminDataSnapshot, "revision"
       .map(clone),
     balanceSheetSnapshots: [...state.balanceSheetSnapshots].sort(byId).map(clone),
     groupBudgets: [...state.groupBudgets].sort(byId).map(clone),
+    groupActuals: [...state.groupActuals].sort(byId).map(clone),
   };
 }
 
