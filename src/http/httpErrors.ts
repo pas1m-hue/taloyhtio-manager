@@ -73,6 +73,10 @@ function statusForDomainCode(code: ValidationCode): number {
       return 410;
     case "DATABASE_MIGRATION_CONFLICT":
     case "DATABASE_INTEGRITY_ERROR":
+    // A server misconfiguration, not a bad request: the caller did nothing
+    // wrong and cannot fix it by retrying or by changing input. The message is
+    // withheld like every other 500's; the code is what reaches the client.
+    case "DATABASE_ACCESS_POLICY_ERROR":
       return 500;
     default:
       return 400;

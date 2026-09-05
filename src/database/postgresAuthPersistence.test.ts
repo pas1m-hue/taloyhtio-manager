@@ -1,4 +1,3 @@
-import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   CompanyAccessGrant,
@@ -19,13 +18,9 @@ import {
   runPostgresMigrations,
 } from "./migrationRunner.js";
 import { PostgresCompanyAccessRepository } from "./postgresCompanyAccessRepository.js";
+import { PGliteSqlPool } from "./pgliteSqlPool.js";
 import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
 import { PostgresSessionWorkspaceRepository } from "./postgresSessionRepository.js";
-import type {
-  SqlPool,
-  SqlQueryResult,
-  SqlTransactionClient,
-} from "./sql.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const NOW = "2026-07-17T20:00:00+03:00";
@@ -51,31 +46,6 @@ const SESSION_COMMAND: ProtectedCreateVisitorSessionCommand = {
   horizon: { startYear: 2026, endYear: 2057 },
 };
 
-class PGliteSqlPool implements SqlPool {
-  readonly #db = new PGlite();
-  public async query<Row extends Record<string, unknown>>(
-    text: string,
-    values: readonly unknown[] = [],
-  ): Promise<SqlQueryResult<Row>> {
-    const result = await this.#db.query<Row>(text, [...values]);
-    return {
-      rows: result.rows,
-      rowCount: result.affectedRows ?? result.rows.length,
-    };
-  }
-  public async connect(): Promise<SqlTransactionClient> {
-    return {
-      query: <Row extends Record<string, unknown>>(
-        text: string,
-        values: readonly unknown[] = [],
-      ) => this.query<Row>(text, values),
-      release: () => undefined,
-    };
-  }
-  public async close(): Promise<void> {
-    await this.#db.close();
-  }
-}
 
 class FixedCredentialGenerator implements SessionCredentialGenerator {
   readonly #sessionId: string;

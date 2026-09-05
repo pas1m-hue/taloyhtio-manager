@@ -4,6 +4,7 @@ import type {
   SqlQueryResult,
   SqlTransactionClient,
 } from "./sql.js";
+import { asDatabaseError } from "./postgresErrors.js";
 
 /** Local-development/test PostgreSQL engine. Production uses NodePostgresPool. */
 export class PGliteSqlPool implements SqlPool {
@@ -17,11 +18,18 @@ export class PGliteSqlPool implements SqlPool {
     text: string,
     values: readonly unknown[] = [],
   ): Promise<SqlQueryResult<Row>> {
-    const result = await this.#db.query<Row>(text, [...values]);
-    return {
-      rows: result.rows,
-      rowCount: result.affectedRows ?? result.rows.length,
-    };
+    // Same translation as NodePostgresPool, so the tests exercise the real
+    // path rather than a stub: PGlite is PostgreSQL and raises the same
+    // SQLSTATE when row-level security rejects a write.
+    try {
+      const result = await this.#db.query<Row>(text, [...values]);
+      return {
+        rows: result.rows,
+        rowCount: result.affectedRows ?? result.rows.length,
+      };
+    } catch (error) {
+      throw asDatabaseError(error);
+    }
   }
 
   public async connect(): Promise<SqlTransactionClient> {

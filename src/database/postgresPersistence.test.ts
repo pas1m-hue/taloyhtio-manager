@@ -1,4 +1,3 @@
-import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdminDataBatchCommand,
@@ -7,6 +6,7 @@ import type {
   PublishAdminDataCommand,
   VisitorSessionBatchCommand,
 } from "../domain/types.js";
+import { DomainValidationError } from "../domain/types.js";
 import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { publishAdminRevision } from "../application/publishingApplicationService.js";
@@ -23,13 +23,9 @@ import {
   splitPostgresStatements,
   type SqlMigration,
 } from "./migrationRunner.js";
+import { PGliteSqlPool } from "./pgliteSqlPool.js";
 import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
 import { PostgresSessionWorkspaceRepository } from "./postgresSessionRepository.js";
-import type {
-  SqlPool,
-  SqlQueryResult,
-  SqlTransactionClient,
-} from "./sql.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
@@ -37,34 +33,6 @@ const PUBLISHED_AT = "2026-07-17T19:00:00+03:00";
 const SESSION_CREATED_AT = "2026-07-17T20:00:00+03:00";
 const SESSION_EXPIRES_AT = "2026-07-18T20:00:00+03:00";
 
-class PGliteSqlPool implements SqlPool {
-  readonly #db = new PGlite();
-
-  public async query<Row extends Record<string, unknown>>(
-    text: string,
-    values: readonly unknown[] = [],
-  ): Promise<SqlQueryResult<Row>> {
-    const result = await this.#db.query<Row>(text, [...values]);
-    return {
-      rows: result.rows,
-      rowCount: result.affectedRows ?? result.rows.length,
-    };
-  }
-
-  public async connect(): Promise<SqlTransactionClient> {
-    return {
-      query: <Row extends Record<string, unknown>>(
-        text: string,
-        values: readonly unknown[] = [],
-      ) => this.query<Row>(text, values),
-      release: () => undefined,
-    };
-  }
-
-  public async close(): Promise<void> {
-    await this.#db.close();
-  }
-}
 
 function publishCommand(
   expectedAdminRevision: number,
@@ -248,6 +216,58 @@ describe("V2.6 PostgreSQL migrations", () => {
     expect(statements).toHaveLength(3);
     expect(statements.every((statement) =>
       /ALTER TABLE tm_\w+ DISABLE ROW LEVEL SECURITY$/.test(statement))).toBe(true);
+  });
+
+  it("names a row-level-security rejection instead of leaking a bare 500", async () => {
+    // The production failure, reproduced against a real PostgreSQL engine:
+    // RLS on with no policy denies the insert, and every repository catch
+    // matched only the constraint code it owns, so the driver error fell
+    // through all of them. The client saw INTERNAL_SERVER_ERROR with no
+    // actionable message and the cause was visible only in the server log.
+    // The role switch is what makes this real. PGlite connects as postgres, a
+    // superuser, and superusers bypass RLS entirely — even FORCE — so simply
+    // enabling it here would let the insert through and the test would prove
+    // nothing. Production denied the write because the Worker reaches the
+    // table as a non-owner role against relrowsecurity = true with no policy;
+    // switching to an unprivileged role reproduces exactly that, down to the
+    // message PostgreSQL emitted in the live log.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await pool.query("ALTER TABLE tm_publications ENABLE ROW LEVEL SECURITY");
+    await pool.query("CREATE ROLE tm_rls_probe NOLOGIN");
+    await pool.query(
+      "GRANT SELECT, INSERT, UPDATE ON tm_admin_snapshots, tm_publications TO tm_rls_probe",
+    );
+    await pool.query("SET ROLE tm_rls_probe");
+    try {
+      const error = await publishAdminRevision(publications, publishCommand(0, 0))
+        .then(() => undefined, (thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(DomainValidationError);
+      expect((error as DomainValidationError).code).toBe("DATABASE_ACCESS_POLICY_ERROR");
+      // The message names the table and points at the fix; it reaches the
+      // server log, not the client, since httpErrors withholds every 500's
+      // message on purpose.
+      expect((error as DomainValidationError).message).toContain("tm_publications");
+      expect((error as DomainValidationError).message)
+        .toContain("new row violates row-level security policy");
+      expect((error as DomainValidationError).message).toContain("migration 004");
+    } finally {
+      await pool.query("RESET ROLE");
+      await pool.query("ALTER TABLE tm_publications DISABLE ROW LEVEL SECURITY");
+      await pool.query(
+        "REVOKE ALL ON tm_admin_snapshots, tm_publications FROM tm_rls_probe",
+      );
+      await pool.query("DROP ROLE tm_rls_probe");
+    }
+  });
+
+  it("still maps the constraint violations each repository owns", async () => {
+    // The translation must not swallow the codes the repositories match
+    // themselves: a duplicate publication version is a conflict, not a policy
+    // problem, and only the repository knows which table means what.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await expect(publications.initializeAdminData(adminBaselineSnapshot))
+      .rejects.toMatchObject({ code: "ADMIN_DATA_ALREADY_EXISTS" });
   });
 
   it("rejects edited SQL for an already applied migration", async () => {
