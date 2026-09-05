@@ -3620,6 +3620,197 @@ export function buildGroupBudgetImportOperations(parsed, opMeta) {
   }));
 }
 
+
+/**
+ * Deterministic id for a GroupActual, mirroring buildGroupBudgetId so the two
+ * collections address the same (kind, group, year) cell by the same key. Same
+ * consequence too: a typo'd group name gets a different id and can only be
+ * removed with delete_entity, never corrected by re-import.
+ * @param {"income"|"expense"} kind
+ * @param {string} group
+ * @param {number} year
+ * @returns {string}
+ */
+export function buildGroupActualId(kind, group, year) {
+  return `${kind}::${group}::${year}`;
+}
+
+/**
+ * @typedef {Object} GroupActualValue
+ * @property {string} id
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {number} year
+ * @property {number} actualAmount
+ * @property {boolean} active
+ * @property {string[]} sourceIds
+ * @property {string} [notes]
+ */
+
+const GROUP_ACTUAL_PASTE_HEADER = ["kind", "ryhmä", "vuosi", "toteuma"];
+
+/**
+ * @typedef {Object} ParsedGroupActual
+ * @property {string} id
+ * @property {"income"|"expense"} kind
+ * @property {string} group
+ * @property {number} year
+ * @property {number} actualAmount
+ */
+
+/**
+ * Strict, pure parser for the "Liitä ryhmätason toteuma" paste format
+ * (feature/group-level-actuals handoff §3): one row per (kind, group, year),
+ * tab-separated `kind, ryhmä, vuosi, toteuma`. A separate format from the
+ * ryhmäbudjetti paste rather than a fifth column on it, so a budget import can
+ * never overwrite an actual and vice versa.
+ *
+ * TWO NON-BLOCKING WARNINGS, both about things a human should look at and
+ * neither about things the parser can decide:
+ *
+ *  - A ryhmä matching no account group. Unlike the budget parser, this is not
+ *    necessarily a mistake here: rental income exists in the source but was
+ *    never itemised into the chart of accounts, and a group-level actual is
+ *    the only way to represent it at all. The warning says the figure will be
+ *    used without any account breakdown, so a typo still stands out.
+ *  - A sign that contradicts the stored convention — a positive expense or a
+ *    negative income. The source Excel prints costs positive ("Kulut yhteensä
+ *    34 271,63") while tilidata stores them negative, and pasting the printed
+ *    sign unchanged would make a group look like it was short by twice its own
+ *    total. The value is still stored exactly as pasted: normalising it with
+ *    Math.abs is the mistake that had to be undone in the balance sheet
+ *    (handoff-korjaus-tase-etumerkki), because it destroys a genuinely
+ *    negative figure — a credit-note year on an income group is real.
+ *
+ * @param {string} rawText
+ * @param {ReadonlyArray<{kind?: unknown, group?: unknown}>} [accounts]
+ * @returns {{ groupActuals: ParsedGroupActual[], errors: ParsedGroupBudgetIssue[], warnings: ParsedGroupBudgetIssue[] }}
+ */
+export function parseGroupActualPasteInput(rawText, accounts) {
+  const text = typeof rawText === "string" ? rawText : "";
+  const lines = text.split(/\r\n|\r|\n/);
+  const accountList = Array.isArray(accounts) ? accounts : [];
+
+  /** @type {Map<"income"|"expense", Set<string>>} */
+  const knownGroupsByKind = new Map();
+  for (const account of accountList) {
+    const kind = account.kind === "income" ? "income" : "expense";
+    const set = knownGroupsByKind.get(kind) ?? new Set();
+    set.add(String(account.group ?? ""));
+    knownGroupsByKind.set(kind, set);
+  }
+
+  let startIndex = 0;
+  const firstDataIndex = lines.findIndex((line) => line.trim() !== "");
+  if (firstDataIndex !== -1) {
+    const firstCols = lines[firstDataIndex].split("\t").map((cell) => cell.trim().toLowerCase());
+    const isHeader = firstCols.length === GROUP_ACTUAL_PASTE_HEADER.length &&
+      firstCols.every((cell, index) => cell === GROUP_ACTUAL_PASTE_HEADER[index]);
+    if (isHeader) startIndex = firstDataIndex + 1;
+  }
+
+  /** @type {ParsedGroupActual[]} */
+  const groupActuals = [];
+  /** @type {ParsedGroupBudgetIssue[]} */
+  const errors = [];
+  /** @type {ParsedGroupBudgetIssue[]} */
+  const warnings = [];
+  const seenIds = new Set();
+
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const row = i + 1;
+    const cols = line.split("\t");
+    if (cols.length !== GROUP_ACTUAL_PASTE_HEADER.length) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: odotettiin ${GROUP_ACTUAL_PASTE_HEADER.length} saraketta, löytyi ${cols.length}.`,
+      });
+      continue;
+    }
+    const [kindRaw, groupRaw, yearRaw, actualRaw] = cols.map((cell) => cell.trim());
+
+    const kind = FINANCIAL_PASTE_KIND_MAP[kindRaw.toLowerCase()];
+    if (!kind) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: tuntematon kind "${kindRaw}" (odotettiin "kulu" tai "tulo").`,
+      });
+      continue;
+    }
+    if (groupRaw === "") {
+      errors.push({ row, message: `Rivi ${row}: ryhmä puuttuu.` });
+      continue;
+    }
+    const year = Number(yearRaw);
+    if (!Number.isInteger(year)) {
+      errors.push({ row, message: `Rivi ${row}: vuosi "${yearRaw}" ei ole kokonaisluku.` });
+      continue;
+    }
+    const actual = parseFinancialAmountCell(actualRaw);
+    if (!actual.present) {
+      errors.push({ row, message: `Rivi ${row}: toteuma puuttuu.` });
+      continue;
+    }
+    if (!actual.valid) {
+      errors.push({ row, message: `Rivi ${row}: toteuma "${actualRaw}" ei ole luku.` });
+      continue;
+    }
+
+    const id = buildGroupActualId(kind, groupRaw, year);
+    if (seenIds.has(id)) {
+      errors.push({
+        row,
+        message: `Rivi ${row}: ryhmä "${groupRaw}" (${kindRaw}) vuodelle ${year} esiintyy jo aiemmalla rivillä.`,
+      });
+      continue;
+    }
+    seenIds.add(id);
+
+    const knownGroups = knownGroupsByKind.get(kind);
+    if (!knownGroups || !knownGroups.has(groupRaw)) {
+      warnings.push({
+        row,
+        message: `Rivi ${row}: ryhmä "${groupRaw}" ei täsmää mihinkään tiliryhmään — luku käytetään sellaisenaan ilman tilierittelyä. Tarkista ettei nimessä ole kirjoitusvirhettä.`,
+      });
+    }
+    if (kind === "expense" && actual.value > 0) {
+      warnings.push({
+        row,
+        message: `Rivi ${row}: kulun toteuma "${actualRaw}" on positiivinen, mutta tilidata tallentaa kulut negatiivisina. ` +
+          `Jos tarkoitit kulua, lisää miinusmerkki — muuten ryhmä näyttää erittelemättömältä kaksinkertaisella summallaan.`,
+      });
+    }
+    if (kind === "income" && actual.value < 0) {
+      warnings.push({
+        row,
+        message: `Rivi ${row}: tulon toteuma "${actualRaw}" on negatiivinen. Rivi hyväksytään (hyvityslasku on aito tapaus), mutta tarkista etumerkki.`,
+      });
+    }
+
+    groupActuals.push({ id, kind, group: groupRaw, year, actualAmount: actual.value });
+  }
+
+  return { groupActuals, errors, warnings };
+}
+
+/**
+ * Builds save_group_actual operations for one successfully parsed "Liitä
+ * ryhmätason toteuma" import. New rows default `active: true`.
+ * @param {{ groupActuals: ParsedGroupActual[] }} parsed
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ * @returns {Array<{ type: "save_group_actual", value: GroupActualValue, sourceIds: string[], explanation: string }>}
+ */
+export function buildGroupActualImportOperations(parsed, opMeta) {
+  return parsed.groupActuals.map((groupActual) => ({
+    type: /** @type {const} */ ("save_group_actual"),
+    value: { ...groupActual, active: true, sourceIds: opMeta.sourceIds },
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  }));
+}
+
 /**
  * Years for which at least one account group has both an actual (derived
  * from FinancialEntry.actualAmount) and a budget — either an active

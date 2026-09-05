@@ -40,11 +40,14 @@ import {
   deriveDataGapAssets,
   deriveEventYearOptions,
   groupScheduleByScenario,
+  buildGroupActualId,
+  buildGroupActualImportOperations,
   deriveComparableGroupBudgetYears,
   interpretRevisionConflict,
   isCostEvidenceExpired,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
+  parseGroupActualPasteInput,
   parseGroupBudgetPasteInput,
   parseSourceIds,
   detectBalanceImportValueDrops,
@@ -3099,6 +3102,130 @@ describe("buildGroupBudgetImportOperations", () => {
       type: "save_group_budget",
       value: { id: "expense::Sähkö::2024", kind: "expense", group: "Sähkö", year: 2024, budgetAmount: -10000, active: true, sourceIds: ["src1"] },
       sourceIds: ["src1"],
+      explanation: "Tuonti",
+    }]);
+  });
+});
+
+describe("buildGroupActualId", () => {
+  it("is deterministic per kind+group+year, so re-import updates instead of duplicating", () => {
+    expect(buildGroupActualId("expense", "Sähkö", 2024)).toBe(buildGroupActualId("expense", "Sähkö", 2024));
+    expect(buildGroupActualId("income", "Sähkö", 2024)).not.toBe(buildGroupActualId("expense", "Sähkö", 2024));
+  });
+});
+
+describe("parseGroupActualPasteInput", () => {
+  const accounts = [
+    { accountCode: "5400", kind: "expense", group: "Sähkö" },
+    { accountCode: "3000", kind: "income", group: "Hoitovastikkeet" },
+  ];
+
+  it("parses valid rows and skips a recognized header row", () => {
+    const text = [
+      "kind\tryhmä\tvuosi\ttoteuma",
+      "kulu\tSähkö\t2023\t-9500,50",
+      "tulo\tHoitovastikkeet\t2023\t36237,38",
+    ].join("\n");
+    const parsed = parseGroupActualPasteInput(text, accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings).toEqual([]);
+    expect(parsed.groupActuals).toEqual([
+      { id: "expense::Sähkö::2023", kind: "expense", group: "Sähkö", year: 2023, actualAmount: -9500.5 },
+      { id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38 },
+    ]);
+  });
+
+  it("accepts a genuine 0,00 € total, which is a real figure and not a missing one", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t0", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(0);
+  });
+
+  it("rejects an unknown kind", () => {
+    const parsed = parseGroupActualPasteInput("meno\tSähkö\t2023\t-9500", accounts);
+    expect(parsed.groupActuals).toEqual([]);
+    expect(parsed.errors[0].message).toMatch(/tuntematon kind/);
+  });
+
+  it("rejects a missing group", () => {
+    const parsed = parseGroupActualPasteInput("kulu\t\t2023\t-9500", accounts);
+    expect(parsed.errors[0].message).toMatch(/ryhmä puuttuu/);
+  });
+
+  it("rejects a non-integer year", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023.5\t-9500", accounts);
+    expect(parsed.errors[0].message).toMatch(/vuosi/);
+  });
+
+  it("rejects a missing actual", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t", accounts);
+    expect(parsed.errors[0].message).toMatch(/toteuma puuttuu/);
+  });
+
+  it("rejects a non-numeric actual", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\tabc", accounts);
+    expect(parsed.errors[0].message).toMatch(/ei ole luku/);
+  });
+
+  it("rejects a duplicate kind+group+year, reporting the second row's number", () => {
+    const text = "kulu\tSähkö\t2023\t-9500\nkulu\tSähkö\t2023\t-9600";
+    const parsed = parseGroupActualPasteInput(text, accounts);
+    expect(parsed.groupActuals).toHaveLength(1);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].row).toBe(2);
+    expect(parsed.errors[0].message).toMatch(/esiintyy jo aiemmalla rivillä/);
+  });
+
+  it("rejects a row with the wrong column count, naming the row", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023", accounts);
+    expect(parsed.errors[0].row).toBe(1);
+    expect(parsed.errors[0].message).toMatch(/saraketta/);
+  });
+
+  it("warns but does not block on a group matching no account, since an un-itemised group is legitimate here", () => {
+    // Rental income exists in the source but was never itemised into the chart
+    // of accounts. Blocking it would present known income as nonexistent; the
+    // warning is there so a genuine typo still stands out.
+    const parsed = parseGroupActualPasteInput("tulo\tVuokratuotot\t2023\t720", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals).toHaveLength(1);
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0].message).toMatch(/ei täsmää mihinkään tiliryhmään/);
+  });
+
+  it("warns on a positive expense, the sign the source Excel prints", () => {
+    // The source table gives "Kulut yhteensä 34 271,63" positive while tilidata
+    // stores costs negative. Pasted unchanged that would read as a group short
+    // by twice its own total, so the mismatch is caught at import.
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t9500", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(9500);
+    expect(parsed.warnings[0].message).toMatch(/kulut negatiivisina/);
+  });
+
+  it("warns on a negative income but stores the sign as pasted, never Math.abs", () => {
+    // A credit-note year is real. Normalising the sign is the mistake that had
+    // to be undone in the balance sheet, so the value is stored verbatim.
+    const parsed = parseGroupActualPasteInput("tulo\tHoitovastikkeet\t2023\t-500", accounts);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.groupActuals[0].actualAmount).toBe(-500);
+    expect(parsed.warnings[0].message).toMatch(/negatiivinen/);
+  });
+
+  it("does not warn about the sign on a zero", () => {
+    const parsed = parseGroupActualPasteInput("kulu\tSähkö\t2023\t0", accounts);
+    expect(parsed.warnings).toEqual([]);
+  });
+});
+
+describe("buildGroupActualImportOperations", () => {
+  it("builds save_group_actual operations defaulting active: true", () => {
+    const parsed = { groupActuals: [{ id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38 }] };
+    const ops = buildGroupActualImportOperations(parsed, { sourceIds: ["tp2023"], explanation: "Tuonti" });
+    expect(ops).toEqual([{
+      type: "save_group_actual",
+      value: { id: "income::Hoitovastikkeet::2023", kind: "income", group: "Hoitovastikkeet", year: 2023, actualAmount: 36237.38, active: true, sourceIds: ["tp2023"] },
+      sourceIds: ["tp2023"],
       explanation: "Tuonti",
     }]);
   });
