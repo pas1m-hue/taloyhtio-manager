@@ -186,12 +186,68 @@ describe("V2.6 PostgreSQL migrations", () => {
 
   it("is idempotent and records migration checksums", async () => {
     const rerun = await runPostgresMigrations(pool, migrations);
-    expect(rerun).toEqual({ appliedVersions: [], skippedVersions: [1, 2, 3] });
+    expect(rerun).toEqual({ appliedVersions: [], skippedVersions: [1, 2, 3, 4] });
     const rows = await pool.query<{ version: number; checksum: string }>(
       "SELECT version, checksum FROM tm_schema_migrations ORDER BY version",
     );
-    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3, 4]);
     expect(rows.rows.every((row) => row.checksum.length === 64)).toBe(true);
+  });
+
+  it("leaves no tm_ table behind row-level security without a policy", async () => {
+    // RLS enabled with zero policies denies every write, and it is never a
+    // valid state here: the Worker is the only thing that reaches the database
+    // and authorization lives in the application layer, so a policy could only
+    // ever say "allow all". Three tables were in exactly this state in
+    // production, which is why the first publication ever attempted failed
+    // with a bare INTERNAL_SERVER_ERROR.
+    const offending = await pool.query<{ relname: string }>(
+      `SELECT c.relname
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public' AND c.relname LIKE 'tm\\_%'
+         AND c.relrowsecurity
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_policies p
+           WHERE p.schemaname = n.nspname AND p.tablename = c.relname
+         )
+       ORDER BY c.relname`,
+    );
+
+    expect(offending.rows.map((row) => row.relname)).toEqual([]);
+  });
+
+  it("disables row-level security again when it has been switched on out of band", async () => {
+    // Migration 004 has to survive both a re-run and the case where the same
+    // correction was already made by hand in the Supabase console. DISABLE is
+    // a no-op on a table that already has RLS off, so the statements are
+    // replayed here directly rather than through the version ledger, which
+    // would skip them.
+    const migration = migrations.find((item) => item.version === 4);
+    expect(migration?.name).toBe("disable_unused_row_level_security");
+
+    await pool.query("ALTER TABLE tm_publications ENABLE ROW LEVEL SECURITY");
+    for (const statement of splitPostgresStatements(migration!.sql)) {
+      await pool.query(statement);
+    }
+    // Replaying onto the now-disabled tables must not raise either.
+    for (const statement of splitPostgresStatements(migration!.sql)) {
+      await pool.query(statement);
+    }
+
+    const enabled = await pool.query<{ relrowsecurity: boolean }>(
+      `SELECT relrowsecurity FROM pg_class WHERE relname = 'tm_publications'`,
+    );
+    expect(enabled.rows[0]?.relrowsecurity).toBe(false);
+  });
+
+  it("splits migration 004 into one statement per table, comments and all", async () => {
+    const migration = migrations.find((item) => item.version === 4);
+    const statements = splitPostgresStatements(migration!.sql);
+
+    expect(statements).toHaveLength(3);
+    expect(statements.every((statement) =>
+      /ALTER TABLE tm_\w+ DISABLE ROW LEVEL SECURITY$/.test(statement))).toBe(true);
   });
 
   it("rejects edited SQL for an already applied migration", async () => {
@@ -207,13 +263,13 @@ describe("V2.6 PostgreSQL migrations", () => {
   it("rolls back a failing later migration", async () => {
     const broken: readonly SqlMigration[] = [
       ...migrations,
-      { version: 4, name: "broken", sql: "CREATE TABLE broken (" },
+      { version: 5, name: "broken", sql: "CREATE TABLE broken (" },
     ];
     await expect(runPostgresMigrations(pool, broken)).rejects.toBeDefined();
     const rows = await pool.query<{ version: number }>(
       "SELECT version FROM tm_schema_migrations ORDER BY version",
     );
-    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(rows.rows.map((row) => row.version)).toEqual([1, 2, 3, 4]);
   });
 });
 
