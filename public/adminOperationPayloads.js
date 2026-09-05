@@ -4306,6 +4306,7 @@ const DELETE_ENTITY_LABELS = {
   financial_entry: ["talousrivi", "talousriviä"],
   balance_sheet_snapshot: ["tasesnapshot", "tasesnapshottia"],
   group_budget: ["ryhmäbudjetti", "ryhmäbudjettia"],
+  group_actual: ["ryhmätason toteuma", "ryhmätason toteumaa"],
   financial_year: ["tilikausi", "tilikautta"],
   liquidity_baseline: ["maksuvalmiuden lähtötieto", "maksuvalmiuden lähtötietoa"],
 };
@@ -4321,6 +4322,7 @@ const DELETE_ENTITY_ORDER = [
   "financial_entry",
   "balance_sheet_snapshot",
   "group_budget",
+  "group_actual",
   "financial_year",
   "liquidity_baseline",
 ];
@@ -4361,6 +4363,10 @@ function describeDeleteTarget(model, entityType, entityKey) {
     case "group_budget": {
       const groupBudget = (model.groupBudgets ?? []).find((item) => item.id === entityKey);
       return groupBudget === undefined ? entityKey : `${groupBudget.group} ${groupBudget.year}`;
+    }
+    case "group_actual": {
+      const groupActual = (model.groupActuals ?? []).find((item) => item.id === entityKey);
+      return groupActual === undefined ? entityKey : `${groupActual.group} ${groupActual.year}`;
     }
     default:
       return entityKey;
@@ -4442,6 +4448,8 @@ function deleteTargetSourceIds(model, entityType, entityKey) {
       return normalizeSourceList(find(model.balanceSheetSnapshots, (item) => item.id === entityKey)?.sourceIds);
     case "group_budget":
       return normalizeSourceList(find(model.groupBudgets, (item) => item.id === entityKey)?.sourceIds);
+    case "group_actual":
+      return normalizeSourceList(find(model.groupActuals, (item) => item.id === entityKey)?.sourceIds);
     default:
       // PriceLevelConfirmation has no source field; it only ever appears as a
       // cascade child of the cost evidence it confirms.
@@ -4755,7 +4763,7 @@ export function validateDeletionMeta(raw) {
  * @returns {Array<{ key: string, sourceIds: string[], label: string, years: number[], entryCount: number, accountCount: number, groupBudgetCount: number }>}
  */
 export function listDataImports(model) {
-  /** @type {Map<string, { key: string, sourceIds: string[], years: Set<number>, accounts: Set<string>, entryCount: number, groupBudgetCount: number }>} */
+  /** @type {Map<string, { key: string, sourceIds: string[], years: Set<number>, accounts: Set<string>, entryCount: number, groupBudgetCount: number, groupActualCount: number }>} */
   const imports = new Map();
 
   /** @param {readonly string[] | undefined} rawSourceIds */
@@ -4765,7 +4773,7 @@ export function listDataImports(model) {
     const key = sourceIds.join(",");
     let entry = imports.get(key);
     if (entry === undefined) {
-      entry = { key, sourceIds, years: new Set(), accounts: new Set(), entryCount: 0, groupBudgetCount: 0 };
+      entry = { key, sourceIds, years: new Set(), accounts: new Set(), entryCount: 0, groupBudgetCount: 0, groupActualCount: 0 };
       imports.set(key, entry);
     }
     return entry;
@@ -4784,6 +4792,12 @@ export function listDataImports(model) {
     entry.groupBudgetCount += 1;
     entry.years.add(Number(row.year));
   }
+  for (const row of model?.groupActuals ?? []) {
+    const entry = bucket(row.sourceIds);
+    if (entry === undefined) continue;
+    entry.groupActualCount += 1;
+    entry.years.add(Number(row.year));
+  }
 
   return [...imports.values()]
     .map((entry) => ({
@@ -4794,6 +4808,7 @@ export function listDataImports(model) {
       entryCount: entry.entryCount,
       accountCount: entry.accounts.size,
       groupBudgetCount: entry.groupBudgetCount,
+      groupActualCount: entry.groupActualCount,
     }))
     .sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -4813,6 +4828,7 @@ export function listDataImports(model) {
 export function planImportDeletion(model, key) {
   const financialEntries = model?.financialEntries ?? [];
   const groupBudgets = model?.groupBudgets ?? [];
+  const groupActuals = model?.groupActuals ?? [];
   const financialAccounts = model?.financialAccounts ?? [];
   /** @param {readonly string[] | undefined} rawSourceIds */
   const matches = (rawSourceIds) =>
@@ -4833,6 +4849,8 @@ export function planImportDeletion(model, key) {
     ...removedEntries.map((row) => ({ entityType: "financial_entry", entityKey: `${row.accountCode}:${row.year}` })),
     ...groupBudgets.filter((row) => matches(row.sourceIds))
       .map((row) => ({ entityType: "group_budget", entityKey: row.id })),
+    ...groupActuals.filter((row) => matches(row.sourceIds))
+      .map((row) => ({ entityType: "group_actual", entityKey: row.id })),
   ];
 
   return {

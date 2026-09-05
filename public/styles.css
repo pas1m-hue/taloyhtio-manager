@@ -210,6 +210,11 @@ tr.account-row td.indent { padding-left: 1.8rem; }
 td input { min-width: 84px; padding: .4rem; }
 tbody tr.is-selected { background: var(--soft); }
 tbody tr.is-gap { background: #fdf3ea; }
+/* A group whose actual is a group-level total that its accounts do not fully
+   itemise. Marked by more than colour: the row also carries the missing euros
+   in its Huomio cell, and the detail panel spells the difference out. */
+tbody tr.is-partial { background: #fdf3ea; }
+tfoot tr.is-partial td { color: var(--muted); font-style: italic; }
 
 /* ---- Scenario cards ---- */
 .scenario-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; }

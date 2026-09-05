@@ -63,6 +63,7 @@
             <li><a class="nav-link" href="#/finance-costs-group" data-view="finance-costs-group">Kulut ryhmittäin</a></li>
             <li><a class="nav-link" href="#/finance-costs-account" data-view="finance-costs-account">Kulut tileittäin</a></li>
             <li><a class="nav-link" href="#/group-budget-import" data-view="group-budget-import">Liitä ryhmäbudjetti</a></li>
+            <li><a class="nav-link" href="#/group-actual-import" data-view="group-actual-import">Liitä ryhmätason toteuma</a></li>
             <li><a class="nav-link" href="#/finance-budget" data-view="finance-budget">Budjetti vs. toteuma</a></li>
             <li><a class="nav-link" href="#/balance-import" data-view="balance-import">Liitä tasedata</a></li>
             <li><a class="nav-link" href="#/finance-position" data-view="finance-position">Taloudellinen asema</a></li>
@@ -368,6 +369,38 @@
               <h3>Nykyiset ryhmäbudjetit</h3>
               <p class="muted">Väärin kirjoitettu ryhmänimi ei koskaan saa toteumaa eikä sitä voi korjata uudelleentuonnilla (nimi on osa rivin tunnistetta) — poista rivi alla ja tuo oikea nimi uudelleen.</p>
               <div id="group-budget-list"></div>
+            </section>
+          </section>
+          <section class="view" data-view="group-actual-import" aria-labelledby="group-actual-import-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="group-actual-import-title">Talous · Liitä ryhmätason toteuma</h2>
+                <p class="view-lead muted">Liitä tab-erotellut rivit muodossa kind, ryhmä, vuosi, toteuma. kind on "kulu" tai "tulo". Käytä tätä kun lähdedokumentti antaa ryhmän kokonaissumman mutta erittelee vain osan sen tileistä: ryhmätason luku menee tilien summan edelle ryhmävertailussa ja yhteenvetokaaviossa, ja erittelemättä jäänyt osuus näytetään erikseen. Kun luku on sama kuin tilien summa, mitään ei merkitä. <strong>Kulut ovat negatiivisia</strong> kuten tilidatassa — positiivinen kulurivi hyväksytään mutta merkitään varoituksella. Ryhmä jolla ei ole yhtään tiliä on sallittu (esim. vuokratuotot joita ei ole eritelty tilikartalle). Otsikkorivi tunnistetaan ja ohitetaan automaattisesti.</p>
+              </div>
+            </header>
+            <form id="group-actual-import-form" class="card form-card wide-card" novalidate>
+              <label for="group-actual-import-text">Liitettävä data
+                <textarea id="group-actual-import-text" rows="12" spellcheck="false" placeholder="kind&#9;ryhmä&#9;vuosi&#9;toteuma"></textarea>
+              </label>
+              <fieldset class="form-grid">
+                <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+                <label for="group-actual-import-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                  <input id="group-actual-import-source-ids" required aria-describedby="group-actual-import-source-ids-error" autocomplete="off">
+                  <span class="field-error" id="group-actual-import-source-ids-error"></span>
+                </label>
+                <label for="group-actual-import-explanation">Muutoksen selitys
+                  <input id="group-actual-import-explanation" required aria-describedby="group-actual-import-explanation-error" autocomplete="off">
+                  <span class="field-error" id="group-actual-import-explanation-error"></span>
+                </label>
+              </fieldset>
+              <div id="group-actual-import-preview"></div>
+              <p id="group-actual-import-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+              <div class="button-row"><button id="group-actual-import-submit" type="submit" disabled>Tallenna tuonti</button></div>
+            </form>
+            <section class="card">
+              <h3>Nykyiset ryhmätason toteumat</h3>
+              <p class="muted">Väärin kirjoitettu ryhmänimi ei yhdisty tilidataan eikä sitä voi korjata uudelleentuonnilla (nimi on osa rivin tunnistetta) — poista rivi alla ja tuo oikea nimi uudelleen.</p>
+              <div id="group-actual-list"></div>
             </section>
           </section>
           <section class="view" data-view="finance-budget" aria-labelledby="finance-budget-title" hidden>

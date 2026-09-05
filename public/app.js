@@ -13,6 +13,7 @@ import {
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
   buildGroupBudgetImportOperations,
+  buildGroupActualImportOperations,
   buildGroupBudgetVsActualViewModel,
   buildGroupChartModel,
   buildIncomeViewModel,
@@ -44,6 +45,7 @@ import {
   listDataImports,
   parseBalanceSheetPasteInput,
   parseFinancialPasteInput,
+  parseGroupActualPasteInput,
   parseGroupBudgetPasteInput,
   planEntityDeletion,
   planImportDeletion,
@@ -58,7 +60,8 @@ import {
 const KNOWN_VIEWS = new Set([
   "overview", "company", "assets", "observations", "events", "cost-evidence",
   "finance-summary", "finance-import", "finance-income", "finance-costs-group",
-  "finance-costs-account", "group-budget-import", "finance-budget", "balance-import", "finance-position",
+  "finance-costs-account", "group-budget-import", "group-actual-import", "finance-budget",
+  "balance-import", "finance-position",
   "scenarios", "cashpath", "required-collection", "publish", "developer",
 ]);
 
@@ -139,6 +142,8 @@ const state = {
   /** Last parseBalanceSheetPasteInput() result for the balance-import form, or null before any input. */
   balanceImportParsed: null,
   groupBudgetImportParsed: null,
+  /** Last parseGroupActualPasteInput() result for the group-actual import form, or null before any input. */
+  groupActualImportParsed: null,
 };
 
 function selectionId(view) {
@@ -240,6 +245,8 @@ function wireStaticControls() {
   $("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual);
   $("#group-budget-import-form").addEventListener("submit", submitGroupBudgetImport);
   $("#group-budget-import-text").addEventListener("input", updateGroupBudgetImportPreview);
+  $("#group-actual-import-form").addEventListener("submit", submitGroupActualImport);
+  $("#group-actual-import-text").addEventListener("input", updateGroupActualImportPreview);
   $("#balance-import-form").addEventListener("submit", submitBalanceImport);
   $("#balance-import-text").addEventListener("input", updateBalanceImportPreview);
   $("#balance-import-id").addEventListener("input", updateBalanceImportPreview);
@@ -606,6 +613,7 @@ function renderWorkspace() {
   renderAccountCosts();
   renderDataImportList();
   renderGroupBudgetList();
+  renderGroupActualList();
   renderBudgetVsActual();
   renderBalancePosition();
   renderScenarios();
@@ -2258,10 +2266,11 @@ function renderDataImportList() {
     <td>${item.years.length === 0 ? "—" : escapeHtml(item.years.join(", "))}</td>
     <td>${item.entryCount === 0 ? "—" : `${item.entryCount} riviä / ${item.accountCount} tiliä`}</td>
     <td>${item.groupBudgetCount === 0 ? "—" : `${item.groupBudgetCount} riviä`}</td>
+    <td>${item.groupActualCount === 0 ? "—" : `${item.groupActualCount} riviä`}</td>
     <td><button type="button" class="danger delete-data-import" data-key="${escapeHtml(item.key)}">Poista tuonti</button></td>
   </tr>`).join("");
   host.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Lähdetunnisteet</th><th>Vuodet</th><th>Talousrivit</th><th>Ryhmäbudjetit</th><th></th></tr></thead>
+    <thead><tr><th>Lähdetunnisteet</th><th>Vuodet</th><th>Talousrivit</th><th>Ryhmäbudjetit</th><th>Ryhmätoteumat</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
   for (const button of host.querySelectorAll(".delete-data-import")) {
@@ -2559,6 +2568,7 @@ function populateFinanceBudgetYearFilter(accounts, entries, groupBudgets, groupA
 
 const FINANCE_SECTION_LABELS = { income: "Tulot", expense: "Kulut" };
 const BUDGET_SOURCE_LABELS = { group: "Ryhmäbudjetti", accounts: "Tileistä summattu" };
+const ACTUAL_SOURCE_LABELS = { group: "Ryhmätaso", accounts: "Tileistä summattu" };
 
 /**
  * Builds the current `buildGroupBudgetVsActualViewModel` result for the
@@ -2614,12 +2624,20 @@ function renderBudgetVsActual() {
       const overrideNote = group.budgetSource === "group" && group.overriddenAccountsBudget !== undefined
         ? `Ohitettu tilisumma: ${money(group.overriddenAccountsBudget)}`
         : "";
-      const notesText = [group.notes, overrideNote].filter((n) => n !== "").join(" · ");
-      return `<tr class="${rowClass}" data-group-key="${escapeHtml(groupKey)}">
+      // Named in euros rather than as a percentage or a bare flag: the reader
+      // needs the size of what no account explains, not just that something
+      // is missing.
+      const unitemizedNote = group.unitemizedActual === undefined
+        ? ""
+        : `Erittelemättä ${money(group.unitemizedActual)}`;
+      const notesText = [group.notes, overrideNote, unitemizedNote].filter((n) => n !== "").join(" · ");
+      const partialClass = group.unitemizedActual === undefined ? "" : " is-partial";
+      return `<tr class="${rowClass}${partialClass}" data-group-key="${escapeHtml(groupKey)}">
         <td>${escapeHtml(group.group)}</td>
         <td>${group.budget === undefined ? "—" : money(group.budget)}</td>
         <td>${escapeHtml(BUDGET_SOURCE_LABELS[group.budgetSource] ?? "—")}</td>
         <td>${group.actual === undefined ? "—" : money(group.actual)}</td>
+        <td>${escapeHtml(ACTUAL_SOURCE_LABELS[group.actualSource] ?? "—")}</td>
         <td>${group.diffAmount === undefined ? "—" : money(group.diffAmount)}</td>
         <td>${group.diffPercent === undefined ? "—" : percent(group.diffPercent)}</td>
         <td>${notesText === "" ? "—" : escapeHtml(notesText)}</td>
@@ -2630,7 +2648,7 @@ function renderBudgetVsActual() {
       <h3>${escapeHtml(FINANCE_SECTION_LABELS[section.kind] ?? section.kind)}</h3>
       ${kpiRow}
       <div class="table-wrap"><table>
-        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Budjetin lähde</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th><th>Huomio</th><th></th></tr></thead>
+        <thead><tr><th>Ryhmä</th><th>Budjetti</th><th>Budjetin lähde</th><th>Toteuma</th><th>Toteuman lähde</th><th>Erotus €</th><th>Erotus %</th><th>Huomio</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
     </section>`;
@@ -2662,12 +2680,31 @@ function renderBudgetVsActualDetail() {
       (group.overriddenAccountsBudget === undefined ? "" : ` Tileistä summattu budjetti olisi ollut ${money(group.overriddenAccountsBudget)} — ohitettu.`) +
       `</p>`
     : "";
+  // Without this the account rows below add up to 3 527,50 € under a heading
+  // that says 36 237,38 €, and the panel simply looks broken. The footer row
+  // is what makes the gap legible as the missing itemisation it is.
+  const unitemizedNote = group.unitemizedActual === undefined
+    ? ""
+    : `<p class="warning">Ryhmän toteuma ${money(group.actual)} on ryhmätason luku. Tileille eritelty ` +
+      `${money(group.accountsActual)}, erittelemättä ${money(group.unitemizedActual)} — lähdedokumentti ` +
+      `ei erittele koko summaa tileille, joten alla olevat rivit eivät summaudu ryhmän toteumaan.</p>`;
+  const unitemizedRow = group.unitemizedActual === undefined
+    ? ""
+    : `<tfoot><tr class="is-partial">
+        <td colspan="3">Erittelemättä</td>
+        <td>${money(group.unitemizedActual)}</td><td>—</td><td>—</td>
+      </tr>
+      <tr><td colspan="3"><strong>Ryhmän toteuma</strong></td>
+        <td><strong>${money(group.actual)}</strong></td><td>—</td><td>—</td>
+      </tr></tfoot>`;
   $("#detail-panel-title").textContent = group.group;
   $("#detail-panel-body").innerHTML = `
     ${sourceNote}
+    ${unitemizedNote}
     <div class="table-wrap"><table>
       <thead><tr><th>Tili</th><th>Nimi</th><th>Budjetti</th><th>Toteuma</th><th>Erotus €</th><th>Erotus %</th></tr></thead>
       <tbody>${rows}</tbody>
+      ${unitemizedRow}
     </table></div>
   `;
 }
@@ -2773,6 +2810,127 @@ function renderGroupBudgetList() {
   </table></div>`;
   for (const button of host.querySelectorAll(".delete-group-budget")) {
     button.addEventListener("click", () => openDeleteConfirmation("group_budget", button.dataset.id));
+  }
+}
+
+/* -------- Group actual import ("Liitä ryhmätason toteuma", feature/group-level-actuals) -------- */
+
+function updateGroupActualImportPreview() {
+  const text = $("#group-actual-import-text").value;
+  const host = $("#group-actual-import-preview");
+  if (text.trim() === "") {
+    host.innerHTML = "";
+    state.groupActualImportParsed = null;
+    $("#group-actual-import-submit").disabled = true;
+    return;
+  }
+  const accounts = state.admin ? state.admin.financialAccounts : [];
+  const parsed = parseGroupActualPasteInput(text, accounts);
+  state.groupActualImportParsed = parsed;
+  const summary = `${parsed.groupActuals.length} ryhmätoteumariviä tunnistettu.`;
+  const blocks = [];
+  blocks.push(parsed.errors.length > 0
+    ? stateBlock({
+      kind: "error",
+      title: summary,
+      body: `${parsed.errors.length} virhettä. Tallennus on estetty, kunnes virheet on korjattu.`,
+      items: parsed.errors.map((error) => error.message),
+    })
+    : `<article class="card"><p>${escapeHtml(summary)} Ei virheitä.</p></article>`);
+  if (parsed.warnings.length > 0) {
+    blocks.push(`<article class="card"><p class="warning">${parsed.warnings.length} varoitus(ta) — rivi hyväksytään silti, mutta tarkista:</p>` +
+      `<ul>${parsed.warnings.map((warning) => `<li>${escapeHtml(warning.message)}</li>`).join("")}</ul></article>`);
+  }
+  host.innerHTML = blocks.join("");
+  $("#group-actual-import-submit").disabled = parsed.groupActuals.length === 0 || parsed.errors.length > 0;
+}
+
+async function submitGroupActualImport(event) {
+  event.preventDefault();
+  clearFieldErrors("#group-actual-import-form");
+  const parsed = state.groupActualImportParsed;
+  if (!parsed || parsed.errors.length > 0 || parsed.groupActuals.length === 0) {
+    setFeedback("#group-actual-import-feedback", "Korjaa virheet ennen tallennusta.", "error");
+    return;
+  }
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue("group-actual-import-source-ids"),
+    explanation: fieldValue("group-actual-import-explanation"),
+  });
+  if (!meta.ok) {
+    applyFieldErrors("#group-actual-import-form", {
+      sourceIds: "group-actual-import-source-ids",
+      explanation: "group-actual-import-explanation",
+    }, meta.errors);
+    setFeedback("#group-actual-import-feedback", "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const operations = buildGroupActualImportOperations(parsed, meta.value);
+  const sent = await sendAdminOperations(operations, {
+    successMessage: `Tuotu ${parsed.groupActuals.length} ryhmätoteumariviä.`,
+  });
+  if (sent.ok) {
+    setFeedback("#group-actual-import-feedback", "Tallennettu.", "ok");
+    $("#group-actual-import-text").value = "";
+    updateGroupActualImportPreview();
+    renderGroupActualList();
+    renderBudgetVsActual();
+    renderFinancePlaceholders();
+  } else if (sent.conflict) {
+    setFeedback("#group-actual-import-feedback", "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
+}
+
+/**
+ * Lists every GroupActual row, and next to each the sum of its group's
+ * accounts for that year, so the import can be checked against what it
+ * overrides without leaving the view. A row whose figures agree is doing
+ * nothing — which is the expected and healthy case, not a mistake — so the
+ * column says so rather than leaving the reader to compare two numbers.
+ */
+function renderGroupActualList() {
+  if (!state.admin) return;
+  const host = $("#group-actual-list");
+  const groupActuals = state.admin.groupActuals ?? [];
+  if (groupActuals.length === 0) {
+    host.innerHTML = stateBlock({
+      kind: "empty",
+      title: "Ei vielä ryhmätason toteumia",
+      body: "Ryhmävertailut käyttävät tilien summia. Liitä ryhmätason toteumat yllä olevalla lomakkeella, jos lähdedokumentti erittelee vain osan ryhmän tileistä.",
+    });
+    return;
+  }
+  const sorted = [...groupActuals]
+    .sort((a, b) => (a.year === b.year ? a.group.localeCompare(b.group) : b.year - a.year));
+  const rows = sorted.map((groupActual) => {
+    const vm = buildGroupBudgetVsActualViewModel(
+      state.admin.financialAccounts, state.admin.financialEntries,
+      state.admin.groupBudgets, state.admin.groupActuals, groupActual.year,
+    );
+    const row = vm.sections
+      .flatMap((section) => section.groups.map((g) => ({ ...g, kind: section.kind })))
+      .find((g) => g.kind === groupActual.kind && g.group === groupActual.group);
+    const comparison = row === undefined || row.accountsActual === undefined
+      ? "Ei tilejä"
+      : row.unitemizedActual === undefined
+        ? "Sama kuin tilien summa"
+        : `Erittelemättä ${money(row.unitemizedActual)}`;
+    return `<tr class="${groupActual.active ? "" : "is-gap"}">
+      <td>${escapeHtml(groupActual.kind === "income" ? "Tulo" : "Kulu")}</td>
+      <td>${escapeHtml(groupActual.group)}</td>
+      <td>${groupActual.year}</td>
+      <td>${money(groupActual.actualAmount)}</td>
+      <td>${escapeHtml(comparison)}</td>
+      <td>${groupActual.active ? "Aktiivinen" : "Poistettu käytöstä"}</td>
+      <td><button type="button" class="danger delete-group-actual" data-id="${escapeHtml(groupActual.id)}">Poista</button></td>
+    </tr>`;
+  }).join("");
+  host.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Kind</th><th>Ryhmä</th><th>Vuosi</th><th>Toteuma</th><th>Suhde tilien summaan</th><th>Tila</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  for (const button of host.querySelectorAll(".delete-group-actual")) {
+    button.addEventListener("click", () => openDeleteConfirmation("group_actual", button.dataset.id));
   }
 }
 
