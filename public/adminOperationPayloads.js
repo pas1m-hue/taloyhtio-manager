@@ -4290,6 +4290,73 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
   };
 }
 
+/* -------- Forecast completeness (feature/forecast-complete) -------- */
+
+/**
+ * One line per reason the forecast falls short, or a single "complete" line.
+ *
+ * ONE LINE PER REASON, not one merged sentence: a DATA GAP is fixed by
+ * entering a cost and an uncovered horizon by extending — or declaring — the
+ * maintenance plan. Two different jobs do not belong in one sentence, and the
+ * old text named the wrong one ("Ennuste puutteellinen (DATA GAP)") whenever
+ * the real cause was coverage.
+ *
+ * EVERY FIGURE COMES FROM THE ONE CASH PATH the card is rendering. The
+ * uncovered-year count is `beyondCoverage.yearCount`, computed inside the same
+ * projectCashPath call over the same horizon, and the horizon's last year is
+ * that path's own last row. Neither is read from a global or recomputed here,
+ * because horizons differ between views (2050 in one place, 2057 in another)
+ * and a card must never caption itself with another view's horizon.
+ *
+ * `yearCount` is also more correct than horizonEnd − coverage would be: a plan
+ * whose coverage ended before the horizon even starts has fewer uncovered
+ * years than that subtraction suggests, and the count already excludes the
+ * years outside the horizon.
+ *
+ * @param {ReadonlyArray<string>} [reasons] `forecastIncompleteReasons`.
+ * @param {{ maintenancePlanCoverageThroughYear?: number, beyondCoverage?: { yearCount?: number }, years?: ReadonlyArray<{ year: number }>, blockingDataGaps?: ReadonlyArray<unknown> }} [cashPath]
+ * @returns {Array<{ tone: "ok"|"warning", text: string }>}
+ */
+export function buildForecastCompletenessLines(reasons, cashPath) {
+  const list = Array.isArray(reasons) ? reasons : [];
+  if (list.length === 0) {
+    return [{ tone: /** @type {const} */ ("ok"), text: "Ennuste täydellinen" }];
+  }
+
+  const path = cashPath && typeof cashPath === "object" ? cashPath : {};
+  const coverage = path.maintenancePlanCoverageThroughYear;
+  const years = Array.isArray(path.years) ? path.years : [];
+  const horizonEndYear = years.length > 0 ? years[years.length - 1].year : undefined;
+  const uncoveredYearCount = path.beyondCoverage?.yearCount;
+  const gapCount = Array.isArray(path.blockingDataGaps) ? path.blockingDataGaps.length : 0;
+
+  /** @param {string} text */
+  const warn = (text) => ({ tone: /** @type {const} */ ("warning"), text });
+
+  return list.map((reason) => {
+    if (reason === "data_gap") {
+      const count = gapCount > 0 ? `${gapCount} DATA GAPia` : "nimettyjä DATA GAPeja";
+      return warn(`Ennuste puutteellinen: ${count} — syötä puuttuvat kustannusnäytöt`);
+    }
+    if (reason === "coverage_unset") {
+      return warn(
+        "Ennuste puutteellinen: kunnossapitosuunnitelman kate on kertomatta — " +
+        "syötä se yhtiön perustietoihin",
+      );
+    }
+    if (reason === "coverage_ends_before_horizon") {
+      const span = coverage !== undefined && horizonEndYear !== undefined
+        ? `suunnitelma kattaa vuoteen ${coverage}, horisontti ulottuu vuoteen ${horizonEndYear}`
+        : "suunnitelma ei kata koko horisonttia";
+      const tail = uncoveredYearCount === undefined
+        ? ""
+        : ` — ${uncoveredYearCount} vuotta suunnittelematta`;
+      return warn(`Ennuste puutteellinen: ${span}${tail}`);
+    }
+    return warn("Ennuste puutteellinen");
+  });
+}
+
 /* ------------------------------------------------------------------ delete */
 
 /**
