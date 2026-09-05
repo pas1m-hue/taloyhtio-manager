@@ -14,6 +14,7 @@ import {
   buildFinancialImportOperations,
   buildGroupBudgetImportOperations,
   buildGroupActualImportOperations,
+  buildGroupActualSeries,
   buildGroupBudgetVsActualViewModel,
   buildGroupChartModel,
   buildIncomeViewModel,
@@ -2120,12 +2121,20 @@ const SUMMARY_SERIES_LABELS = { income: "Tulot", expense: "Kulut" };
  * plus the group count in its label — deliberately neither a dashed outline
  * nor hatching, both of which already mean "budget, a forecast" in the group
  * chart. Reusing a mark for a second meaning is worse than leaving it unused.
+ *
+ * Totals come from buildGroupActualSeries rather than from the Tulot and Kulut
+ * view models, so a group whose accounts itemise only part of its total is
+ * drawn at its true height. Before this the 2023 income bar stood at 3 528 €
+ * against 34 272 € of costs — a hoitokate near −30 744 € for a year that was
+ * in surplus. The partiality mark is unchanged and still counts reporting
+ * groups; a group-level actual simply counts as reporting, because it repairs
+ * a bar rather than flagging one.
  */
 function renderSummaryChart() {
   if (!state.admin) return "";
   const model = buildSummaryChartModel(
-    buildIncomeViewModel(state.admin.financialAccounts, state.admin.financialEntries),
-    buildExpenseGroupViewModel(state.admin.financialAccounts, state.admin.financialEntries),
+    buildGroupActualSeries(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupActuals, "income"),
+    buildGroupActualSeries(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupActuals, "expense"),
   );
   if (model.isEmpty) return "";
 

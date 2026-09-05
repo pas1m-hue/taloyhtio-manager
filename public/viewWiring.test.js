@@ -262,6 +262,15 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
     }
   });
 
+  it("feeds the Yhteenveto chart group-level actuals, not raw account sums", () => {
+    // The chart must not go back to buildIncomeViewModel/buildExpenseGroupViewModel:
+    // those sum accounts, and a group whose source itemised only part of its
+    // total would be drawn short again — 2023 income at 3 528 € instead of
+    // 36 237,38 €, turning a surplus year into a 30 744 € loss on screen.
+    expect(js).toContain('buildGroupActualSeries(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupActuals, "income")');
+    expect(js).toContain('buildGroupActualSeries(state.admin.financialAccounts, state.admin.financialEntries, state.admin.groupActuals, "expense")');
+  });
+
   it("derives the Budjetti vs. toteuma year filter options from the data (deriveComparableGroupBudgetYears, feature/group-budget)", () => {
     expect(js).toContain("deriveComparableGroupBudgetYears(accounts, entries, groupBudgets, groupActuals)");
     expect(js).toContain('$("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual)');
