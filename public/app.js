@@ -13,6 +13,7 @@ import {
   buildExpenseGroupViewModel,
   buildFinancialImportOperations,
   buildGroupBudgetImportOperations,
+  buildForecastCompletenessLines,
   buildGroupActualImportOperations,
   buildGroupActualSeries,
   buildGroupBudgetVsActualViewModel,
@@ -3391,6 +3392,12 @@ function renderRequiredCollection() {
   host.innerHTML = `<div class="scenario-grid">${SCENARIOS.map((scenario) => {
     const rc = liquidity.forecast.scenarios[scenario].requiredCollection;
     const fn = liquidity.forecast.scenarios[scenario].fundingNeed;
+    // Built from this scenario's own cash path, so the years quoted are the
+    // ones this card is actually about.
+    const completeness = buildForecastCompletenessLines(
+      rc.forecastIncompleteReasons,
+      liquidity.forecast.scenarios[scenario].cashPath,
+    );
     const perApartment = rc.additionalMonthlyPerApartment;
     const perM2 = rc.additionalMonthlyPerM2;
     return `<article class="card scenario-card">
@@ -3404,7 +3411,7 @@ function renderRequiredCollection() {
         ${perApartment === undefined ? "" : `<li>${money(perApartment)}/asunto/kk</li>`}
         ${perM2 === undefined ? "" : `<li>${money(perM2)}/m²/kk</li>`}
         <li>${fn.firstFundingNeedYear ? `Ensimmäinen rahoitustarve ${fn.firstFundingNeedYear}` : "Ei rahoitustarvetta tunnetuilla kustannuksilla"}</li>
-        <li>${rc.forecastComplete ? "<span class=\"ok\">Ennuste täydellinen</span>" : "<span class=\"warning\">Ennuste puutteellinen (DATA GAP)</span>"}</li>
+        ${completeness.map((line) => `<li><span class="${line.tone}">${escapeHtml(line.text)}</span></li>`).join("")}
       </ul>
     </article>`;
   }).join("")}</div>`;
@@ -3646,6 +3653,7 @@ function renderVisitorScenarios(projection, liquidity) {
         <li>${p.horizonEventCount} tapahtumariviä</li>
         <li>${p.dataGaps.withinHorizon.length} DATA GAPia</li>
         ${liq ? `<li>Vaadittu keräys ${money(liq.requiredCollection.knownCostRequiredAnnualCollection)}/v</li><li>${liq.fundingNeed.firstFundingNeedYear ? `Ensimmäinen puskurivaje ${liq.fundingNeed.firstFundingNeedYear}` : "Ei puskurivajetta tunnetuilla kustannuksilla"}</li>` : "<li>Likviditeettitiedot puuttuvat</li>"}
+        ${liq ? buildForecastCompletenessLines(liq.requiredCollection.forecastIncompleteReasons, liq.cashPath).map((line) => `<li><span class="${line.tone}">${escapeHtml(line.text)}</span></li>`).join("") : ""}
       </ul>
     </article>`;
   }).join("");

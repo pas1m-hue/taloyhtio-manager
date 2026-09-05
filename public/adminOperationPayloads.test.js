@@ -40,6 +40,7 @@ import {
   deriveDataGapAssets,
   deriveEventYearOptions,
   groupScheduleByScenario,
+  buildForecastCompletenessLines,
   buildGroupActualId,
   buildGroupActualSeries,
   buildGroupActualImportOperations,
@@ -4233,5 +4234,94 @@ describe("buildSummaryChartModel with group-level actuals", () => {
     expect(incomeBar.partial).toBe(true);
     expect(incomeBar.reportingGroups).toBe(2);
     expect(incomeBar.totalGroups).toBe(3);
+  });
+});
+
+describe("buildForecastCompletenessLines", () => {
+  /** The production case: a plan to 2030 under a horizon reaching 2050. */
+  const shortCoveragePath = {
+    maintenancePlanCoverageThroughYear: 2030,
+    beyondCoverage: { firstYear: 2031, yearCount: 20 },
+    years: Array.from({ length: 24 }, (_, i) => ({ year: 2027 + i })),
+    blockingDataGaps: [],
+  };
+
+  it("says complete, once, when there are no reasons", () => {
+    expect(buildForecastCompletenessLines([], shortCoveragePath))
+      .toEqual([{ tone: "ok", text: "Ennuste täydellinen" }]);
+  });
+
+  it("names the coverage gap in years, not DATA GAPs, when coverage is the cause", () => {
+    // The old text said "Ennuste puutteellinen (DATA GAP)" for every cause.
+    // With no gaps at all that named the wrong problem and pointed the user at
+    // the wrong fix.
+    const [line, ...rest] = buildForecastCompletenessLines(
+      ["coverage_ends_before_horizon"], shortCoveragePath,
+    );
+
+    expect(rest).toEqual([]);
+    expect(line.tone).toBe("warning");
+    expect(line.text).toContain("suunnitelma kattaa vuoteen 2030");
+    expect(line.text).toContain("horisontti ulottuu vuoteen 2050");
+    expect(line.text).toContain("20 vuotta suunnittelematta");
+    expect(line.text).not.toContain("DATA GAP");
+  });
+
+  it("quotes the horizon of the cash path it was given, not any other view's", () => {
+    // Horizons differ between views (2050 here, 2057 elsewhere). Both the last
+    // year and the uncovered count come from this one path, so a card cannot
+    // caption itself with another view's horizon.
+    const longerHorizon = {
+      ...shortCoveragePath,
+      beyondCoverage: { firstYear: 2031, yearCount: 27 },
+      years: Array.from({ length: 31 }, (_, i) => ({ year: 2027 + i })),
+    };
+    const [line] = buildForecastCompletenessLines(["coverage_ends_before_horizon"], longerHorizon);
+
+    expect(line.text).toContain("vuoteen 2057");
+    expect(line.text).toContain("27 vuotta suunnittelematta");
+  });
+
+  it("asks for the coverage year when nobody has set one", () => {
+    const [line] = buildForecastCompletenessLines(["coverage_unset"], {
+      years: [{ year: 2027 }, { year: 2050 }],
+      blockingDataGaps: [],
+    });
+
+    expect(line.tone).toBe("warning");
+    expect(line.text).toContain("kate on kertomatta");
+    expect(line.text).not.toContain("DATA GAP");
+  });
+
+  it("counts the DATA GAPs when they are the cause", () => {
+    const [line] = buildForecastCompletenessLines(["data_gap"], {
+      ...shortCoveragePath,
+      maintenancePlanCoverageThroughYear: 2050,
+      beyondCoverage: undefined,
+      blockingDataGaps: [{}, {}, {}],
+    });
+
+    expect(line.text).toContain("3 DATA GAPia");
+    expect(line.text).toContain("kustannusnäytöt");
+  });
+
+  it("gives one line per reason when both apply, because they need different work", () => {
+    const lines = buildForecastCompletenessLines(
+      ["data_gap", "coverage_ends_before_horizon"],
+      { ...shortCoveragePath, blockingDataGaps: [{}] },
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0].text).toContain("DATA GAP");
+    expect(lines[1].text).toContain("suunnitelma kattaa vuoteen 2030");
+    expect(lines.every((line) => line.tone === "warning")).toBe(true);
+  });
+
+  it("still says something useful when the cash path is missing its detail", () => {
+    const lines = buildForecastCompletenessLines(["coverage_ends_before_horizon"], undefined);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0].tone).toBe("warning");
+    expect(lines[0].text).toContain("ei kata koko horisonttia");
   });
 });
