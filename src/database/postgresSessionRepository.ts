@@ -7,6 +7,7 @@ import type { ProtectedSessionWorkspaceRepository } from "../auth/protectedSessi
 import { validateVisitorSessionWorkspace } from "../session/sessionWorkspace.js";
 import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
+import { instantIso, instantMillis, integer } from "./postgresValues.js";
 
 interface SessionRow extends Record<string, unknown> {
   session_id: string;
@@ -312,9 +313,12 @@ function parseSessionRow(row: SessionRow): VisitorSessionWorkspace {
       payload.publicationVersion !== publicationVersion ||
       payload.publicationFingerprint !== row.publication_fingerprint ||
       payload.revision !== revision ||
-      Date.parse(payload.createdAt) !== Date.parse(String(row.created_at)) ||
-      Date.parse(payload.updatedAt) !== Date.parse(String(row.updated_at)) ||
-      Date.parse(payload.expiresAt) !== Date.parse(String(row.expires_at))) {
+      instantMillis(payload.createdAt, "session payload createdAt") !==
+        instantMillis(row.created_at, "session row created_at") ||
+      instantMillis(payload.updatedAt, "session payload updatedAt") !==
+        instantMillis(row.updated_at, "session row updated_at") ||
+      instantMillis(payload.expiresAt, "session payload expiresAt") !==
+        instantMillis(row.expires_at, "session row expires_at")) {
     throw integrityError(`Session row ${row.session_id} metadata does not match payload.`);
   }
   validateVisitorSessionWorkspace(payload);
@@ -325,9 +329,11 @@ function parseAccessRow(row: AccessRow): VisitorSessionAccessRecord {
   const record: VisitorSessionAccessRecord = {
     sessionId: row.session_id,
     tokenHash: row.token_hash,
-    createdAt: timestamp(row.created_at),
-    expiresAt: timestamp(row.expires_at),
-    ...(row.revoked_at === null ? {} : { revokedAt: timestamp(row.revoked_at) }),
+    createdAt: instantIso(row.created_at, "session-access created_at"),
+    expiresAt: instantIso(row.expires_at, "session-access expires_at"),
+    ...(row.revoked_at === null
+      ? {}
+      : { revokedAt: instantIso(row.revoked_at, "session-access revoked_at") }),
   };
   if (!/^[a-f0-9]{64}$/.test(record.tokenHash) ||
       Date.parse(record.expiresAt) <= Date.parse(record.createdAt)) {
@@ -394,21 +400,7 @@ function mapCreateError(
   return error;
 }
 
-function integer(value: unknown, label: string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw integrityError(`Stored ${label} is not a safe integer.`);
-  }
-  return parsed;
-}
 
-function timestamp(value: Date | string): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) {
-    throw integrityError("Stored session-access timestamp is invalid.");
-  }
-  return date.toISOString();
-}
 
 function sessionRevisionConflict(
   sessionId: string,

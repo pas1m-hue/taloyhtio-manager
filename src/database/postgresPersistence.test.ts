@@ -33,9 +33,9 @@ import type {
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
-const PUBLISHED_AT = "2026-07-17T19:00:00+03:00";
-const SESSION_CREATED_AT = "2026-07-17T20:00:00+03:00";
-const SESSION_EXPIRES_AT = "2026-07-18T20:00:00+03:00";
+const PUBLISHED_AT = "2026-07-17T19:00:00.451+03:00";
+const SESSION_CREATED_AT = "2026-07-17T20:00:00.317+03:00";
+const SESSION_EXPIRES_AT = "2026-07-18T20:00:00.884+03:00";
 
 class PGliteSqlPool implements SqlPool {
   readonly #db = new PGlite();
@@ -585,8 +585,8 @@ describe("V2.5 PostgreSQL visitor-session repository", () => {
       sessions,
       sessionCommand(
         "expired",
-        "2026-07-17T19:10:00+03:00",
-        "2026-07-17T19:30:00+03:00",
+        "2026-07-17T19:10:00.062+03:00",
+        "2026-07-17T19:30:00.929+03:00",
       ),
     );
     await createVisitorSession(
@@ -594,7 +594,7 @@ describe("V2.5 PostgreSQL visitor-session repository", () => {
       sessions,
       sessionCommand("active"),
     );
-    expect(await sessions.deleteExpired("2026-07-17T20:00:00+03:00")).toBe(1);
+    expect(await sessions.deleteExpired("2026-07-17T20:00:00.500+03:00")).toBe(1);
     expect(await sessions.load("expired")).toBeUndefined();
     expect(await sessions.load("active")).toBeDefined();
   });
