@@ -9,6 +9,7 @@ import type {
 } from "../domain/types.js";
 import { createAdminDataSnapshot } from "../admin/applyAdminBatch.js";
 import { buildAdminDashboardReadModel } from "./adminDashboard.js";
+import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
 
@@ -125,5 +126,43 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
     expect(model.priceLevelConfirmations).toEqual([]);
     expect(model.financialAccounts).toEqual([]);
     expect(model.financialEntries).toEqual([]);
+  });
+});
+
+describe("group-level actuals are admin-only data", () => {
+  const groupActual = {
+    id: "income::Hoitovastikkeet::2023",
+    group: "Hoitovastikkeet",
+    kind: "income" as const,
+    year: 2023,
+    actualAmount: 36_237.38,
+    active: true,
+    sourceIds: ["tilinpaatos_2024"],
+  };
+
+  it("reaches the admin UI through the dashboard read model", () => {
+    // Without this the finance views read state.admin.groupActuals as
+    // undefined and every group-level figure silently stops applying.
+    const admin = createAdminDataSnapshot({
+      ...snapshotWithMaintenanceData(),
+      groupActuals: [groupActual],
+    });
+
+    const model = buildAdminDashboardReadModel(admin, undefined, HORIZON);
+
+    expect(model.groupActuals).toEqual([groupActual]);
+    expect(model.groupActuals).not.toBe(admin.groupActuals);
+  });
+
+  it("does not change the publishable fingerprint", () => {
+    // A publication carries no financial accounts, entries, group budgets or
+    // group actuals at all — the finance views are admin-only. Importing a
+    // group-level actual must therefore not make the workspace look unpublished
+    // or trigger a republish prompt.
+    const base = snapshotWithMaintenanceData();
+    const withGroupActual = createAdminDataSnapshot({ ...base, groupActuals: [groupActual] });
+
+    expect(fingerprintAdminPublishableContent(withGroupActual))
+      .toBe(fingerprintAdminPublishableContent(base));
   });
 });
