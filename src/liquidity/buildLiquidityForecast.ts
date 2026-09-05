@@ -58,7 +58,9 @@ export function buildLiquidityForecast(
     });
     // Required collection deliberately keeps reading the projection over the
     // whole horizon: coverage changes what the cash path may claim, not what
-    // the known-cost lower bound is.
+    // the known-cost lower bound is. The coverage year is passed in all the
+    // same, because it does change what the result may claim about being
+    // complete.
     const requiredCollection = calculateRequiredCollection({
       projection,
       horizon: input.horizon,
@@ -71,10 +73,16 @@ export function buildLiquidityForecast(
       ...(input.apartmentCount === undefined
         ? {}
         : { apartmentCount: input.apartmentCount }),
+      ...(input.maintenancePlanCoverageThroughYear === undefined
+        ? {}
+        : {
+            maintenancePlanCoverageThroughYear:
+              input.maintenancePlanCoverageThroughYear,
+          }),
     });
     scenarios[scenario] = {
       cashPath,
-      fundingNeed: findFundingNeed(cashPath),
+      fundingNeed: findFundingNeed(cashPath, input.horizon),
       requiredCollection,
     };
   }
