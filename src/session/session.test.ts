@@ -8,6 +8,10 @@ import {
 } from "../domain/types.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
+import {
+  financialActualsExpected,
+  financialActualsFixture,
+} from "../fixtures/financialActuals.js";
 import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
 import { publishAdminData } from "../publishing/publishAdminData.js";
 import { createPublishedDataSnapshot } from "../publishing/publishedSnapshot.js";
@@ -19,6 +23,17 @@ import {
 } from "./sessionService.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
+
+/**
+ * The baseline plus the account data the liquidity figures are derived from.
+ * A publication made without it has no computable divisor and no computable
+ * hoitokate, so its forecast is unavailable by design - which is what the
+ * "unavailable" tests below use the bare baseline for.
+ */
+const BASELINE_WITH_ACCOUNTS = {
+  ...adminBaselineSnapshot,
+  ...financialActualsFixture,
+};
 const CREATED_AT = "2026-07-17T18:00:00+03:00";
 const UPDATED_AT = "2026-07-17T18:15:00+03:00";
 const EXPIRES_AT = "2026-07-18T18:00:00+03:00";
@@ -79,7 +94,7 @@ function override(
 }
 
 async function publishedRepositories() {
-  const publications = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+  const publications = new InMemoryPublishingRepository([BASELINE_WITH_ACCOUNTS]);
   await publishAdminData(publications, publishCommand());
   return {
     publications,
@@ -292,15 +307,21 @@ describe("V2.3 visitor session workspace", () => {
       .toBe(20_000);
     expect(model.liquidity.forecast.scenarios.stress.cashPath.annualRepairCollection)
       .toBe(30_000);
+    // The scenario the visitor did not override falls back to the published
+    // figure, and that figure is now the computed hoitokate. It used to be
+    // 9 680 - the 2026 repair budget, an estimate of what repairs would cost,
+    // standing in for income on the collection side of the same cash path. The
+    // two are within 200 EUR of each other by coincidence; one is money coming
+    // in and the other is money going out.
     expect(model.liquidity.forecast.scenarios.optimistic.cashPath.annualRepairCollection)
-      .toBe(9_680);
+      .toBe(financialActualsExpected.operatingMargin);
   });
 
   it("truncates the visitor cash path at the published coverage year", async () => {
     // Admin and visitor read the same coverage from the same publication, so
     // the visitor cannot see a longer projected cash path than the admin does.
     const publications = new InMemoryPublishingRepository([{
-      ...adminBaselineSnapshot,
+      ...BASELINE_WITH_ACCOUNTS,
       housingCompany: {
         ...adminBaselineSnapshot.housingCompany,
         maintenancePlanCoverageThroughYear: 2030,

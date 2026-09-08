@@ -17,6 +17,7 @@ import {
   loadVisitorScenario,
 } from "../application/visitorApplicationService.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
+import { financialActualsFixture } from "../fixtures/financialActuals.js";
 import { buildSnapshotCalculations } from "../readModels/calculationReadModel.js";
 import {
   loadPostgresMigrations,
@@ -529,7 +530,12 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
   });
 
   it("loads a snapshot written before the maintenance-plan coverage existed", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    // With account data: this test asserts on a cash path, and the liquidity
+    // inputs are derived from accounts rather than from the baseline record.
+    await publications.initializeAdminData({
+      ...adminBaselineSnapshot,
+      ...financialActualsFixture,
+    });
     const horizon = { startYear: 2026, endYear: 2050 } as const;
     // Write the key first, so stripping it below is a real removal rather
     // than a no-op against a fixture that never carried it.
