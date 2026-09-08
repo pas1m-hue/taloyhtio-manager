@@ -122,10 +122,13 @@ function buildForecast(
       ...(assumptions.apartmentCount === undefined
         ? {}
         : { apartmentCount: assumptions.apartmentCount }),
+      ...(maintenancePlanCoverageThroughYear === undefined
+        ? {}
+        : { maintenancePlanCoverageThroughYear }),
     });
     scenarios[scenario] = {
       cashPath,
-      fundingNeed: findFundingNeed(cashPath),
+      fundingNeed: findFundingNeed(cashPath, workspace.horizon),
       requiredCollection,
     };
   }

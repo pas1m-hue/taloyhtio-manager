@@ -161,12 +161,16 @@ describe("projectCashPath and findFundingNeed", () => {
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       annualRepairCollection: 0,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
+      // Covers the horizon's last year, so this stays the fully-covered
+      // regression case: a complete forecast still reports complete.
+      maintenancePlanCoverageThroughYear: waterHeaterHorizon.endYear,
     });
 
-    expect(findFundingNeed(path)).toEqual({
+    expect(findFundingNeed(path, waterHeaterHorizon)).toEqual({
       scenario: "base",
       ownFundingSufficientForKnownCosts: false,
       forecastComplete: true,
+      forecastIncompleteReasons: [],
       amountAtFirstNeed: 916.77,
       maximumBufferShortfall: 7_516.77,
       minimumClosingCash: 2_408.49,
@@ -184,7 +188,7 @@ describe("projectCashPath and findFundingNeed", () => {
         correctedWorkbookLiquidityBaseline.currentAnnualRepairCollection,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
     });
-    const signal = findFundingNeed(path);
+    const signal = findFundingNeed(path, waterHeaterHorizon);
 
     expect(signal.ownFundingSufficientForKnownCosts).toBe(true);
     expect(signal.firstFundingNeedYear).toBeUndefined();
@@ -206,7 +210,7 @@ describe("projectCashPath and findFundingNeed", () => {
       annualRepairCollection: 0,
       operatingBufferTarget: 5_000,
     });
-    const signal = findFundingNeed(path);
+    const signal = findFundingNeed(path, { startYear: 2026, endYear: 2030 });
 
     expect(path.knownRepairCostsTotal).toBe(4_635);
     expect(path.years[0]?.dataGaps).toHaveLength(1);
@@ -384,7 +388,7 @@ describe("maintenance plan coverage in the cash path", () => {
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       maintenancePlanCoverageThroughYear: 2031,
     });
-    const signal = findFundingNeed(path);
+    const signal = findFundingNeed(path, coverageHorizon);
 
     expect(signal.firstFundingNeedYear).toBe(2031);
     expect(signal.ownFundingSufficientForKnownCosts).toBe(false);
@@ -395,7 +399,7 @@ describe("maintenance plan coverage in the cash path", () => {
   });
 
   it("reports no funding need from covered years alone when they hold", () => {
-    const signal = findFundingNeed(optimisticPath(2020));
+    const signal = findFundingNeed(optimisticPath(2020), coverageHorizon);
 
     // Nothing is known at all, so nothing may claim a shortfall - and the
     // minimum closing cash falls back to the initial cash rather than NaN.
@@ -413,6 +417,9 @@ describe("calculateRequiredCollection", () => {
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       currentAnnualRepairCollection: 0,
+      // A plan reaching the horizon's last year, so this stays the
+      // fully-covered regression case for forecastComplete.
+      maintenancePlanCoverageThroughYear: waterHeaterHorizon.endYear,
     });
 
     expect(result).toMatchObject({
@@ -425,6 +432,7 @@ describe("calculateRequiredCollection", () => {
       additionalMonthlyCollection: 69.6,
       planningYearCount: 13,
       forecastComplete: true,
+      forecastIncompleteReasons: [],
       blockingDataGaps: [],
     });
   });
