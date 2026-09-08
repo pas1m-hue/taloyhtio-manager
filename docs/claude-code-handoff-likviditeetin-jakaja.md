@@ -1,3 +1,14 @@
+> **VANHENTUNUT — korvattu 8.9.2026.**
+>
+> Tämän tehtävän sisältö on kokonaisuudessaan siirtynyt dokumenttiin
+> [`claude-code-handoff-lasketut-likviditeettisyotteet.md`](claude-code-handoff-lasketut-likviditeettisyotteet.md),
+> joka käsittelee saman epäjohdonmukaisuuden yhdessä hoitokatteen kanssa: molemmilla
+> on sama juurisyy (julkaistu snapshot ei sisällä tilidataa), joten erikseen
+> tehtyinä korjaukset olisivat kaksi kertaa riskialttiimmat.
+>
+> Säilytetään lukemista varten — alla oleva analyysi epäjohdonmukaisuudesta pätee
+> yhä, vain sen toteutustapa on korvattu. Älä toteuta tätä dokumenttia sellaisenaan.
+
 # Claude Code -tehtävä: laskettu 12 kk hoitokulu myös likviditeettimalliin
 
 Seurantatehtävä PR:lle *feature/trailing-12m-operating-costs*. Ei kiireellinen,
