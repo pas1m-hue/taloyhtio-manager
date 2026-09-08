@@ -1,5 +1,7 @@
 import {
   DomainValidationError,
+  FINANCIAL_ACCOUNT_KINDS,
+  FINANCIAL_ACCOUNT_NATURES,
   type ActualBuildingEvent,
   type AdminDataSnapshot,
   type Asset,
@@ -9,6 +11,9 @@ import {
   type PublishAdminDataCommand,
   type PublishedBuildingEvent,
   type PublishedDataSnapshot,
+  type PublishedFinancialAccount,
+  type PublishedFinancialEntry,
+  type PublishedGroupActual,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot } from "../admin/adminDataValidation.js";
 
@@ -21,6 +26,9 @@ interface PublishableContent {
   readonly costEvidence: PublishedDataSnapshot["costEvidence"];
   readonly priceLevelConfirmations: PublishedDataSnapshot["priceLevelConfirmations"];
   readonly events: PublishedDataSnapshot["events"];
+  readonly financialAccounts: PublishedDataSnapshot["financialAccounts"];
+  readonly financialEntries: PublishedDataSnapshot["financialEntries"];
+  readonly groupActuals: PublishedDataSnapshot["groupActuals"];
 }
 
 /**
@@ -103,6 +111,8 @@ export function validatePublishedDataSnapshot(
     throw error;
   }
 
+  validatePublishedFinancialData(snapshot);
+
   const expectedFingerprint = fingerprintPublishableContent({
     housingCompany: snapshot.housingCompany,
     financialYears: snapshot.financialYears,
@@ -112,6 +122,9 @@ export function validatePublishedDataSnapshot(
     costEvidence: snapshot.costEvidence,
     priceLevelConfirmations: snapshot.priceLevelConfirmations,
     events: snapshot.events,
+    financialAccounts: snapshot.financialAccounts,
+    financialEntries: snapshot.financialEntries,
+    groupActuals: snapshot.groupActuals,
   });
   if (snapshot.contentFingerprint !== expectedFingerprint) {
     throw invalidPublished("Published snapshot fingerprint does not match content");
@@ -152,6 +165,11 @@ function buildPublishableContent(admin: AdminDataSnapshot): PublishableContent {
     .sort(byId);
   const includedEvidenceIds = new Set(costEvidence.map((item) => item.id));
 
+  const financialAccounts = projectFinancialAccounts(admin);
+  const publishedCodes = new Set(
+    financialAccounts.map((account) => account.accountCode),
+  );
+
   return {
     housingCompany: clone(admin.housingCompany),
     financialYears: [...admin.financialYears]
@@ -170,7 +188,127 @@ function buildPublishableContent(admin: AdminDataSnapshot): PublishableContent {
       .map(clone)
       .sort((a, b) => a.costEvidenceId.localeCompare(b.costEvidenceId)),
     events,
+    financialAccounts,
+    financialEntries: admin.financialEntries
+      .filter((entry) =>
+        publishedCodes.has(entry.accountCode) &&
+        typeof entry.actualAmount === "number" &&
+        Number.isFinite(entry.actualAmount)
+      )
+      .map((entry): PublishedFinancialEntry => ({
+        accountCode: entry.accountCode,
+        year: entry.year,
+        actualAmount: entry.actualAmount!,
+      }))
+      .sort((a, b) =>
+        a.accountCode.localeCompare(b.accountCode) || a.year - b.year
+      ),
+    groupActuals: admin.groupActuals
+      .filter((actual) => actual.active)
+      .map((actual): PublishedGroupActual => ({
+        group: actual.group,
+        kind: actual.kind,
+        year: actual.year,
+        actualAmount: actual.actualAmount,
+        active: true,
+      }))
+      .sort((a, b) =>
+        a.kind.localeCompare(b.kind) || a.group.localeCompare(b.group) ||
+        a.year - b.year
+      ),
   };
+}
+
+/**
+ * Accounts reduced to the fields the operating-figure calculation reads, and
+ * only those that carry an actual worth publishing.
+ *
+ * `name` is not copied, and the published type declares it `never present`, so
+ * writing `admin.financialAccounts` straight through here is a compile error
+ * rather than a silent leak of who bills what.
+ */
+function projectFinancialAccounts(
+  admin: AdminDataSnapshot,
+): readonly PublishedFinancialAccount[] {
+  const reportingCodes = new Set(
+    admin.financialEntries
+      .filter((entry) =>
+        typeof entry.actualAmount === "number" &&
+        Number.isFinite(entry.actualAmount)
+      )
+      .map((entry) => entry.accountCode),
+  );
+  return admin.financialAccounts
+    .filter((account) => reportingCodes.has(account.accountCode))
+    .map((account): PublishedFinancialAccount => ({
+      accountCode: account.accountCode,
+      kind: account.kind,
+      group: account.group,
+      ...(account.nature === undefined ? {} : { nature: account.nature }),
+    }))
+    .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+}
+
+/**
+ * The published account data validates on its own terms rather than through
+ * the synthetic admin snapshot above.
+ *
+ * It has to: the projection deliberately drops fields validateFinancialAccount
+ * requires (`name`), validateFinancialEntry requires (`sourceIds`) and
+ * validateGroupActual requires (`id`, `sourceIds`). Feeding it placeholders to
+ * satisfy those would produce a validator that can only pass - it would look
+ * like it checks three collections while checking nothing about them - and
+ * would bake the placeholders permanently into an immutable publication.
+ *
+ * The `name` check is the projection's own guard, at runtime: a leaked account
+ * name is the one mistake here that cannot be undone after publishing.
+ */
+function validatePublishedFinancialData(snapshot: PublishedDataSnapshot): void {
+  // Absent rather than empty is what a publication written before these
+  // collections existed looks like. The repository defaults them on load, but
+  // this validator is the invariant and runs from several callers
+  // (buildVisitorPublishedView among them), so it tolerates the legacy shape
+  // itself instead of trusting that someone defaulted it first.
+  const accounts = snapshot.financialAccounts ?? [];
+  const entries = snapshot.financialEntries ?? [];
+  const groupActuals = snapshot.groupActuals ?? [];
+
+  const codes = new Set<string>();
+  for (const account of accounts) {
+    if (account.accountCode.trim() === "" || codes.has(account.accountCode) ||
+        !FINANCIAL_ACCOUNT_KINDS.includes(account.kind) ||
+        account.group.trim() === "" ||
+        (account.nature !== undefined &&
+          !FINANCIAL_ACCOUNT_NATURES.includes(account.nature)) ||
+        account.name !== undefined) {
+      throw invalidPublished(
+        `Published financial account ${account.accountCode || "<empty>"} is invalid`,
+      );
+    }
+    codes.add(account.accountCode);
+  }
+
+  const entryKeys = new Set<string>();
+  for (const entry of entries) {
+    const key = `${entry.accountCode}:${entry.year}`;
+    if (!codes.has(entry.accountCode) || !Number.isInteger(entry.year) ||
+        entryKeys.has(key) || !Number.isFinite(entry.actualAmount)) {
+      throw invalidPublished(`Published financial entry ${key} is invalid`);
+    }
+    entryKeys.add(key);
+  }
+
+  const groupKeys = new Set<string>();
+  for (const actual of groupActuals) {
+    const key = `${actual.kind}:${actual.group}:${actual.year}`;
+    if (actual.group.trim() === "" ||
+        !FINANCIAL_ACCOUNT_KINDS.includes(actual.kind) ||
+        !Number.isInteger(actual.year) || groupKeys.has(key) ||
+        !Number.isFinite(actual.actualAmount) || actual.active !== true) {
+      throw invalidPublished(`Published group actual ${key} is invalid`);
+    }
+    groupKeys.add(key);
+  }
 }
 
 function validatePublishCommand(
@@ -266,8 +404,20 @@ function collectEvidenceIds(
   return ids;
 }
 
+/**
+ * Collections added to PublishableContent after publications already existed.
+ * See fingerprintPublishableContent.
+ */
+const ADDITIVE_CONTENT_KEYS = [
+  "financialAccounts",
+  "financialEntries",
+  "groupActuals",
+] as const;
+
 function fingerprintPublishableContent(content: PublishableContent): string {
-  const canonical = JSON.stringify(sortObjectKeysRecursively(content));
+  const canonical = JSON.stringify(
+    sortObjectKeysRecursively(withoutEmptyAdditiveKeys(content)),
+  );
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
   const mask = 0xffffffffffffffffn;
@@ -276,6 +426,41 @@ function fingerprintPublishableContent(content: PublishableContent): string {
     hash = (hash * prime) & mask;
   }
   return `fnv1a64:${hash.toString(16).padStart(16, "0")}`;
+}
+
+/**
+ * Drops the additive collections when they are empty, so that content which
+ * carries no account data fingerprints exactly as it did before those keys
+ * existed.
+ *
+ * THIS IS LOAD-BEARING, and measured rather than assumed. The fingerprint is
+ * recomputed and compared on every read (validatePublishedDataSnapshot), so a
+ * change in how content canonicalises does not quietly alter future hashes -
+ * it invalidates every publication already stored. JSON.stringify omits a key
+ * whose value is `undefined` but serialises `[]`, so defaulting a missing
+ * collection to an empty array before hashing would have changed the hash of
+ * every publication written before this change and made all of them
+ * unloadable, taking the public overview and every visitor session with them:
+ *
+ *   {"events":[],"housingCompany":{...}}                    6ba51ee380fcbe85
+ *   {"events":[],"financialAccounts":[],"housingCompany":…} a348830ebf37eb38
+ *
+ * Omitting the empty case makes absent and empty hash alike, which also keeps
+ * the admin dashboard honest: without it, a company with no account data would
+ * report publishable changes forever, because its fingerprint could never
+ * match a publication written before the keys existed.
+ *
+ * Only these keys get the rule. Applying it to every empty collection would
+ * change the hash of publications that legitimately stored `"observations":[]`,
+ * which is the same breakage from the other direction.
+ */
+function withoutEmptyAdditiveKeys(content: PublishableContent): unknown {
+  const result: Record<string, unknown> = { ...content };
+  for (const key of ADDITIVE_CONTENT_KEYS) {
+    const value = content[key] as readonly unknown[] | undefined;
+    if (value === undefined || value.length === 0) delete result[key];
+  }
+  return result;
 }
 
 function sortObjectKeysRecursively(value: unknown): unknown {

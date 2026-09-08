@@ -651,6 +651,49 @@ export type PublishedBuildingEvent =
   | ActualBuildingEvent;
 
 /** Immutable public version created from one exact admin workspace revision. */
+/**
+ * The account data a publication carries, and no more.
+ *
+ * A publication exists so the liquidity model can compute its own operating
+ * figures instead of reading hand-entered ones, and these are exactly the
+ * fields that computation reads (src/finance/operatingFigures.ts). Everything
+ * else the admin holds about an account stays admin-side.
+ *
+ * THE OMISSIONS ARE THE POINT, not an optimisation. `name` and `notes` are
+ * where a chart of accounts says which property manager bills what and what a
+ * particular bank charge was for; `sourceIds` names internal documents. None
+ * of it is needed to compute a number, and a publication is immutable - once
+ * something is in one it cannot be taken out again without deleting the whole
+ * publication. So the narrowest projection that still computes is also the
+ * only one that stays safe to have published forever.
+ *
+ * These are stored in the publication; they are deliberately NOT part of
+ * VisitorPublishedView, so nothing here reaches the unauthenticated public
+ * endpoint. See visitorPublishedView.ts and its exclusion test.
+ */
+export interface PublishedFinancialAccount {
+  readonly accountCode: string;
+  readonly name?: undefined;
+  readonly kind: FinancialAccountKind;
+  readonly group: string;
+  readonly nature?: FinancialAccountNature;
+}
+
+export interface PublishedFinancialEntry {
+  readonly accountCode: string;
+  readonly year: number;
+  /** Required here: an entry with only a budget figure is never published. */
+  readonly actualAmount: number;
+}
+
+export interface PublishedGroupActual {
+  readonly group: string;
+  readonly kind: FinancialAccountKind;
+  readonly year: number;
+  readonly actualAmount: number;
+  readonly active: boolean;
+}
+
 export interface PublishedDataSnapshot {
   readonly companyId: string;
   readonly publicationVersion: number;
@@ -664,6 +707,9 @@ export interface PublishedDataSnapshot {
   readonly costEvidence: readonly CostEvidence[];
   readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
   readonly events: readonly PublishedBuildingEvent[];
+  readonly financialAccounts: readonly PublishedFinancialAccount[];
+  readonly financialEntries: readonly PublishedFinancialEntry[];
+  readonly groupActuals: readonly PublishedGroupActual[];
   readonly publishedAt: string;
   readonly publishedBy: string;
   readonly sourceIds: readonly string[];

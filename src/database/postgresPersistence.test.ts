@@ -10,6 +10,7 @@ import { DomainValidationError } from "../domain/types.js";
 import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { publishAdminRevision } from "../application/publishingApplicationService.js";
+import { buildVisitorPublishedView } from "../publishing/visitorPublishedView.js";
 import {
   applyVisitorSessionChanges,
   createVisitorSession,
@@ -473,6 +474,58 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     ]) {
       expect(collection).toEqual([]);
     }
+  });
+
+  it("loads a publication written before the account collections existed", async () => {
+    // The publication counterpart of the admin test above, and sharper: a
+    // publication is validated on every read, and that read serves the
+    // unauthenticated public overview and every visitor session. A row stored
+    // before financialAccounts/financialEntries/groupActuals existed has no
+    // such JSONB keys, so without withDefaultedPublishedCollections the first
+    // load after deploying this change takes the public site down.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    const before = await publications.loadCurrent(COMPANY_ID);
+    expect(before).toBeDefined();
+
+    await pool.query(
+      `UPDATE tm_publications
+       SET payload = payload
+         - 'financialAccounts' - 'financialEntries' - 'groupActuals'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.loadCurrent(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.financialAccounts).toEqual([]);
+    expect(loaded!.financialEntries).toEqual([]);
+    expect(loaded!.groupActuals).toEqual([]);
+    // The stored fingerprint was computed without those keys. Defaulting them
+    // to [] repairs the validation only because the fingerprint treats an
+    // empty additive collection as absent; if that rule is ever dropped, the
+    // hash comparison inside validatePublishedDataSnapshot fails here.
+    expect(loaded!.contentFingerprint).toBe(before!.contentFingerprint);
+  });
+
+  it("keeps a stripped publication loadable through the visitor path too", async () => {
+    // loadCurrent is not the only reader: the public overview builds its view
+    // from the same snapshot and validates it again on the way out.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    await pool.query(
+      `UPDATE tm_publications
+       SET payload = payload
+         - 'financialAccounts' - 'financialEntries' - 'groupActuals'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const view = buildVisitorPublishedView((await publications.loadCurrent(COMPANY_ID))!);
+
+    expect(view.publicationVersion).toBe(1);
+    expect(view).not.toHaveProperty("financialAccounts");
   });
 
   it("loads a snapshot written before the maintenance-plan coverage existed", async () => {
