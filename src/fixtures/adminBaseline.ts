@@ -49,6 +49,6 @@ export const adminBaselineSnapshot = createAdminDataSnapshot({
   assets: initialExcelAssets,
   costEvidence: initialExcelCostGaps,
   events: initialExcelEvents,
-  updatedAt: "2026-07-17T15:00:00+03:00",
+  updatedAt: "2026-07-17T15:00:00.206+03:00",
   updatedBy: "admin:pasi",
 });
