@@ -496,7 +496,7 @@
             <header class="view-head">
               <div>
                 <h2 id="required-collection-title">Vastiketarve</h2>
-                <p class="view-lead muted">Tunnetuille kustannuksille vaadittu korjauskeräys verrattuna nykyiseen.</p>
+                <p class="view-lead muted">Tunnetuille kustannuksille vaadittu hoitokate verrattuna nykyiseen.</p>
               </div>
             </header>
             <div id="required-collection-body"></div>
@@ -597,10 +597,11 @@
                 <label>Kassa €<input name="currentCash" type="number" step="0.01"></label>
                 <label>12 kk hoitokulut €<input name="trailing12mOperatingCosts" type="number" step="0.01"></label>
                 <label>Puskurikuukaudet<input name="bufferMonths" type="number" step="0.1" min="0.1"></label>
-                <label>Optimistic keräys €/v<input name="optimistic" type="number" step="0.01" min="0"></label>
-                <label>Base keräys €/v<input name="base" type="number" step="0.01" min="0"></label>
-                <label>Stress keräys €/v<input name="stress" type="number" step="0.01" min="0"></label>
+                <label>Optimistic hoitokate €/v<input name="optimistic" type="number" step="0.01"></label>
+                <label>Base hoitokate €/v<input name="base" type="number" step="0.01"></label>
+                <label>Stress hoitokate €/v<input name="stress" type="number" step="0.01"></label>
               </div>
+              <p class="muted" id="visitor-liquidity-note"></p>
               <button type="submit">Päivitä oletukset</button>
             </form>
 

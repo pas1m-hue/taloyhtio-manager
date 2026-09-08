@@ -2214,134 +2214,6 @@ export function buildExpenseGroupViewModel(accounts, entries) {
 const REPAIR_GROUP_NAME = "KORJAUKSET";
 
 /**
- * True when a grouped-expense group holds repair costs rather than recurring
- * maintenance. The group *name* is the primary signal because it is the only
- * one real data actually carries: parseFinancialPasteInput() has no `nature`
- * column, so imported accounts leave `nature` undefined and only the manual
- * account form can set it. `nature` is therefore accepted as a secondary
- * signal for hand-entered accounts — a group counts as repairs when every
- * account that declares a nature declares "repair".
- * @param {{ group: string, accountRows: ReadonlyArray<{ nature?: unknown }> }} group
- */
-function isRepairGroup(group) {
-  if (String(group.group ?? "").trim().toUpperCase() === REPAIR_GROUP_NAME) return true;
-  const natures = group.accountRows
-    .map((row) => row.nature)
-    .filter((value) => typeof value === "string" && value !== "");
-  return natures.length > 0 && natures.every((value) => value === "repair");
-}
-
-/**
- * Derives the trailing-12m operating-cost divisor from account data
- * (handoff feature/trailing-12m §1) instead of the hand-entered
- * LiquidityBaselineRecord placeholder, which aged unnoticed:
- *
- *   latest actual year's costs excluding repairs
- *   + mean of the repair actuals over every year that has one
- *
- * The formula is deliberately asymmetric. Every other group is stable enough
- * that the latest year stands for itself, but repairs do not follow the
- * financial year at all (2025 came in 58,7 % under budget, 2026 is
- * overrunning), so a single year says nothing about their normal level while
- * a multi-year mean starts to. The sample is thin today — two years, one of
- * them known to be exceptional — and that is an accepted limitation: the mean
- * is taken over however many years have repair actuals, one or ten, and
- * improves on its own as older and newer financial years are imported.
- *
- * DEPRECIATION (handoff §4, checked and closed, do not re-derive): poistot are
- * NOT in these figures and no exclusion is needed. The workbook's ten expense
- * groups contain no depreciation row, and the arithmetic settles it — 2025
- * hoitokate is 43 906,75 − 37 911,01 = 5 995,74 while retained earnings moved
- * 5 173,74, and the 822,00 difference is exactly the year's building
- * depreciation (1 593 017,83 → 1 592 195,83 on the balance sheet). It is
- * subtracted below hoitokate, not inside these expense groups. The one
- * consequence worth knowing: were an expense account in a "POISTOT" group ever
- * imported, this would count it — a documented limitation, not a filter to
- * build against data that does not exist.
- *
- * Never silently substitutes zero for a missing repair group (DATA GAP
- * principle): an unfound group returns `status: "unavailable"` so the caller
- * can show "—" and say what is missing. Dropping the normalisation instead
- * would not merely be less accurate, it would be biased in the flattering
- * direction — too small a divisor, too healthy a ratio.
- *
- * Actuals are stored negative (expense sign convention); the returned figures
- * are positive euro amounts, matching LiquidityBaselineRecord's `>= 0` rule,
- * with Math.abs applied only at that final step.
- *
- * @param {Parameters<typeof buildExpenseGroupViewModel>[0]} [accounts]
- * @param {Parameters<typeof buildExpenseGroupViewModel>[1]} [entries]
- * @returns {{
- *   status: "available"|"unavailable",
- *   value: number|null,
- *   latestActualYear: number|null,
- *   latestYearCostsExRepairs: number|null,
- *   repairAverage: number|null,
- *   repairYears: number[],
- *   reason: null|"no_expense_actuals"|"repair_group_missing"|"repair_actual_missing_for_latest_year",
- * }}
- */
-export function computeTrailing12mOperatingCosts(accounts, entries) {
-  /** @param {"no_expense_actuals"|"repair_group_missing"|"repair_actual_missing_for_latest_year"} reason */
-  const unavailable = (reason) => ({
-    status: /** @type {const} */ ("unavailable"),
-    value: null,
-    latestActualYear: null,
-    latestYearCostsExRepairs: null,
-    repairAverage: null,
-    repairYears: [],
-    reason,
-  });
-
-  const core = buildGroupedFinanceCore(accounts, entries, "expense");
-  if (core.isEmpty || core.actualYears.length === 0) {
-    return unavailable("no_expense_actuals");
-  }
-
-  const repairGroups = core.groups.filter(isRepairGroup);
-  if (repairGroups.length === 0) return unavailable("repair_group_missing");
-
-  /** Repair total per year, present only for years some repair group reports. */
-  const repairByYear = new Map();
-  for (const year of core.actualYears) {
-    const values = repairGroups
-      .map((group) => group.actuals[year])
-      .filter((value) => value !== undefined);
-    if (values.length > 0) {
-      repairByYear.set(year, values.reduce((sum, value) => sum + value, 0));
-    }
-  }
-  if (repairByYear.size === 0) return unavailable("repair_group_missing");
-
-  const latestActualYear = core.actualYears[core.actualYears.length - 1];
-  const latestRepairs = repairByYear.get(latestActualYear);
-  if (latestRepairs === undefined) {
-    return unavailable("repair_actual_missing_for_latest_year");
-  }
-
-  const latestTotalValues = core.groups
-    .map((group) => group.actuals[latestActualYear])
-    .filter((value) => value !== undefined);
-  const latestTotal = latestTotalValues.reduce((sum, value) => sum + value, 0);
-
-  const repairYears = [...repairByYear.keys()].sort((a, b) => a - b);
-  const repairSum = repairYears.reduce((sum, year) => sum + repairByYear.get(year), 0);
-
-  const latestYearCostsExRepairs = Math.abs(latestTotal - latestRepairs);
-  const repairAverage = Math.abs(repairSum / repairYears.length);
-
-  return {
-    status: "available",
-    value: latestYearCostsExRepairs + repairAverage,
-    latestActualYear,
-    latestYearCostsExRepairs,
-    repairAverage,
-    repairYears,
-    reason: null,
-  };
-}
-
-/**
  * The Finnish note shown beside "Kassa kuukausina hoitokuluja", saying what
  * the divisor actually contains (handoff feature/trailing-12m §6). This is
  * not cosmetic: the formula is deliberately asymmetric — one year for every
@@ -2351,7 +2223,18 @@ export function computeTrailing12mOperatingCosts(accounts, entries) {
  * Money formatting is injected rather than done here so this module stays
  * free of Intl and view concerns; app.js passes its own `money()`.
  *
- * @param {ReturnType<typeof computeTrailing12mOperatingCosts>} computed
+ * THE FIGURE IS NO LONGER COMPUTED IN THE BROWSER. It arrives on the admin
+ * read model as calculations.operatingFigures.costs, from
+ * src/finance/operatingFigures.ts, because the liquidity forecast needs the
+ * same number server-side for the visitor and two implementations of it is
+ * what produced 37 567,84 on this card and 34 029,46 in the cash path. What
+ * stays here is the sentence, which is a view concern.
+ *
+ * @param {{ status: "available", latestActualYear: number,
+ *           costsExcludingRepairs: number, repairAverage: number,
+ *           repairYears: ReadonlyArray<number>,
+ *           trailing12mOperatingCosts: number }
+ *         | { status: "unavailable", reason: string }} computed
  * @param {(value: number) => string} formatMoney
  * @returns {string}
  */
@@ -2377,13 +2260,66 @@ export function buildTrailing12mNote(computed, formatMoney) {
   const yearsLabel = years.length === 1
     ? `vuodelta ${years[0]}`
     : `vuosilta ${years[0]}–${years[years.length - 1]}`;
-  return `Kassa kuukausina hoitokuluja: jakaja ${formatMoney(computed.value)} on laskettu ` +
+  return `Kassa kuukausina hoitokuluja: jakaja ${formatMoney(computed.trailing12mOperatingCosts)} on laskettu ` +
     `tilidatasta = vuoden ${computed.latestActualYear} kulut ilman korjauksia ` +
-    `(${formatMoney(computed.latestYearCostsExRepairs)}) + korjausten keskiarvo ` +
+    `(${formatMoney(computed.costsExcludingRepairs)}) + korjausten keskiarvo ` +
     `${yearsLabel} (${formatMoney(computed.repairAverage)}, ${years.length} ` +
     `${years.length === 1 ? "vuosi" : "vuotta"}). Korjaukset normalisoidaan keskiarvolla, ` +
     `koska ne eivät noudata tilikautta; muut kuluryhmät ovat vakaita ja niistä ` +
     `käytetään viimeisimmän vuoden toteumaa sellaisenaan.`;
+}
+
+/**
+ * The note shown wherever hoitokate is presented as the amount accruing to
+ * cash each year.
+ *
+ * Two things a reader cannot infer from the number and would otherwise assume
+ * wrongly. First, the price level: it is stated in the latest actual year's
+ * terms with no inflation applied, deliberately, because the repair costs it
+ * is weighed against in the cash path are also in today's money - indexing one
+ * side and not the other would make the cash look like it stretches further
+ * than it does. Second, that repairs are already subtracted out, because the
+ * cash path bills them separately from approved repair events; counting them
+ * here too would charge them twice.
+ *
+ * `supersededCollection` is the liquidity baseline's stored figure, which is
+ * no longer an input. It is shown rather than dropped for the same reason the
+ * Budjetti vs. toteuma view names its budget source: a number that used to
+ * drive the model and now does not should say so, or the next person to read
+ * the record will assume it still does.
+ *
+ * @param {{ status: "available", latestActualYear: number, income: number,
+ *           costsExcludingRepairs: number, operatingMargin: number }
+ *         | { status: "unavailable", reason: string }} margin
+ * @param {number|undefined} supersededCollection
+ * @param {(value: number) => string} formatMoney
+ * @returns {string}
+ */
+export function buildOperatingMarginNote(margin, supersededCollection, formatMoney) {
+  if (margin.status !== "available") {
+    if (margin.reason === "no_income_actuals") {
+      return "Hoitokate: tulototeumia ei ole tuotu, joten hoitokatetta ei voi laskea. " +
+        "Nollaa ei käytetä, koska se näyttäisi koko hoitokulun vajeena.";
+    }
+    if (margin.reason === "income_missing_for_latest_year") {
+      return "Hoitokate: viimeisimmältä kulutoteumavuodelta puuttuu tulototeuma, " +
+        "joten tuloja ja kuluja ei voi lukea samalta vuodelta. Hoitokate näytetään " +
+        "vasta kun molemmat ovat samalta tilikaudelta.";
+    }
+    return "Hoitokate: kulutoteumia ei voi lukea, joten hoitokatetta ei voi laskea. " +
+      "Sama syy kuin 12 kk hoitokuluissa.";
+  }
+
+  const superseded = typeof supersededCollection === "number"
+    ? ` Aiempi käsin syötetty vuosikeräys ${formatMoney(supersededCollection)}/v ei ole enää käytössä.`
+    : "";
+  return `Hoitokate ${formatMoney(margin.operatingMargin)}/v = vuoden ` +
+    `${margin.latestActualYear} tulot ${formatMoney(margin.income)} − saman vuoden ` +
+    `hoitokulut ilman korjauksia ${formatMoney(margin.costsExcludingRepairs)}. ` +
+    `Korjaukset on vähennetty, koska kassapolku laskuttaa ne erikseen ` +
+    `hyväksytyistä korjaustapahtumista. Luku on vuoden ` +
+    `${margin.latestActualYear} tasossa eikä sisällä inflaatiota — samoin kuin ` +
+    `kassapolun korjauskustannukset.${superseded}`;
 }
 
 /** Share of a column's width taken by its bars; the rest is the gap between columns. */

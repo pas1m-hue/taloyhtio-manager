@@ -748,6 +748,47 @@ export const DEFAULT_OPERATING_BUFFER_MONTHS = 3.5 as const;
 
 export type OperatingBufferBasis = "suggested" | "user_override";
 
+/**
+ * Results of the shared operating-figure calculation
+ * (src/finance/operatingFigures.ts). They live here rather than beside the
+ * calculation because both read models and the session model carry them, and
+ * a domain type importing from a calculation module would invert the
+ * dependency the rest of this file keeps.
+ */
+export type OperatingFiguresUnavailableReason =
+  | "no_expense_actuals"
+  | "repair_group_missing"
+  | "repair_actual_missing_for_latest_year"
+  | "no_income_actuals"
+  | "income_missing_for_latest_year";
+
+export interface OperatingCostFigures {
+  readonly status: "available";
+  /** Latest year with expense actuals; both figures are stated in its terms. */
+  readonly latestActualYear: number;
+  /** That year's expenses with the repair group taken out, as a magnitude. */
+  readonly costsExcludingRepairs: number;
+  /** Mean of the repair group over every year that reports one. */
+  readonly repairAverage: number;
+  readonly repairYears: readonly number[];
+  /** costsExcludingRepairs + repairAverage: the operating-buffer divisor. */
+  readonly trailing12mOperatingCosts: number;
+}
+
+export interface OperatingMarginFigures {
+  readonly status: "available";
+  readonly latestActualYear: number;
+  readonly income: number;
+  readonly costsExcludingRepairs: number;
+  /** income - costsExcludingRepairs. Negative is a real, expressible result. */
+  readonly operatingMargin: number;
+}
+
+export interface OperatingFiguresUnavailable {
+  readonly status: "unavailable";
+  readonly reason: OperatingFiguresUnavailableReason;
+}
+
 export interface OperatingBufferResult {
   readonly bufferMonths: number;
   readonly suggestedOperatingBuffer: number;
@@ -998,6 +1039,16 @@ export type SessionLiquidityModel =
   | {
       readonly status: "available";
       readonly assumptions: EffectiveSessionLiquidityAssumptions;
+      /**
+       * The derived figures behind the assumptions, so the visitor form can
+       * say which accounting year its defaults are stated in and that they
+       * carry no inflation. Without it the form shows two euro amounts a
+       * visitor would reasonably read as forecasts of next year.
+       */
+      readonly operatingFigures: {
+        readonly costs: OperatingCostFigures | OperatingFiguresUnavailable;
+        readonly margin: OperatingMarginFigures | OperatingFiguresUnavailable;
+      };
       readonly forecast: LiquidityForecastResult;
     }
   | {

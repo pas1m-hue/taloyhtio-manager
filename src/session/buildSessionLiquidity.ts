@@ -98,6 +98,7 @@ export function buildSessionLiquidityModel(
   return {
     status: "available",
     assumptions,
+    operatingFigures: { costs: costFigures, margin: marginFigures },
     forecast: buildForecast(
       projection,
       workspace,

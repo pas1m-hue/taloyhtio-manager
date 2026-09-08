@@ -7,7 +7,6 @@ import {
   buildBalanceSheetViewModel,
   computeBalanceReconciliation,
   computeBalanceRatios,
-  computeTrailing12mOperatingCosts,
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
@@ -30,6 +29,7 @@ import {
   buildSaveHousingCompanyOperation,
   buildSummaryChartModel,
   buildTrailing12mNote,
+  buildOperatingMarginNote,
   buildSaveObservationOperation,
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
@@ -2388,174 +2388,26 @@ describe("buildExpenseGroupViewModel", () => {
  * one maintenance group standing for the nine stable ones, plus KORJAUKSET.
  * Actuals negative, as the expense sign convention stores them.
  */
-const TRAILING_ACCOUNTS = [
-  {
-    accountCode: "5300", name: "Hoitokulut yhteensä", kind: "expense",
-    group: "HALLINTOPALVELUT", controllability: "fixed",
-  },
-  {
-    accountCode: "6100", name: "Korjaukset", kind: "expense",
-    group: "KORJAUKSET", controllability: "variable",
-  },
-];
-/** Hoito 34 029,46 in 2025 and 31 412,66 in 2024; KORJAUKSET 3 881,55 / 5 348,53. */
-const TRAILING_ENTRIES = [
-  { accountCode: "5300", year: 2024, actualAmount: -31_412.66 },
-  { accountCode: "5300", year: 2025, actualAmount: -34_029.46 },
-  { accountCode: "6100", year: 2024, actualAmount: -5_348.53 },
-  { accountCode: "6100", year: 2025, actualAmount: -3_881.55 },
-];
-
-describe("computeTrailing12mOperatingCosts", () => {
-  it("computes latest-year costs excluding repairs plus the multi-year repair mean", () => {
-    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
-
-    expect(result.status).toBe("available");
-    expect(result.latestActualYear).toBe(2025);
-    expect(result.latestYearCostsExRepairs).toBeCloseTo(34_029.46, 2);
-    expect(result.repairAverage).toBeCloseTo(4_615.04, 2);
-    expect(result.repairYears).toEqual([2024, 2025]);
-    expect(result.value).toBeCloseTo(38_644.50, 2);
-    expect(result.reason).toBeNull();
-  });
-
-  it("returns a positive divisor even though the underlying actuals are negative", () => {
-    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
-    expect(result.value).toBeGreaterThan(0);
-  });
-
-  it("averages a single year to itself instead of failing on a thin sample", () => {
-    const oneYear = TRAILING_ENTRIES.filter((entry) => entry.year === 2025);
-    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, oneYear);
-
-    expect(result.status).toBe("available");
-    expect(result.repairYears).toEqual([2025]);
-    expect(result.repairAverage).toBeCloseTo(3_881.55, 2);
-    expect(result.value).toBeCloseTo(34_029.46 + 3_881.55, 2);
-  });
-
-  it("widens the repair mean on its own as older financial years are imported", () => {
-    const withHistory = [
-      ...TRAILING_ENTRIES,
-      { accountCode: "5300", year: 2023, actualAmount: -32_886.57 },
-      { accountCode: "6100", year: 2023, actualAmount: -1_385.06 },
-    ];
-    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, withHistory);
-
-    expect(result.latestActualYear).toBe(2025);
-    expect(result.repairYears).toEqual([2023, 2024, 2025]);
-    expect(result.repairAverage).toBeCloseTo((1_385.06 + 5_348.53 + 3_881.55) / 3, 2);
-    expect(result.value).toBeCloseTo(34_029.46 + 3_538.38, 2);
-  });
-
-  it("reports unavailable rather than substituting zero when no repair group exists", () => {
-    const renamed = TRAILING_ACCOUNTS.map((account) =>
-      account.group === "KORJAUKSET" ? { ...account, group: "REMONTIT" } : account
-    );
-    const result = computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES);
-
-    expect(result.status).toBe("unavailable");
-    expect(result.reason).toBe("repair_group_missing");
-    expect(result.value).toBeNull();
-    expect(result.repairAverage).toBeNull();
-  });
-
-  it("accepts nature: \"repair\" as a secondary signal for a hand-entered group", () => {
-    const renamed = TRAILING_ACCOUNTS.map((account) =>
-      account.group === "KORJAUKSET"
-        ? { ...account, group: "REMONTIT", nature: "repair" }
-        : account
-    );
-    const result = computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES);
-
-    expect(result.status).toBe("available");
-    expect(result.value).toBeCloseTo(38_644.50, 2);
-  });
-
-  it("reports unavailable when repairs have no actual for the latest actual year", () => {
-    const entries = TRAILING_ENTRIES.filter(
-      (entry) => !(entry.accountCode === "6100" && entry.year === 2025),
-    );
-    const result = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, entries);
-
-    expect(result.status).toBe("unavailable");
-    expect(result.reason).toBe("repair_actual_missing_for_latest_year");
-    expect(result.value).toBeNull();
-  });
-
-  it("reports unavailable when there is no expense data at all", () => {
-    expect(computeTrailing12mOperatingCosts([], []).reason).toBe("no_expense_actuals");
-    expect(computeTrailing12mOperatingCosts(undefined, undefined).status).toBe("unavailable");
-  });
-
-  it("reports unavailable when expense rows carry budgets but no actuals", () => {
-    const budgetsOnly = [{ accountCode: "5300", year: 2026, budgetAmount: -43_470.09 }];
-    expect(computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, budgetsOnly).reason)
-      .toBe("no_expense_actuals");
-  });
-
-  it("ignores income accounts", () => {
-    const withIncome = [
-      ...TRAILING_ACCOUNTS,
-      { accountCode: "3000", name: "Hoitovastike", kind: "income", group: "HOITOVASTIKKEET" },
-    ];
-    const entries = [...TRAILING_ENTRIES, { accountCode: "3000", year: 2025, actualAmount: 43_906.75 }];
-    expect(computeTrailing12mOperatingCosts(withIncome, entries).value).toBeCloseTo(38_644.50, 2);
-  });
-
-  it("documents the depreciation limitation: a POISTOT expense group would be counted", () => {
-    // Handoff §4: poistot are not in the source data (the 822,00 € 2025
-    // depreciation reconciles hoitokate 5 995,74 to retained earnings
-    // 5 173,74, i.e. it sits below the expense groups), so no filter is
-    // built. This pins what would happen if that ever changed, so the
-    // behaviour is a known limitation rather than a surprise.
-    const withDepreciation = [
-      ...TRAILING_ACCOUNTS,
-      { accountCode: "7000", name: "Rakennusten poisto", kind: "expense", group: "POISTOT" },
-    ];
-    const entries = [...TRAILING_ENTRIES, { accountCode: "7000", year: 2025, actualAmount: -822 }];
-    expect(computeTrailing12mOperatingCosts(withDepreciation, entries).value)
-      .toBeCloseTo(38_644.50 + 822, 2);
-  });
-
-  it("feeds computeBalanceRatios: 22 208,49 cash over the computed divisor is ~6.9 months", () => {
-    const computed = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
-    const balanceSnapshot = {
-      id: "b1", asOfDate: "2025-12-31", sourceIds: ["s"],
-      entries: [
-        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208.49 },
-        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2_041.91 },
-      ],
-    };
-    const ratios = computeBalanceRatios(balanceSnapshot, {
-      trailing12mOperatingCosts: computed.value,
-    });
-
-    expect(ratios.monthsOfCash).toBeCloseTo(22_208.49 / (38_644.50 / 12), 2);
-    expect(Number(ratios.monthsOfCash.toFixed(1))).toBe(6.9);
-  });
-
-  it("still reads 7.8 months from the retired hand-entered placeholder", () => {
-    // The change the handoff predicts: 7.8 → 6.9 is expected and correct,
-    // not a regression.
-    const balanceSnapshot = {
-      id: "b1", asOfDate: "2025-12-31", sourceIds: ["s"],
-      entries: [
-        { section: "current_assets", key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208.49 },
-        { section: "liabilities", key: "ostovelat", name: "Ostovelat", amount: 2_041.91 },
-      ],
-    };
-    const ratios = computeBalanceRatios(balanceSnapshot, { trailing12mOperatingCosts: 34_029.46 });
-    expect(Number(ratios.monthsOfCash.toFixed(1))).toBe(7.8);
-  });
-});
-
 describe("buildTrailing12mNote", () => {
   const euro = (value) => `${value.toFixed(2).replace(".", ",")} €`;
 
+  /**
+   * The shape the admin read model delivers as
+   * calculations.operatingFigures.costs. Written out rather than computed:
+   * the figure is produced by src/finance/operatingFigures.ts and tested
+   * there, and what is under test here is the sentence built from it.
+   */
+  const AVAILABLE = {
+    status: "available",
+    latestActualYear: 2025,
+    costsExcludingRepairs: 34_029.46,
+    repairAverage: 4_615.04,
+    repairYears: [2024, 2025],
+    trailing12mOperatingCosts: 38_644.50,
+  };
+
   it("names the year, the parts, and how many years the repair mean covers", () => {
-    const computed = computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, TRAILING_ENTRIES);
-    const note = buildTrailing12mNote(computed, euro);
+    const note = buildTrailing12mNote(AVAILABLE, euro);
 
     expect(note).toContain("38644,50 €");
     expect(note).toContain("vuoden 2025 kulut ilman korjauksia");
@@ -2567,9 +2419,8 @@ describe("buildTrailing12mNote", () => {
   });
 
   it("says \"vuodelta\" and \"1 vuosi\" for a single-year repair mean", () => {
-    const oneYear = TRAILING_ENTRIES.filter((entry) => entry.year === 2025);
     const note = buildTrailing12mNote(
-      computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, oneYear),
+      { ...AVAILABLE, repairYears: [2025], repairAverage: 3_881.55 },
       euro,
     );
 
@@ -2578,11 +2429,8 @@ describe("buildTrailing12mNote", () => {
   });
 
   it("names the missing group and says a zero is not assumed", () => {
-    const renamed = TRAILING_ACCOUNTS.map((account) =>
-      account.group === "KORJAUKSET" ? { ...account, group: "REMONTIT" } : account
-    );
     const note = buildTrailing12mNote(
-      computeTrailing12mOperatingCosts(renamed, TRAILING_ENTRIES),
+      { status: "unavailable", reason: "repair_group_missing" },
       euro,
     );
 
@@ -2591,21 +2439,107 @@ describe("buildTrailing12mNote", () => {
   });
 
   it("tells the user to import cost data when there is none", () => {
-    const note = buildTrailing12mNote(computeTrailing12mOperatingCosts([], []), euro);
+    const note = buildTrailing12mNote(
+      { status: "unavailable", reason: "no_expense_actuals" },
+      euro,
+    );
+
     expect(note).toContain("Liitä tilidataa");
   });
 
   it("explains a repair actual missing from the latest actual year", () => {
-    const entries = TRAILING_ENTRIES.filter(
-      (entry) => !(entry.accountCode === "6100" && entry.year === 2025),
-    );
     const note = buildTrailing12mNote(
-      computeTrailing12mOperatingCosts(TRAILING_ACCOUNTS, entries),
+      { status: "unavailable", reason: "repair_actual_missing_for_latest_year" },
       euro,
     );
 
     expect(note).toContain("viimeisimmältä toteumavuodelta");
     expect(note).toContain("arvausta ei käytetä");
+  });
+});
+
+describe("buildOperatingMarginNote", () => {
+  const euro = (value) => `${value.toFixed(2).replace(".", ",")} €`;
+
+  const AVAILABLE = {
+    status: "available",
+    latestActualYear: 2025,
+    income: 43_906.75,
+    costsExcludingRepairs: 34_029.46,
+    operatingMargin: 9_877.29,
+  };
+
+  it("shows the subtraction rather than asserting the result", () => {
+    const note = buildOperatingMarginNote(AVAILABLE, undefined, euro);
+
+    expect(note).toContain("9877,29 €");
+    expect(note).toContain("43906,75 €");
+    expect(note).toContain("34029,46 €");
+    expect(note).toContain("vuoden 2025 tulot");
+  });
+
+  it("says the price level, because the number looks like a forecast", () => {
+    // Without this a reader takes it for next year's figure. It is last
+    // year's, uninflated on purpose: the repair costs it is weighed against
+    // in the cash path are in today's money too, and indexing one side alone
+    // would make the cash look like it stretches further than it does.
+    const note = buildOperatingMarginNote(AVAILABLE, undefined, euro);
+
+    expect(note).toContain("eikä sisällä inflaatiota");
+    expect(note).toContain("vuoden 2025 tasossa");
+  });
+
+  it("says repairs are already out of it", () => {
+    expect(buildOperatingMarginNote(AVAILABLE, undefined, euro))
+      .toContain("kassapolku laskuttaa ne erikseen");
+  });
+
+  it("names the superseded hand-entered figure when one is stored", () => {
+    // The rule this PR exists to enforce: a number that used to drive the
+    // model and no longer does has to say so, or the next reader assumes it
+    // still does. Same reasoning as the "Budjetin lähde" column.
+    const note = buildOperatingMarginNote(AVAILABLE, 9_680, euro);
+
+    expect(note).toContain("9680,00 €");
+    expect(note).toContain("ei ole enää käytössä");
+  });
+
+  it("says nothing about a superseded figure when none is stored", () => {
+    expect(buildOperatingMarginNote(AVAILABLE, undefined, euro))
+      .not.toContain("ei ole enää käytössä");
+  });
+
+  it("refuses to call missing income a zero hoitokate", () => {
+    // Zero income against real costs would show the entire year's operating
+    // cost as a deficit and present it as a measurement.
+    const note = buildOperatingMarginNote(
+      { status: "unavailable", reason: "no_income_actuals" },
+      9_680,
+      euro,
+    );
+
+    expect(note).toContain("Nollaa ei käytetä");
+    expect(note).not.toContain("9680");
+  });
+
+  it("explains income missing from the latest cost year specifically", () => {
+    const note = buildOperatingMarginNote(
+      { status: "unavailable", reason: "income_missing_for_latest_year" },
+      undefined,
+      euro,
+    );
+
+    expect(note).toContain("samalta tilikaudelta");
+  });
+
+  it("points at the cost-side reason when that is what failed", () => {
+    const note = buildOperatingMarginNote(
+      { status: "unavailable", reason: "repair_group_missing" },
+      undefined,
+      euro,
+    );
+
+    expect(note).toContain("12 kk hoitokuluissa");
   });
 });
 

@@ -1,7 +1,18 @@
 import type {
   FinancialAccountKind,
   FinancialAccountNature,
+  OperatingCostFigures,
+  OperatingFiguresUnavailable,
+  OperatingFiguresUnavailableReason,
+  OperatingMarginFigures,
 } from "../domain/types.js";
+
+export type {
+  OperatingCostFigures,
+  OperatingFiguresUnavailable,
+  OperatingFiguresUnavailableReason,
+  OperatingMarginFigures,
+};
 
 /**
  * The two operating figures the liquidity model needs, derived from account
@@ -55,40 +66,6 @@ export interface FinancialActualsSource {
 
 /** Group whose costs are repairs; matched by name as the account data spells it. */
 const REPAIR_GROUP_NAME = "KORJAUKSET";
-
-export type OperatingFiguresUnavailableReason =
-  | "no_expense_actuals"
-  | "repair_group_missing"
-  | "repair_actual_missing_for_latest_year"
-  | "no_income_actuals"
-  | "income_missing_for_latest_year";
-
-export interface OperatingCostFigures {
-  readonly status: "available";
-  /** Latest year with expense actuals; both figures are stated in its terms. */
-  readonly latestActualYear: number;
-  /** That year's expenses with the repair group taken out, as a magnitude. */
-  readonly costsExcludingRepairs: number;
-  /** Mean of the repair group over every year that reports one. */
-  readonly repairAverage: number;
-  readonly repairYears: readonly number[];
-  /** costsExcludingRepairs + repairAverage: the operating-buffer divisor. */
-  readonly trailing12mOperatingCosts: number;
-}
-
-export interface OperatingMarginFigures {
-  readonly status: "available";
-  readonly latestActualYear: number;
-  readonly income: number;
-  readonly costsExcludingRepairs: number;
-  /** income - costsExcludingRepairs. Negative is a real, expressible result. */
-  readonly operatingMargin: number;
-}
-
-export interface OperatingFiguresUnavailable {
-  readonly status: "unavailable";
-  readonly reason: OperatingFiguresUnavailableReason;
-}
 
 /**
  * The buffer divisor.
