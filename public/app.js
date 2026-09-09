@@ -59,6 +59,7 @@ import {
   validateDeletionMeta,
   validateOperationMeta,
   pickPrefillSource,
+  generateEntityId,
 } from "./adminOperationPayloads.js";
 
 const KNOWN_VIEWS = new Set([
@@ -1045,6 +1046,51 @@ function closeDetailPanel({ restoreFocus = false } = {}) {
 }
 
 /**
+ * Fills a new entity's identifier field from what the user types elsewhere in
+ * the form, and stops for good the moment the user edits the identifier
+ * itself — an identifier someone chose deliberately must never be overwritten
+ * by a later change to the title.
+ *
+ * `titleOf` builds the human string the identifier is derived from, because
+ * the useful title is not always one field's raw value: an observation is
+ * named after its asset and year, not after its prose description.
+ *
+ * Create mode only. In edit mode the field is readonly and the identifier of
+ * a saved entity is never regenerated.
+ */
+function wireIdentifierGeneration(entityType, idFieldId, watchFieldIds, titleOf, existingIds) {
+  const idField = $(`#${idFieldId}`);
+  let idFieldTouched = false;
+  const regenerate = () => {
+    if (idFieldTouched) return;
+    const generated = generateEntityId(entityType, titleOf(), existingIds);
+    // An empty generation means there is nothing to name the entity after
+    // yet; leave whatever is in the field rather than blanking it.
+    if (generated !== "") idField.value = generated;
+  };
+  idField.addEventListener("input", () => { idFieldTouched = true; });
+  for (const watched of watchFieldIds) {
+    const field = $(`#${watched}`);
+    // Text inputs fire input; selects and date pickers fire change.
+    field.addEventListener("input", regenerate);
+    field.addEventListener("change", regenerate);
+  }
+  // Fields that open with a value already selected — an asset select, a
+  // status, the price level year — never fire an event, so seed once.
+  regenerate();
+}
+
+/** The label an identifier should read, for an asset chosen in a select. */
+function assetNameById(assetId) {
+  return state.admin.assets.find((item) => item.id === assetId)?.name ?? "";
+}
+
+/** The year part of an identifier, from a date field that may be empty. */
+function yearOfDateField(id) {
+  return String(fieldValue(id) ?? "").slice(0, 4);
+}
+
+/**
  * Mirrors an entity's own source field into the operation's source field as
  * the user types, unless the user has typed into the operation field
  * directly — an edit there always wins over the prefill, for good.
@@ -1099,6 +1145,13 @@ function openAssetEditor(mode, assetId) {
   $("#asset-form").onsubmit = (event) => submitAssetForm(event, mode);
   $("#asset-cancel").addEventListener("click", closeAssetEditor);
   wireSourceIdsPrefill("asset-source-ids", "asset-op-source-ids");
+  if (mode === "create") {
+    wireIdentifierGeneration(
+      "asset", "asset-id", ["asset-name"],
+      () => fieldValue("asset-name"),
+      model.assets.map((item) => item.id),
+    );
+  }
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -1319,6 +1372,18 @@ function openObservationEditor(mode, observationId) {
   $("#observation-form").onsubmit = (event) => submitObservationForm(event, mode);
   $("#observation-cancel").addEventListener("click", closeObservationEditor);
   wireSourceIdsPrefill("observation-source-ids", "observation-op-source-ids");
+  if (mode === "create") {
+    // Named after its asset and year, the way the observations already in the
+    // data are (observation_condensation_b4_2025). The description is prose —
+    // its opening words are as often a generic preamble as the actual finding,
+    // which makes a poor key.
+    wireIdentifierGeneration(
+      "observation", "observation-id",
+      ["observation-asset", "observation-observed-at"],
+      () => `${assetNameById(fieldValue("observation-asset"))} ${yearOfDateField("observation-observed-at")}`,
+      model.observations.map((item) => item.id),
+    );
+  }
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -1575,6 +1640,22 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
     ["cost-evidence-source-id", "cost-evidence-source-url"],
     "cost-evidence-op-source-ids",
   );
+  if (mode === "create") {
+    // Cost evidence has no name of its own, so the identifier is built from
+    // what actually distinguishes one piece of evidence from another: the
+    // asset it prices, whether it is a quote or an estimate, and the price
+    // level it is quoted in.
+    wireIdentifierGeneration(
+      "cost_evidence", "cost-evidence-id",
+      ["cost-evidence-asset", "cost-evidence-status", "cost-evidence-price-level-year"],
+      () => [
+        assetNameById(fieldValue("cost-evidence-asset")),
+        COST_EVIDENCE_STATUS_LABELS[fieldValue("cost-evidence-status")] ?? "",
+        fieldValue("cost-evidence-price-level-year"),
+      ].join(" "),
+      model.costEvidence.map((item) => item.id),
+    );
+  }
   $("#cost-evidence-status").addEventListener("change", updateCostEvidenceAmountState);
   updateCostEvidenceAmountState();
   $("#cost-evidence-form").onsubmit = (event) => submitCostEvidenceForm(event, mode);
@@ -1975,6 +2056,13 @@ function openEventEditor(mode, eventId, prefill) {
   $("#event-form").onsubmit = (formEvent) => submitEventForm(formEvent, mode);
   $("#event-cancel").addEventListener("click", closeEventEditor);
   wireSourceIdsPrefill("event-source-ids", "event-op-source-ids");
+  if (mode === "create") {
+    wireIdentifierGeneration(
+      "building_event", "event-id", ["event-title"],
+      () => fieldValue("event-title"),
+      model.events.map((item) => item.id),
+    );
+  }
   host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
