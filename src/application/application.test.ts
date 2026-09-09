@@ -9,6 +9,10 @@ import type {
   VisitorSessionBatchCommand,
 } from "../domain/types.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
+import {
+  financialActualsExpected,
+  financialActualsFixture,
+} from "../fixtures/financialActuals.js";
 import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
 import { InMemorySessionWorkspaceRepository } from "../session/sessionRepository.js";
 import {
@@ -178,7 +182,13 @@ function sessionBatch(
 }
 
 async function publishedRepository() {
-  const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+  // With account data, because the published liquidity figures are derived
+  // from it: a publication without it has no forecast at all, which is the
+  // subject of its own test above rather than the setup for every other one.
+  const repository = new InMemoryPublishingRepository([{
+    ...adminBaselineSnapshot,
+    ...financialActualsFixture,
+  }]);
   await publishAdminRevision(repository, publishCommand(0, 0));
   return repository;
 }
@@ -192,7 +202,50 @@ describe("V2.4 application services and UI read models", () => {
     expect(dashboard.publication.publishableChanges).toBe(true);
     expect(dashboard.calculations.projection.scenarios.base.dataGaps.withinHorizon.length)
       .toBeGreaterThan(0);
-    expect(dashboard.calculations.liquidity.status).toBe("available");
+    // The baseline fixture carries no account data, and both liquidity inputs
+    // are now derived from account data rather than hand-entered. A company
+    // that has not imported its accounts therefore has no forecast, and is
+    // told which figures are missing - the DATA GAP rule reaching the
+    // liquidity model. The previous assertion here read "available", on the
+    // strength of two stored numbers that nothing kept current.
+    expect(dashboard.calculations.liquidity).toEqual({
+      status: "unavailable",
+      missingFields: ["trailing12mOperatingCosts", "operatingMargin"],
+    });
+    expect(dashboard.calculations.operatingFigures.costs)
+      .toEqual({ status: "unavailable", reason: "no_expense_actuals" });
+  });
+
+  it("computes both liquidity inputs once the accounts are imported", async () => {
+    const repository = new InMemoryPublishingRepository([{
+      ...adminBaselineSnapshot,
+      ...financialActualsFixture,
+    }]);
+
+    const dashboard = await loadAdminWorkspace(repository, COMPANY_ID, HORIZON);
+
+    const { operatingFigures, liquidity } = dashboard.calculations;
+    if (operatingFigures.costs.status !== "available" ||
+        operatingFigures.margin.status !== "available") {
+      throw new Error("fixture must produce both figures");
+    }
+    expect(operatingFigures.costs.trailing12mOperatingCosts)
+      .toBe(financialActualsExpected.trailing12mOperatingCosts);
+    expect(operatingFigures.margin.operatingMargin)
+      .toBe(financialActualsExpected.operatingMargin);
+
+    if (liquidity.status !== "available") throw new Error("expected a forecast");
+    // The forecast reads the computed figures, not the baseline's stored
+    // 34 029,46 and 9 680 - which is the entire point of the change.
+    expect(liquidity.forecast.scenarios.base.cashPath.annualRepairCollection)
+      .toBe(financialActualsExpected.operatingMargin);
+    // The buffer target is the computed divisor spread over its months, so
+    // asserting it is asserting that the divisor reached the buffer at all.
+    const { bufferMonths, suggestedOperatingBuffer } = liquidity.forecast.operatingBuffer;
+    expect(suggestedOperatingBuffer).toBeCloseTo(
+      financialActualsExpected.trailing12mOperatingCosts / 12 * bufferMonths,
+      2,
+    );
   });
 
   it("reports no workspace or publishable changes immediately after publication", async () => {

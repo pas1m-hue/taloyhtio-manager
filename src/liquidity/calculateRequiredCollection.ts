@@ -6,7 +6,7 @@ import {
   type ScenarioProjection,
 } from "../domain/types.js";
 import { forecastIncompletenessReasons } from "./forecastCompleteness.js";
-import { fromCents, roundRate, toCents } from "./money.js";
+import { fromCents, roundRate, toCents, toSignedCents } from "./money.js";
 
 export interface CalculateRequiredCollectionInput {
   readonly projection: ScenarioProjection;
@@ -48,7 +48,7 @@ export function calculateRequiredCollection(
     "INVALID_OPERATING_BUFFER",
     "operatingBufferTarget",
   );
-  const currentCollectionCents = toCents(
+  const currentCollectionCents = toSignedCents(
     input.currentAnnualRepairCollection,
     "INVALID_COLLECTION_INPUT",
     "currentAnnualRepairCollection",

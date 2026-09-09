@@ -30,9 +30,9 @@ import {
   buildSavePriceLevelConfirmationOperation,
   canSubmitAdminOperation,
   buildTrailing12mNote,
+  buildOperatingMarginNote,
   computeBalanceRatios,
   computeBalanceReconciliation,
-  computeTrailing12mOperatingCosts,
   copyScheduleRowToAllScenarios,
   COST_EVIDENCE_STATUSES,
   countActiveAssets,
@@ -3183,20 +3183,16 @@ function renderBalancePosition() {
   const comparison = buildBalanceComparisonViewModel(snapshot, olderSnapshot);
 
   const reconciliation = computeBalanceReconciliation(snapshot);
-  // The trailing-12m divisor is derived from account data, never from the
-  // liquidity baseline's hand-entered figure (handoff feature/trailing-12m
-  // §5): that value aged unnoticed and is exactly why this is computed.
-  // The baseline still supplies the other liquidity inputs, and the operating
-  // buffer / cash path still read its stored figure - see
-  // docs/claude-code-handoff-likviditeetin-jakaja.md.
-  const trailing12m = computeTrailing12mOperatingCosts(
-    state.admin.financialAccounts,
-    state.admin.financialEntries,
-  );
+  // The divisor arrives computed, from the same module that builds the
+  // liquidity forecast for admin and visitor alike. It used to be computed
+  // here in the browser while the buffer target and cash path read the
+  // baseline record's hand-entered figure, so one company had two 12-month
+  // operating costs: 37 567,84 on this card and 34 029,46 in the cash path.
+  const trailing12m = state.admin.calculations.operatingFigures.costs;
   const ratios = computeBalanceRatios(
     snapshot,
     trailing12m.status === "available"
-      ? { trailing12mOperatingCosts: trailing12m.value }
+      ? { trailing12mOperatingCosts: trailing12m.trailing12mOperatingCosts }
       : undefined,
   );
 
@@ -3335,7 +3331,7 @@ function renderCashpath() {
     <div class="mode-switch" style="margin-bottom:1rem">${tabs}</div>
     ${cashpathCoverageNote(cashPath)}
     <div class="table-wrap"><table>
-      <thead><tr><th>Vuosi</th><th class="num">Avaava kassa</th><th class="num">Vuosikeräys</th><th class="num">Tunnetut kulut</th><th class="num">Päättävä kassa</th><th class="num">Puskuritavoite</th><th class="num">Puskurivaje</th><th class="num">DATA GAP</th></tr></thead>
+      <thead><tr><th>Vuosi</th><th class="num">Avaava kassa</th><th class="num">Hoitokate</th><th class="num">Tunnetut kulut</th><th class="num">Päättävä kassa</th><th class="num">Puskuritavoite</th><th class="num">Puskurivaje</th><th class="num">DATA GAP</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
   for (const button of $$("#cashpath-body [data-cashpath]")) {
@@ -3390,7 +3386,15 @@ function renderRequiredCollection() {
   const liquidity = state.admin.calculations?.liquidity;
   const host = $("#required-collection-body");
   if (liquidity?.status !== "available") { host.innerHTML = liquidityUnavailableBlock(liquidity); return; }
-  host.innerHTML = `<div class="scenario-grid">${SCENARIOS.map((scenario) => {
+  // Says which year the figure is stated in, that repairs are already out of
+  // it, and that the baseline's old hand-entered number no longer drives it.
+  const marginNote = buildOperatingMarginNote(
+    state.admin.calculations.operatingFigures.margin,
+    state.admin.latestLiquidityBaseline?.currentAnnualRepairCollection,
+    money,
+  );
+  host.innerHTML = `<p class="muted">${escapeHtml(marginNote)}</p>
+  <div class="scenario-grid">${SCENARIOS.map((scenario) => {
     const rc = liquidity.forecast.scenarios[scenario].requiredCollection;
     const fn = liquidity.forecast.scenarios[scenario].fundingNeed;
     // Built from this scenario's own cash path, so the years quoted are the
@@ -3404,9 +3408,9 @@ function renderRequiredCollection() {
     return `<article class="card scenario-card">
       <h4>${scenario}</h4>
       <div class="metric">${money(rc.knownCostRequiredAnnualCollection)}</div>
-      <div class="metric-label">vaadittu vuosikeräys tunnetuille kustannuksille</div>
+      <div class="metric-label">vaadittu hoitokate tunnetuille kustannuksille</div>
       <ul>
-        <li>Nykyinen keräys ${money(rc.currentAnnualRepairCollection)}/v</li>
+        <li>Nykyinen hoitokate ${money(rc.currentAnnualRepairCollection)}/v</li>
         <li>Lisätarve ${money(rc.additionalAnnualCollection)}/v</li>
         <li>Lisätarve ${money(rc.additionalMonthlyCollection)}/kk</li>
         ${perApartment === undefined ? "" : `<li>${money(perApartment)}/asunto/kk</li>`}
@@ -3431,8 +3435,9 @@ function liquidityUnavailableBlock(liquidity) {
 const LIQUIDITY_FIELD_LABELS = {
   liquidityBaseline: "Likviditeetin lähtötietue (save_liquidity_baseline)",
   currentCash: "Nykyinen kassa",
-  trailing12mOperatingCosts: "12 kk hoitokulut",
-  currentAnnualRepairCollection: "Nykyinen vuosittainen korjauskeräys",
+  trailing12mOperatingCosts: "12 kk hoitokulut (lasketaan tilidatasta)",
+  currentAnnualRepairCollection: "Hoitokate (lasketaan tilidatasta)",
+  operatingMargin: "Hoitokate (lasketaan tilidatasta)",
 };
 
 /* -------- Publish -------- */
@@ -3653,7 +3658,7 @@ function renderVisitorScenarios(projection, liquidity) {
       <ul>
         <li>${p.horizonEventCount} tapahtumariviä</li>
         <li>${p.dataGaps.withinHorizon.length} DATA GAPia</li>
-        ${liq ? `<li>Vaadittu keräys ${money(liq.requiredCollection.knownCostRequiredAnnualCollection)}/v</li><li>${liq.fundingNeed.firstFundingNeedYear ? `Ensimmäinen puskurivaje ${liq.fundingNeed.firstFundingNeedYear}` : "Ei puskurivajetta tunnetuilla kustannuksilla"}</li>` : "<li>Likviditeettitiedot puuttuvat</li>"}
+        ${liq ? `<li>Vaadittu hoitokate ${money(liq.requiredCollection.knownCostRequiredAnnualCollection)}/v</li><li>${liq.fundingNeed.firstFundingNeedYear ? `Ensimmäinen puskurivaje ${liq.fundingNeed.firstFundingNeedYear}` : "Ei puskurivajetta tunnetuilla kustannuksilla"}</li>` : "<li>Likviditeettitiedot puuttuvat</li>"}
         ${liq ? buildForecastCompletenessLines(liq.requiredCollection.forecastIncompleteReasons, liq.cashPath).map((line) => `<li><span class="${line.tone}">${escapeHtml(line.text)}</span></li>`).join("") : ""}
       </ul>
     </article>`;
@@ -3661,9 +3666,23 @@ function renderVisitorScenarios(projection, liquidity) {
 }
 
 function fillLiquidityForm(model) {
-  if (model.liquidity.status !== "available") return;
+  const note = $("#visitor-liquidity-note");
+  if (model.liquidity.status !== "available") {
+    if (note) note.textContent = "";
+    return;
+  }
   const form = $("#visitor-liquidity-form");
   const a = model.liquidity.assumptions;
+  // The fields are prefilled with figures derived from the publication's
+  // account data, not with next year's forecast. A visitor changing them is
+  // the point of a session; assuming they already include inflation is not.
+  if (note) {
+    note.textContent = buildOperatingMarginNote(
+      model.liquidity.operatingFigures.margin,
+      undefined,
+      money,
+    );
+  }
   form.elements.currentCash.value = a.currentCash;
   form.elements.trailing12mOperatingCosts.value = a.trailing12mOperatingCosts;
   form.elements.bufferMonths.value = a.operatingBufferSettings.bufferMonths ?? "";

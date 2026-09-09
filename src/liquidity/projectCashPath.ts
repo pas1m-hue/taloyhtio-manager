@@ -6,7 +6,7 @@ import {
   type ScenarioCashPath,
   type ScenarioProjection,
 } from "../domain/types.js";
-import { fromCents, toCents } from "./money.js";
+import { fromCents, toCents, toSignedCents } from "./money.js";
 
 export interface ProjectCashPathInput {
   readonly projection: ScenarioProjection;
@@ -44,7 +44,7 @@ export function projectCashPath(
     "INVALID_CASH_INPUT",
     "initialCash",
   );
-  const annualCollectionCents = toCents(
+  const annualCollectionCents = toSignedCents(
     input.annualRepairCollection,
     "INVALID_COLLECTION_INPUT",
     "annualRepairCollection",

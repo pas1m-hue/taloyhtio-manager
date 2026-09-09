@@ -326,9 +326,8 @@ function withDefaultedAdminCollections(
 }
 
 function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
-  const payload = parsePayload<PublishedDataSnapshot>(
-    row.payload,
-    "published snapshot",
+  const payload = withDefaultedPublishedCollections(
+    parsePayload<PublishedDataSnapshot>(row.payload, "published snapshot"),
   );
   const publicationVersion = integer(
     row.publication_version,
@@ -351,6 +350,38 @@ function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
   }
   validatePublishedDataSnapshot(payload);
   return clone(payload);
+}
+
+/**
+ * The publication-side counterpart to withDefaultedAdminCollections, needed
+ * for the same reason and one more.
+ *
+ * Publications are stored as a single JSONB blob with no migration path, so a
+ * row written before the account collections existed simply has no such key
+ * and arrives as `undefined` despite the static type.
+ *
+ * validatePublishedDataSnapshot tolerates that shape itself, so this is not
+ * what keeps an old row loadable - it is what stops `undefined` from leaving
+ * the repository under a type that promises an array. The liquidity model
+ * reads these three collections straight off the loaded snapshot
+ * (buildSnapshotCalculations), and an `undefined` there is the "is not
+ * iterable" failure that took the admin workspace down in vaihe 3A, one layer
+ * further along and on the path that serves the public overview.
+ *
+ * Defaulting to `[]` here is safe only because the fingerprint treats an empty
+ * additive collection as absent (see withoutEmptyAdditiveKeys). Were that not
+ * so, this would satisfy the type and break the hash comparison three lines
+ * later.
+ */
+function withDefaultedPublishedCollections(
+  payload: PublishedDataSnapshot,
+): PublishedDataSnapshot {
+  return {
+    ...payload,
+    financialAccounts: payload.financialAccounts ?? [],
+    financialEntries: payload.financialEntries ?? [],
+    groupActuals: payload.groupActuals ?? [],
+  };
 }
 
 function parsePayload<T>(value: unknown, label: string): T {

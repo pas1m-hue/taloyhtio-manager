@@ -10,6 +10,10 @@ import {
   type SessionLiquidityModel,
   type VisitorSessionWorkspace,
 } from "../domain/types.js";
+import {
+  computeOperatingCostFigures,
+  computeOperatingMarginFigures,
+} from "../finance/operatingFigures.js";
 import { calculateRequiredCollection } from "../liquidity/calculateRequiredCollection.js";
 import { findFundingNeed } from "../liquidity/findFundingNeed.js";
 import { calculateOperatingBuffer } from "../liquidity/operatingBuffer.js";
@@ -30,15 +34,33 @@ export function buildSessionLiquidityModel(
     | "currentAnnualRepairCollection"
   )[] = [];
 
+  // Both operating figures come from the publication's account data, computed
+  // by the same module the admin side uses, so a visitor and an admin looking
+  // at one publication see one buffer target and one cash path. Reading the
+  // baseline record's stored scalars here is what made them disagree: the
+  // visitor form showed "12 kk hoitokulut 34 029,46" while the admin card
+  // showed 37 567,84 for the same company.
+  //
+  // The visitor's own overrides still win, because trying a different
+  // assumption is what a session is for. What is gone is the silent fallback:
+  // if the figure cannot be computed and the visitor has not supplied one,
+  // it is missing rather than quietly stale.
+  const costFigures = computeOperatingCostFigures(publication);
+  const marginFigures = computeOperatingMarginFigures(publication);
+
   const currentCash = overrides.currentCash ?? latest?.currentCash;
   if (currentCash === undefined) missing.push("currentCash");
-  const trailing12mOperatingCosts =
-    overrides.trailing12mOperatingCosts ?? latest?.trailing12mOperatingCosts;
+  const trailing12mOperatingCosts = overrides.trailing12mOperatingCosts ??
+    (costFigures.status === "available"
+      ? costFigures.trailing12mOperatingCosts
+      : undefined);
   if (trailing12mOperatingCosts === undefined) {
     missing.push("trailing12mOperatingCosts");
   }
 
-  const publishedCollection = latest?.currentAnnualRepairCollection;
+  const publishedCollection = marginFigures.status === "available"
+    ? marginFigures.operatingMargin
+    : undefined;
   const annualOverrides = overrides.annualRepairCollectionByScenario ?? {};
   if (publishedCollection === undefined &&
       SCENARIOS.some((scenario) => annualOverrides[scenario] === undefined)) {
@@ -76,6 +98,7 @@ export function buildSessionLiquidityModel(
   return {
     status: "available",
     assumptions,
+    operatingFigures: { costs: costFigures, margin: marginFigures },
     forecast: buildForecast(
       projection,
       workspace,

@@ -5,6 +5,7 @@ import {
   type BuildingEvent,
   type CostEvidence,
   type PublishAdminDataCommand,
+  type PublishedDataSnapshot,
 } from "../domain/types.js";
 import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
@@ -416,5 +417,215 @@ describe("V2.2 workspace and immutable publication", () => {
     expect(projection.scenarios.base.years.length).toBeGreaterThan(0);
     expect(projection.suggestions).toEqual([]);
     expect(projection.cancelled).toEqual([]);
+  });
+});
+
+describe("account data reaches a publication as a projection, not wholesale", () => {
+  const ACCOUNTS = [
+    {
+      accountCode: "4010",
+      name: "Isännöinti, Kiinteistöhallinta Oy",
+      kind: "expense" as const,
+      group: "Hallinto",
+      nature: "maintenance" as const,
+      controllability: "fixed" as const,
+      active: true,
+    },
+    {
+      accountCode: "4600",
+      name: "Korjaukset",
+      kind: "expense" as const,
+      group: "KORJAUKSET",
+      nature: "repair" as const,
+      active: true,
+    },
+    {
+      accountCode: "9999",
+      name: "Käyttämätön tili",
+      kind: "expense" as const,
+      group: "Hallinto",
+      active: true,
+    },
+  ];
+  const ENTRIES = [
+    {
+      accountCode: "4010",
+      year: 2025,
+      actualAmount: -13_100.20,
+      sourceIds: ["tilinpaatos_2025"],
+      notes: "Sisältää kertaluonteisen laskutuslisän.",
+    },
+    {
+      accountCode: "4600",
+      year: 2025,
+      actualAmount: -3_881.55,
+      sourceIds: ["tilinpaatos_2025"],
+    },
+    // Budget-only: nothing the published calculation reads.
+    {
+      accountCode: "4010",
+      year: 2026,
+      budgetAmount: -13_500,
+      sourceIds: ["talousarvio_2026"],
+    },
+  ];
+  const GROUP_ACTUALS = [
+    {
+      id: "ga_income_hoitovastikkeet_2023",
+      group: "Hoitovastikkeet",
+      kind: "income" as const,
+      year: 2023,
+      actualAmount: 36_237.38,
+      active: true,
+      sourceIds: ["tilinpaatos_2023"],
+    },
+    {
+      id: "ga_income_hoitovastikkeet_2022",
+      group: "Hoitovastikkeet",
+      kind: "income" as const,
+      year: 2022,
+      actualAmount: 30_000,
+      active: false,
+      sourceIds: ["tilinpaatos_2022"],
+    },
+  ];
+
+  function adminWithAccounts() {
+    return {
+      ...adminBaselineSnapshot,
+      financialAccounts: ACCOUNTS,
+      financialEntries: ENTRIES,
+      groupActuals: GROUP_ACTUALS,
+    };
+  }
+
+  it("publishes the fields the forecast reads and drops the rest", () => {
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    expect(snapshot.financialAccounts).toEqual([
+      { accountCode: "4010", kind: "expense", group: "Hallinto", nature: "maintenance" },
+      { accountCode: "4600", kind: "expense", group: "KORJAUKSET", nature: "repair" },
+    ]);
+  });
+
+  it("never carries an account name into an immutable publication", () => {
+    // The one mistake here that cannot be undone: a publication cannot be
+    // edited, so a leaked name is published for as long as the publication
+    // exists. Serialised and searched rather than checked key by key, so a
+    // name smuggled in through any nesting fails this too.
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    expect(JSON.stringify(snapshot)).not.toContain("Kiinteistöhallinta");
+    expect(JSON.stringify(snapshot)).not.toContain("laskutuslisän");
+    expect(JSON.stringify(snapshot.financialAccounts)).not.toContain("name");
+  });
+
+  it("drops an account nothing reports an actual for", () => {
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    expect(snapshot.financialAccounts.map((account) => account.accountCode))
+      .not.toContain("9999");
+  });
+
+  it("publishes only entries carrying an actual, without their sources or notes", () => {
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    expect(snapshot.financialEntries).toEqual([
+      { accountCode: "4010", year: 2025, actualAmount: -13_100.20 },
+      { accountCode: "4600", year: 2025, actualAmount: -3_881.55 },
+    ]);
+  });
+
+  it("publishes only active group actuals, without their ids or sources", () => {
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    expect(snapshot.groupActuals).toEqual([
+      {
+        group: "Hoitovastikkeet",
+        kind: "income",
+        year: 2023,
+        actualAmount: 36_237.38,
+        active: true,
+      },
+    ]);
+  });
+
+  it("rejects a snapshot whose projection leaked an account name", () => {
+    // The compile-time guard is PublishedFinancialAccount declaring `name`
+    // never present; this is the runtime one, for a payload arriving from
+    // storage rather than from the projection.
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+    const leaked = {
+      ...snapshot,
+      financialAccounts: [
+        { ...snapshot.financialAccounts[0], name: "Isännöinti, Kiinteistöhallinta Oy" },
+        ...snapshot.financialAccounts.slice(1),
+      ],
+    } as unknown as PublishedDataSnapshot;
+
+    expect(() => validatePublishedDataSnapshot(leaked))
+      .toThrow(/Published financial account 4010 is invalid/);
+  });
+
+  it("keeps the account data out of the visitor view entirely", () => {
+    // buildVisitorPublishedView is what the unauthenticated public overview
+    // and every visitor session return. It is an allowlist, and after this
+    // change it is the only thing standing between the published account data
+    // and an anonymous caller — so this test exists to fail the day someone
+    // spreads the snapshot into it.
+    const snapshot = createPublishedDataSnapshot(adminWithAccounts(), publishCommand());
+
+    const view = buildVisitorPublishedView(snapshot);
+
+    expect(view).not.toHaveProperty("financialAccounts");
+    expect(view).not.toHaveProperty("financialEntries");
+    expect(view).not.toHaveProperty("groupActuals");
+    expect(JSON.stringify(view)).not.toContain("KORJAUKSET");
+  });
+
+  it("loads a publication written before the account collections existed", () => {
+    // A row stored by the previous code has no such JSON keys. Both halves of
+    // validatePublishedDataSnapshot must survive that: the synthetic-admin
+    // validation, and the fingerprint comparison — the stored hash was
+    // computed without these keys, so the recomputed one has to agree.
+    const snapshot = createPublishedDataSnapshot(adminBaselineSnapshot, publishCommand());
+    const legacy = { ...snapshot } as Record<string, unknown>;
+    delete legacy["financialAccounts"];
+    delete legacy["financialEntries"];
+    delete legacy["groupActuals"];
+
+    expect(() => validatePublishedDataSnapshot(legacy as unknown as PublishedDataSnapshot))
+      .not.toThrow();
+  });
+
+  it("fingerprints an empty projection exactly as the absent one", () => {
+    // The compatibility rule stated directly: a company with no account data
+    // must fingerprint the same before and after the keys existed, or the
+    // admin dashboard reports publishable changes that never clear.
+    const withEmpty = createPublishedDataSnapshot(adminBaselineSnapshot, publishCommand());
+    const legacy = { ...withEmpty } as Record<string, unknown>;
+    delete legacy["financialAccounts"];
+    delete legacy["financialEntries"];
+    delete legacy["groupActuals"];
+
+    expect(withEmpty.financialAccounts).toEqual([]);
+    expect(() => validatePublishedDataSnapshot(legacy as unknown as PublishedDataSnapshot))
+      .not.toThrow();
+    expect((legacy as unknown as PublishedDataSnapshot).contentFingerprint)
+      .toBe(withEmpty.contentFingerprint);
+  });
+
+  it("makes account data part of what publishing considers changed", () => {
+    const withoutAccounts = createPublishedDataSnapshot(
+      adminBaselineSnapshot,
+      publishCommand(),
+    );
+    const withAccounts = createPublishedDataSnapshot(
+      adminWithAccounts(),
+      publishCommand(),
+    );
+
+    expect(withAccounts.contentFingerprint)
+      .not.toBe(withoutAccounts.contentFingerprint);
   });
 });
