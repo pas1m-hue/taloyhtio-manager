@@ -58,6 +58,7 @@ import {
   selectFinancialYearViewModel,
   validateDeletionMeta,
   validateOperationMeta,
+  pickPrefillSource,
 } from "./adminOperationPayloads.js";
 
 const KNOWN_VIEWS = new Set([
@@ -1043,15 +1044,28 @@ function closeDetailPanel({ restoreFocus = false } = {}) {
   detailPanelOpenerElement = null;
 }
 
-// Mirrors sourceField into opField as the user types, unless the user has typed into opField directly.
-function wireSourceIdsPrefill(sourceFieldId, opFieldId) {
-  const sourceField = $(`#${sourceFieldId}`);
+/**
+ * Mirrors an entity's own source field into the operation's source field as
+ * the user types, unless the user has typed into the operation field
+ * directly — an edit there always wins over the prefill, for good.
+ *
+ * `sourceFieldIds` may name several fields in fallback order; which one is
+ * cited is pickPrefillSource's decision, so the rule is testable without a
+ * DOM. The initial call covers the edit case, where the entity already has a
+ * source but the operation field is rendered empty.
+ */
+function wireSourceIdsPrefill(sourceFieldIds, opFieldId) {
+  const ids = Array.isArray(sourceFieldIds) ? sourceFieldIds : [sourceFieldIds];
+  const sourceFields = ids.map((id) => $(`#${id}`));
   const opField = $(`#${opFieldId}`);
   let opFieldTouched = false;
+  const prefill = () => {
+    if (opFieldTouched) return;
+    opField.value = pickPrefillSource(sourceFields.map((field) => field.value));
+  };
   opField.addEventListener("input", () => { opFieldTouched = true; });
-  sourceField.addEventListener("input", () => {
-    if (!opFieldTouched) opField.value = sourceField.value;
-  });
+  for (const field of sourceFields) field.addEventListener("input", prefill);
+  prefill();
 }
 
 function openAssetEditor(mode, assetId) {
@@ -1539,7 +1553,7 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
       </div>
       <p class="form-hint">Anna joko lähdetunniste tai lähde-URL. DATA GAP -tilalla summakenttä tyhjennetään eikä sitä lähetetä.</p>
       <fieldset class="form-grid">
-        <legend class="form-hint">Muutoksen metatiedot</legend>
+        <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään näytön lähdetunnisteesta tai lähde-URL:sta, muokattavissa)</legend>
         ${textField("cost-evidence-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
         ${textField("cost-evidence-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
@@ -1557,6 +1571,10 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
     eventIdField.value = evidence.eventId;
     $("#cost-evidence-form").append(eventIdField);
   }
+  wireSourceIdsPrefill(
+    ["cost-evidence-source-id", "cost-evidence-source-url"],
+    "cost-evidence-op-source-ids",
+  );
   $("#cost-evidence-status").addEventListener("change", updateCostEvidenceAmountState);
   updateCostEvidenceAmountState();
   $("#cost-evidence-form").onsubmit = (event) => submitCostEvidenceForm(event, mode);

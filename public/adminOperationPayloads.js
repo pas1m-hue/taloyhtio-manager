@@ -296,6 +296,24 @@ export function validateAssetInput(raw) {
 }
 
 /**
+ * Picks which of an entity's own source fields the operation should cite.
+ *
+ * Most forms hold a single sourceIds field, but cost evidence carries its
+ * source as either a sourceId or a sourceUrl — spec 5.6 requires one of the
+ * two, not both — so the caller passes them in fallback order and the first
+ * one with content wins. Returns the raw (untrimmed) value so the prefill
+ * mirrors exactly what the user typed; "" when every field is blank.
+ * @param {ReadonlyArray<string | undefined>} values
+ * @returns {string}
+ */
+export function pickPrefillSource(values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return "";
+}
+
+/**
  * Operation-level metadata for every admin operation. The source identifiers
  * are required — the forms prefill them from the entity being saved, so they
  * are a click, not typing. The explanation is optional: it is prose nobody

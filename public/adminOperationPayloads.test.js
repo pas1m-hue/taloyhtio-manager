@@ -73,6 +73,7 @@ import {
   validateFinancialEntryInput,
   validateObservationInput,
   validatePriceLevelConfirmationInput,
+  pickPrefillSource,
 } from "./adminOperationPayloads.js";
 
 const ASSETS = [
@@ -1306,6 +1307,37 @@ describe("validateFinancialEntryInput / buildSaveFinancialEntryOperation", () =>
     expect(result.ok).toBe(false);
     expect(result.errors.operationSourceIds).toBeDefined();
     expect(result.errors.sourceIds).toBeUndefined();
+  });
+});
+
+describe("pickPrefillSource", () => {
+  it("uses the first field that has content", () => {
+    expect(pickPrefillSource(["kuntoarvio-2024", ""])).toBe("kuntoarvio-2024");
+  });
+
+  it("falls back to the sourceUrl when the sourceId is blank", () => {
+    // The cost-evidence form is the only one whose source can live in either
+    // of two fields, and the fallback is easy to write the wrong way round.
+    // A blank sourceId must not win over a filled sourceUrl.
+    expect(pickPrefillSource(["", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("https://urakoitsija.fi/tarjous-2026.pdf");
+    expect(pickPrefillSource(["   ", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("https://urakoitsija.fi/tarjous-2026.pdf");
+  });
+
+  it("prefers the sourceId when both are filled", () => {
+    expect(pickPrefillSource(["K003", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("K003");
+  });
+
+  it("returns an empty string when nothing is filled", () => {
+    expect(pickPrefillSource(["", "   "])).toBe("");
+    expect(pickPrefillSource([])).toBe("");
+    expect(pickPrefillSource([undefined, undefined])).toBe("");
+  });
+
+  it("returns the untrimmed value so the mirror matches what was typed", () => {
+    expect(pickPrefillSource([" board_2026 "])).toBe(" board_2026 ");
   });
 });
 
