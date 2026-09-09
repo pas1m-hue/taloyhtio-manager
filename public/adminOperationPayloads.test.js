@@ -74,6 +74,8 @@ import {
   validateObservationInput,
   validatePriceLevelConfirmationInput,
   pickPrefillSource,
+  slugifyIdentifier,
+  generateEntityId,
 } from "./adminOperationPayloads.js";
 
 const ASSETS = [
@@ -1307,6 +1309,102 @@ describe("validateFinancialEntryInput / buildSaveFinancialEntryOperation", () =>
     expect(result.ok).toBe(false);
     expect(result.errors.operationSourceIds).toBeDefined();
     expect(result.errors.sourceIds).toBeUndefined();
+  });
+});
+
+describe("slugifyIdentifier", () => {
+  it("lowercases and joins words with underscores", () => {
+    expect(slugifyIdentifier("Julkisivun maalaus")).toBe("julkisivun_maalaus");
+  });
+
+  it("folds Finnish diacritics to their base letters", () => {
+    expect(slugifyIdentifier("Ääkkösiä")).toBe("aakkosia");
+    expect(slugifyIdentifier("Åke Öhman")).toBe("ake_ohman");
+    expect(slugifyIdentifier("Lämmin vesi -varaajat")).toBe("lammin_vesi_varaajat");
+  });
+
+  it("collapses runs of punctuation into a single underscore", () => {
+    expect(slugifyIdentifier("IV-puhdistus")).toBe("iv_puhdistus");
+    expect(slugifyIdentifier("Katto:  vuoto!! (2026)")).toBe("katto_vuoto_2026");
+    expect(slugifyIdentifier("a___b")).toBe("a_b");
+  });
+
+  it("trims underscores from both ends", () => {
+    expect(slugifyIdentifier("  ...katto...  ")).toBe("katto");
+  });
+
+  it("returns an empty string when nothing survives", () => {
+    expect(slugifyIdentifier("")).toBe("");
+    expect(slugifyIdentifier("   ")).toBe("");
+    expect(slugifyIdentifier("!!!___!!!")).toBe("");
+    expect(slugifyIdentifier(undefined)).toBe("");
+  });
+
+  it("cuts a long title at a word boundary, never mid-word", () => {
+    const long = "Tarkastuksessa havaittiin, että ullakon eristeissä on laajalti " +
+      "kosteusjälkiä pohjoispäädyn alueella ja aluskate vaikuttaa repeytyneeltä.";
+    const slug = slugifyIdentifier(long);
+    expect(slug.length).toBeLessThanOrEqual(40);
+    // The cut lands on a boundary, so the last word is whole.
+    expect(slug).toBe("tarkastuksessa_havaittiin_etta_ullakon");
+    expect(slug.endsWith("_")).toBe(false);
+  });
+
+  it("hard-truncates a single word with no boundary to cut at", () => {
+    const slug = slugifyIdentifier("supercalifragilisticexpialidociousantidisestablishmentarianism");
+    expect(slug).toBe("supercalifragilisticexpialidociousantidi");
+    expect(slug.length).toBe(40);
+  });
+
+  it("keeps every identifier already in the data expressible", () => {
+    expect(slugifyIdentifier("Lämmin vesi varaajat")).toBe("lammin_vesi_varaajat");
+    expect(slugifyIdentifier("condensation a2 a3 b6 2026")).toBe("condensation_a2_a3_b6_2026");
+  });
+});
+
+describe("generateEntityId", () => {
+  it("prefixes by entity type", () => {
+    expect(generateEntityId("asset", "Julkisivu", [])).toBe("asset_julkisivu");
+    expect(generateEntityId("observation", "Kosteusjälki", [])).toBe("observation_kosteusjalki");
+    expect(generateEntityId("building_event", "IV-puhdistus", [])).toBe("event_iv_puhdistus");
+    expect(generateEntityId("cost_evidence", "Kuntoarvio", [])).toBe("cost_kuntoarvio");
+  });
+
+  it("numbers a collision instead of erroring, counting up from 2", () => {
+    const taken = ["event_kuntoarvio"];
+    const second = generateEntityId("building_event", "Kuntoarvio", taken);
+    expect(second).toBe("event_kuntoarvio_2");
+
+    // A second collision must not hand back _2 again.
+    const third = generateEntityId("building_event", "Kuntoarvio", [...taken, second]);
+    expect(third).toBe("event_kuntoarvio_3");
+    expect(third).not.toBe(second);
+
+    const fourth = generateEntityId("building_event", "Kuntoarvio", [...taken, second, third]);
+    expect(fourth).toBe("event_kuntoarvio_4");
+  });
+
+  it("collides on the slug, so differently written titles still get separate ids", () => {
+    const first = generateEntityId("building_event", "Kunto arvio", []);
+    const second = generateEntityId("building_event", "kunto-arvio!", [first]);
+    expect(first).toBe("event_kunto_arvio");
+    expect(second).toBe("event_kunto_arvio_2");
+  });
+
+  it("numbers after truncation, so a long title still yields a free id", () => {
+    const long = "Tarkastuksessa havaittiin että ullakon eristeissä kosteutta";
+    const first = generateEntityId("observation", long, []);
+    const second = generateEntityId("observation", long, [first]);
+    expect(second).toBe(`${first}_2`);
+  });
+
+  it("returns an empty string for a title that slugifies to nothing", () => {
+    expect(generateEntityId("asset", "   ", [])).toBe("");
+    expect(generateEntityId("asset", "!!!", [])).toBe("");
+  });
+
+  it("returns an empty string for an unknown entity type", () => {
+    expect(generateEntityId("housing_company", "Taloyhtiö", [])).toBe("");
   });
 });
 
