@@ -766,9 +766,9 @@ function renderCompanyForm() {
     </div>
     <p class="form-hint">Kunnossapitosuunnitelman kate rajaa kassapolun: sen jälkeisiä vuosia ei esitetä laskettuina. Tyhjä kenttä tarkoittaa ettei katetta ole asetettu — ei sitä että suunnitelma kattaisi koko horisontin.</p>
     <fieldset class="form-grid">
-      <legend class="form-hint">Muutoksen metatiedot (pakollisia)</legend>
+      <legend class="form-hint">Muutoksen metatiedot</legend>
       ${textField("company-source-ids", "Lähdetunnisteet (pilkuin eroteltu)", "", { required: true })}
-      ${textField("company-explanation", "Muutoksen selitys", "", { required: true })}
+      ${textField("company-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
     </fieldset>
     <p id="company-feedback" class="form-feedback" role="status" aria-live="polite"></p>
     <div class="button-row"><button type="submit">Tallenna perustiedot</button></div>
@@ -1073,7 +1073,7 @@ function openAssetEditor(mode, assetId) {
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään rakennusosan lähteistä, muokattavissa)</legend>
         ${textField("asset-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("asset-explanation", "Muutoksen selitys", "", { required: true })}
+        ${textField("asset-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
       <p id="asset-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1293,7 +1293,7 @@ function openObservationEditor(mode, observationId) {
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään havainnon lähteistä, muokattavissa)</legend>
         ${textField("observation-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("observation-explanation", "Muutoksen selitys", "", { required: true })}
+        ${textField("observation-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
       <p id="observation-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1541,7 +1541,7 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot</legend>
         ${textField("cost-evidence-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
-        ${textField("cost-evidence-explanation", "Muutoksen selitys", "", { required: true })}
+        ${textField("cost-evidence-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
       <p id="cost-evidence-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1641,7 +1641,7 @@ function openPriceLevelConfirmationEditor(costEvidenceId) {
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot</legend>
         ${textField("plc-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
-        ${textField("plc-explanation", "Muutoksen selitys", "", { required: true })}
+        ${textField("plc-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
       <p id="plc-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1933,7 +1933,7 @@ function openEventEditor(mode, eventId, prefill) {
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään tapahtuman lähteistä, muokattavissa)</legend>
         ${textField("event-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("event-explanation", "Muutoksen selitys", "", { required: true })}
+        ${textField("event-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
       </fieldset>
       <p id="event-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">

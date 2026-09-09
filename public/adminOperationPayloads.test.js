@@ -152,19 +152,26 @@ describe("buildSaveHousingCompanyOperation", () => {
     });
   });
 
-  it("requires operation sourceIds and explanation (not hardcoded)", () => {
+  it("requires operation sourceIds (not hardcoded)", () => {
     const result = buildSaveHousingCompanyOperation({
       ...validRaw,
       sourceIds: "",
-      explanation: "   ",
+      explanation: "Hallitus tarkisti perustiedot.",
     });
     expect(result).toEqual({
       ok: false,
-      errors: {
-        sourceIds: expect.any(String),
-        explanation: expect.any(String),
-      },
+      errors: { sourceIds: expect.any(String) },
     });
+  });
+
+  it("accepts a blank explanation and sends it as an empty string", () => {
+    const result = buildSaveHousingCompanyOperation({ ...validRaw, explanation: "   " });
+    expect(result.ok).toBe(true);
+    // Empty string, never undefined: the value crosses JSONB, which drops
+    // undefined keys, so an absent key and an undefined one are the same
+    // thing on the way back.
+    expect(result.operation.explanation).toBe("");
+    expect(Object.hasOwn(result.operation, "explanation")).toBe(true);
   });
 });
 
@@ -1213,14 +1220,14 @@ describe("validateFinancialAccountInput / buildSaveFinancialAccountOperation", (
     });
   });
 
-  it("rejects a missing sourceIds or explanation, mirroring housing-company metadata", () => {
+  it("rejects a missing sourceIds but accepts a missing explanation", () => {
     const missingSource = buildSaveFinancialAccountOperation({ ...validRaw, sourceIds: "" });
     expect(missingSource.ok).toBe(false);
     expect(missingSource.errors.sourceIds).toBeDefined();
 
     const missingExplanation = buildSaveFinancialAccountOperation({ ...validRaw, explanation: "" });
-    expect(missingExplanation.ok).toBe(false);
-    expect(missingExplanation.errors.explanation).toBeDefined();
+    expect(missingExplanation.ok).toBe(true);
+    expect(missingExplanation.operation.explanation).toBe("");
   });
 });
 
@@ -1293,7 +1300,7 @@ describe("validateFinancialEntryInput / buildSaveFinancialEntryOperation", () =>
 
   it("reports operation-metadata errors under operationSourceIds, not sourceIds", () => {
     const result = buildSaveFinancialEntryOperation(
-      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "", explanation: "" },
+      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "", explanation: "Tuonti." },
       FINANCIAL_ACCOUNTS,
     );
     expect(result.ok).toBe(false);

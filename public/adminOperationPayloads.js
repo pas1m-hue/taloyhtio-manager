@@ -296,8 +296,17 @@ export function validateAssetInput(raw) {
 }
 
 /**
- * Operation-level metadata required by every admin operation: at least one
- * source id and a user-written explanation. Not a generic hardcoded default.
+ * Operation-level metadata for every admin operation. The source identifiers
+ * are required — the forms prefill them from the entity being saved, so they
+ * are a click, not typing. The explanation is optional: it is prose nobody
+ * but the single person entering the data would read, and requiring it only
+ * produced "testi".
+ *
+ * An omitted explanation is the empty string, never undefined. The value goes
+ * through JSONB, which drops undefined keys, so an optional property would be
+ * indistinguishable from an absent one after a single round trip — the
+ * three-state distinction exactOptionalPropertyTypes offers cannot survive
+ * the wire, and every producer here would pay for it in conditional spreads.
  * @param {Record<string, unknown>} raw
  * @returns {ValidationResult<{ sourceIds: string[], explanation: string }>}
  */
@@ -311,9 +320,6 @@ export function validateOperationMeta(raw) {
   }
 
   const explanation = toTrimmed(raw.explanation);
-  if (explanation === "") {
-    errors.explanation = "Muutoksen selitys on pakollinen.";
-  }
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value: { sourceIds, explanation } };

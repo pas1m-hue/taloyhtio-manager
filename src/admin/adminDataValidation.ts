@@ -329,13 +329,22 @@ function validateEventObservationReferences(
   }
 }
 
+/**
+ * The explanation is checked for type but not for content: it is optional at
+ * the operation level, and applyAdminBatch copies whatever the operation
+ * carried onto the row. Rows written while it was mandatory still hold their
+ * text and still validate — a non-empty string passes either rule — so no
+ * existing trail is invalidated by the relaxation. Demanding non-empty here
+ * would instead make every new explanation-less save unloadable, because this
+ * same validation runs over the whole trail on every read.
+ */
 function validateAuditTrail(state: AdminDataSnapshot): void {
   unique(state.auditTrail, "admin-audit id");
   for (const item of state.auditTrail) {
     if (!Number.isInteger(item.revision) || item.revision <= 0 ||
         item.revision > state.revision || !isNonEmpty(item.entityKey) ||
         !isNonEmpty(item.actorId) || !validDate(item.occurredAt) ||
-        !validSources(item.sourceIds) || !isNonEmpty(item.explanation)) {
+        !validSources(item.sourceIds) || typeof item.explanation !== "string") {
       throw invalid(`Admin audit ${item.id || "<empty>"} is invalid`);
     }
   }
