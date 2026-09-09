@@ -1146,7 +1146,7 @@ function openAssetEditor(mode, assetId) {
   $("#asset-form").onsubmit = (event) => submitAssetForm(event, mode);
   $("#asset-cancel").addEventListener("click", closeAssetEditor);
   wireSourceIdsPrefill("asset-source-ids", "asset-op-source-ids");
-  if (mode === "create") {
+  if (mode !== "edit") {
     wireIdentifierGeneration(
       "asset", "asset-id", ["asset-name"],
       () => fieldValue("asset-name"),
@@ -1373,7 +1373,7 @@ function openObservationEditor(mode, observationId) {
   $("#observation-form").onsubmit = (event) => submitObservationForm(event, mode);
   $("#observation-cancel").addEventListener("click", closeObservationEditor);
   wireSourceIdsPrefill("observation-source-ids", "observation-op-source-ids");
-  if (mode === "create") {
+  if (mode !== "edit") {
     // Named after its asset and year, the way the observations already in the
     // data are (observation_condensation_b4_2025). The description is prose —
     // its opening words are as often a generic preamble as the actual finding,
@@ -1641,7 +1641,7 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
     ["cost-evidence-source-id", "cost-evidence-source-url"],
     "cost-evidence-op-source-ids",
   );
-  if (mode === "create") {
+  if (mode !== "edit") {
     // Cost evidence has no name of its own, so the identifier is built from
     // what actually distinguishes one piece of evidence from another: the
     // asset it prices, whether it is a quote or an estimate, and the price
@@ -2057,7 +2057,7 @@ function openEventEditor(mode, eventId, prefill) {
   $("#event-form").onsubmit = (formEvent) => submitEventForm(formEvent, mode);
   $("#event-cancel").addEventListener("click", closeEventEditor);
   wireSourceIdsPrefill("event-source-ids", "event-op-source-ids");
-  if (mode === "create") {
+  if (mode !== "edit") {
     wireIdentifierGeneration(
       "building_event", "event-id", ["event-title"],
       () => fieldValue("event-title"),
