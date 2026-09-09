@@ -370,6 +370,26 @@ export function generateEntityId(entityType, title, existingIds) {
 }
 
 /**
+ * Decides what a generated field should hold after something it watches
+ * changed. Extracted from the form wiring so the rule is under test: this is
+ * the one that prevents the most irritating regression available here, a
+ * deliberately chosen identifier silently replaced when the title is edited
+ * afterwards.
+ *
+ * - `touched` — the user has edited the field themselves. Their value stands,
+ *   permanently. There is no un-touching.
+ * - `generated === ""` — there is nothing to name the entity after yet, so
+ *   whatever is in the field stays rather than being blanked.
+ * @param {{ touched: boolean, current: string, generated: string }} input
+ * @returns {string}
+ */
+export function resolveGeneratedField({ touched, current, generated }) {
+  if (touched) return current;
+  if (generated === "") return current;
+  return generated;
+}
+
+/**
  * Picks which of an entity's own source fields the operation should cite.
  *
  * Most forms hold a single sourceIds field, but cost evidence carries its

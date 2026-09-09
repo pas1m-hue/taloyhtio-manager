@@ -60,6 +60,7 @@ import {
   validateOperationMeta,
   pickPrefillSource,
   generateEntityId,
+  resolveGeneratedField,
 } from "./adminOperationPayloads.js";
 
 const KNOWN_VIEWS = new Set([
@@ -1062,11 +1063,11 @@ function wireIdentifierGeneration(entityType, idFieldId, watchFieldIds, titleOf,
   const idField = $(`#${idFieldId}`);
   let idFieldTouched = false;
   const regenerate = () => {
-    if (idFieldTouched) return;
-    const generated = generateEntityId(entityType, titleOf(), existingIds);
-    // An empty generation means there is nothing to name the entity after
-    // yet; leave whatever is in the field rather than blanking it.
-    if (generated !== "") idField.value = generated;
+    idField.value = resolveGeneratedField({
+      touched: idFieldTouched,
+      current: idField.value,
+      generated: generateEntityId(entityType, titleOf(), existingIds),
+    });
   };
   idField.addEventListener("input", () => { idFieldTouched = true; });
   for (const watched of watchFieldIds) {

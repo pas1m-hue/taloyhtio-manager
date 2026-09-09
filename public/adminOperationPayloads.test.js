@@ -76,6 +76,7 @@ import {
   pickPrefillSource,
   slugifyIdentifier,
   generateEntityId,
+  resolveGeneratedField,
 } from "./adminOperationPayloads.js";
 
 const ASSETS = [
@@ -1405,6 +1406,57 @@ describe("generateEntityId", () => {
 
   it("returns an empty string for an unknown entity type", () => {
     expect(generateEntityId("housing_company", "Taloyhtiö", [])).toBe("");
+  });
+});
+
+describe("resolveGeneratedField", () => {
+  it("fills the field from the title while the user has not touched it", () => {
+    expect(resolveGeneratedField({
+      touched: false, current: "", generated: "event_kuntoarvio",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("keeps regenerating as the title keeps changing", () => {
+    expect(resolveGeneratedField({
+      touched: false, current: "event_kunto", generated: "event_kuntoarvio",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("never overwrites an identifier the user chose, however the title changes", () => {
+    // The order matters and is the whole point: the user edits the identifier
+    // FIRST and changes the title AFTER. Run the other way round, this passes
+    // whether or not the touched flag exists.
+    let touched = false;
+    let value = "";
+
+    // 1. User types a title; the field follows along.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_iv_puhdistus" });
+    expect(value).toBe("event_iv_puhdistus");
+
+    // 2. User edits the identifier by hand.
+    touched = true;
+    value = "event_iv_2026";
+
+    // 3. User goes back and changes the title. The identifier must not move.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_ilmanvaihdon_puhdistus" });
+    expect(value).toBe("event_iv_2026");
+
+    // 4. And it must not come back on any later change either.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_jotain_muuta" });
+    expect(value).toBe("event_iv_2026");
+  });
+
+  it("leaves the field alone when there is nothing to generate from yet", () => {
+    // Clearing the title must not wipe an identifier that is already there.
+    expect(resolveGeneratedField({
+      touched: false, current: "event_kuntoarvio", generated: "",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("keeps a touched empty field empty", () => {
+    expect(resolveGeneratedField({
+      touched: true, current: "", generated: "event_kuntoarvio",
+    })).toBe("");
   });
 });
 
