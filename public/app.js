@@ -1124,16 +1124,16 @@ function openAssetEditor(mode, assetId) {
     <form id="asset-form" class="card form-card" novalidate>
       <h3>${mode === "edit" ? "Muokkaa rakennusosaa" : "Uusi rakennusosa"}</h3>
       <div class="form-grid">
-        ${textField("asset-id", "Tunniste", asset?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${textField("asset-id", "Tunniste", asset?.id ?? "", { required: true, readonly: mode === "edit", hint: mode === "edit" ? undefined : "Luodaan nimestä automaattisesti — muokkaa jos haluat oman." })}
         ${textField("asset-name", "Nimi", asset?.name ?? "", { required: true })}
-        ${selectField("asset-category", "Kategoria", ASSET_CATEGORIES.map((c) => [c, CATEGORY_LABELS[c] ?? c]), asset?.category ?? "")}
-        ${checkboxField("asset-active", "Aktiivinen", asset ? asset.active : true)}
-        ${textField("asset-source-ids", "Rakennusosan lähdetunnisteet", entitySources, { required: true })}
+        ${selectField("asset-category", "Kategoria", ASSET_CATEGORIES.map((c) => [c, CATEGORY_LABELS[c] ?? c]), asset?.category ?? "", { hint: "Karkea ryhmittely; \"Muu\" kun mikään ei osu." })}
+        ${checkboxField("asset-active", "Aktiivinen", asset ? asset.active : true, { hint: "Poista rasti kun rakennusosaa ei enää ole. Virheellisen rivin voi poistaa kokonaan." })}
+        ${textField("asset-source-ids", "Rakennusosan lähdetunnisteet", entitySources, { required: true, hint: "Mistä tieto on peräisin, esim. kuntoarvio-2024." })}
       </div>
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään rakennusosan lähteistä, muokattavissa)</legend>
-        ${textField("asset-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("asset-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
+        ${textField("asset-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true, hint: "Esitäytetään yllä olevasta lähteestä; muokkaa vain jos muutoksen lähde on eri." })}
+        ${textField("asset-explanation", "Muutoksen selitys (vapaaehtoinen)", "", { hint: "Miksi tämä muutos tehtiin." })}
       </fieldset>
       <p id="asset-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1351,16 +1351,16 @@ function openObservationEditor(mode, observationId) {
     <form id="observation-form" class="card form-card" novalidate>
       <h3>${mode === "edit" ? "Muokkaa havaintoa" : "Uusi havainto"}</h3>
       <div class="form-grid">
-        ${textField("observation-id", "Tunniste", observation?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${textField("observation-id", "Tunniste", observation?.id ?? "", { required: true, readonly: mode === "edit", hint: mode === "edit" ? undefined : "Luodaan rakennusosasta ja havaintovuodesta — muokkaa jos haluat oman." })}
         ${selectField("observation-asset", "Rakennusosa", assetOptions, observation?.assetId ?? "")}
-        ${dateField("observation-observed-at", "Havaintopäivä", observation?.observedAt ?? "", { required: true })}
-        ${textareaField("observation-description", "Kuvaus", observation?.description ?? "")}
-        ${textField("observation-source-ids", "Havainnon lähdetunnisteet", entitySources, { required: true })}
+        ${dateField("observation-observed-at", "Havaintopäivä", observation?.observedAt ?? "", { required: true, hint: "Milloin havainto tehtiin, ei milloin se kirjattiin." })}
+        ${textareaField("observation-description", "Kuvaus", observation?.description ?? "", { hint: "Mitä nähtiin: kunto, laajuus, sijainti — ei vielä korjausehdotusta." })}
+        ${textField("observation-source-ids", "Havainnon lähdetunnisteet", entitySources, { required: true, hint: "Raportti tai käynti josta havainto on." })}
       </div>
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään havainnon lähteistä, muokattavissa)</legend>
-        ${textField("observation-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("observation-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
+        ${textField("observation-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true, hint: "Esitäytetään yllä olevasta lähteestä; muokkaa vain jos muutoksen lähde on eri." })}
+        ${textField("observation-explanation", "Muutoksen selitys (vapaaehtoinen)", "", { hint: "Miksi tämä muutos tehtiin." })}
       </fieldset>
       <p id="observation-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1602,25 +1602,25 @@ function openCostEvidenceEditor(mode, costEvidenceId) {
     <form id="cost-evidence-form" class="card form-card" novalidate>
       <h3>${mode === "edit" ? "Muokkaa kustannusnäyttöä" : "Uusi kustannusnäyttö"}</h3>
       <div class="form-grid">
-        ${textField("cost-evidence-id", "Tunniste", evidence?.id ?? "", { required: true, readonly: mode === "edit" })}
-        ${selectField("cost-evidence-asset", "Rakennusosa", assetOptions, evidence?.assetId ?? "")}
-        ${selectField("cost-evidence-status", "Tila", statusOptions, evidence?.status ?? "quote")}
-        ${numberField("cost-evidence-amount", "Summa €", evidence?.amount ?? "", { min: 0, step: "0.01" })}
-        ${textField("cost-evidence-unit", "Yksikkö", evidence?.unit ?? "", { required: true })}
-        ${numberField("cost-evidence-quantity", "Määrä", evidence?.quantity ?? "", { min: 1, step: 1 })}
-        ${numberField("cost-evidence-price-level-year", "Hintatasovuosi", evidence?.priceLevelYear ?? PROJECTION_PRICE_LEVEL_YEAR, { required: true, step: 1 })}
-        ${selectField("cost-evidence-vat-included", "ALV sisältyy", [["", "Ei tiedossa"], ["true", "Kyllä"], ["false", "Ei"]], evidence?.vatIncluded === undefined ? "" : String(evidence.vatIncluded))}
-        ${dateField("cost-evidence-observed-at", "Havaintopäivä", evidence?.observedAt ?? "")}
-        ${dateField("cost-evidence-valid-until", "Voimassa asti", evidence?.validUntil ?? "")}
-        ${textField("cost-evidence-source-id", "Lähdetunniste", evidence?.sourceId ?? "")}
-        ${textField("cost-evidence-source-url", "Lähde-URL", evidence?.sourceUrl ?? "")}
-        ${textareaField("cost-evidence-notes", "Huomio", evidence?.notes ?? "")}
+        ${textField("cost-evidence-id", "Tunniste", evidence?.id ?? "", { required: true, readonly: mode === "edit", hint: mode === "edit" ? undefined : "Luodaan rakennusosasta, tilasta ja hintatasovuodesta — muokkaa jos haluat oman." })}
+        ${selectField("cost-evidence-asset", "Rakennusosa", assetOptions, evidence?.assetId ?? "", { hint: "\"Ei kytkentää\" kun hinta ei koske yhtä rakennusosaa." })}
+        ${selectField("cost-evidence-status", "Tila", statusOptions, evidence?.status ?? "quote", { hint: "Tarjous = sitova hinta, Arvio = suuntaa antava. DATA GAP = hintaa ei tiedetä; hyväksytty tapahtuma jolla on DATA GAP tekee ennusteesta puutteellisen." })}
+        ${numberField("cost-evidence-amount", "Summa €", evidence?.amount ?? "", { min: 0, step: "0.01", hint: "Koko työn hinta, tai yksikköhinta kun määrä on annettu." })}
+        ${textField("cost-evidence-unit", "Yksikkö", evidence?.unit ?? "", { required: true, hint: "\"erä\" kun koko työ hinnoitellaan kerralla, \"kpl\" kun yksikköhinta × määrä." })}
+        ${numberField("cost-evidence-quantity", "Määrä", evidence?.quantity ?? "", { min: 1, step: 1, hint: "Jätä tyhjäksi kun yksikkö on \"erä\"." })}
+        ${numberField("cost-evidence-price-level-year", "Hintatasovuosi", evidence?.priceLevelYear ?? PROJECTION_PRICE_LEVEL_YEAR, { required: true, step: 1, hint: "Minkä vuoden hinnoissa summa on — yleensä tarjouksen tai arvion vuosi." })}
+        ${selectField("cost-evidence-vat-included", "ALV sisältyy", [["", "Ei tiedossa"], ["true", "Kyllä"], ["false", "Ei"]], evidence?.vatIncluded === undefined ? "" : String(evidence.vatIncluded), { hint: "\"Ei tiedossa\" kelpaa arviolle; tarjouksessa lukee kumpi." })}
+        ${dateField("cost-evidence-observed-at", "Havaintopäivä", evidence?.observedAt ?? "", { hint: "Milloin hintatieto hankittiin." })}
+        ${dateField("cost-evidence-valid-until", "Voimassa asti", evidence?.validUntil ?? "", { hint: "Vain tarjouksille joilla on umpeutumispäivä; arviolla tyhjä." })}
+        ${textField("cost-evidence-source-id", "Lähdetunniste", evidence?.sourceId ?? "", { hint: "Tarjouksen tai raportin tunnus. Anna tämä tai lähde-URL." })}
+        ${textField("cost-evidence-source-url", "Lähde-URL", evidence?.sourceUrl ?? "", { hint: "Linkki hintatietoon. Anna tämä tai lähdetunniste." })}
+        ${textareaField("cost-evidence-notes", "Huomio", evidence?.notes ?? "", { hint: "Vapaa muistiinpano, esim. mitä hinta ei kata." })}
       </div>
       <p class="form-hint">Anna joko lähdetunniste tai lähde-URL. DATA GAP -tilalla summakenttä tyhjennetään eikä sitä lähetetä.</p>
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään näytön lähdetunnisteesta tai lähde-URL:sta, muokattavissa)</legend>
-        ${textField("cost-evidence-op-source-ids", "Operaation lähdetunnisteet", "", { required: true })}
-        ${textField("cost-evidence-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
+        ${textField("cost-evidence-op-source-ids", "Operaation lähdetunnisteet", "", { required: true, hint: "Esitäytetään yllä olevasta lähteestä; muokkaa vain jos muutoksen lähde on eri." })}
+        ${textField("cost-evidence-explanation", "Muutoksen selitys (vapaaehtoinen)", "", { hint: "Miksi tämä muutos tehtiin." })}
       </fieldset>
       <p id="cost-evidence-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -1991,14 +1991,14 @@ function openEventEditor(mode, eventId, prefill) {
     <form id="event-form" class="card form-card wide-card" novalidate>
       <h3>${mode === "edit" ? "Muokkaa korjaustapahtumaa" : "Uusi korjaustapahtuma"}</h3>
       <div class="form-grid">
-        ${textField("event-id", "Tunniste", event?.id ?? "", { required: true, readonly: mode === "edit" })}
+        ${textField("event-id", "Tunniste", event?.id ?? "", { required: true, readonly: mode === "edit", hint: mode === "edit" ? undefined : "Luodaan otsikosta automaattisesti — muokkaa jos haluat oman." })}
         ${selectField("event-asset", "Rakennusosa", assetOptions, assetId)}
         ${textField("event-title", "Otsikko", event?.title ?? "", { required: true })}
-        ${selectField("event-type", "Tyyppi", typeOptions, event?.type ?? "")}
-        ${selectField("event-status", "Tila", statusOptions, event?.status ?? "suggested")}
-        ${textareaField("event-notes", "Huomio", event?.notes ?? "")}
-        ${textField("event-observation-ids", "Linkitetyt havainnot (tunnisteet)", observationIds, {})}
-        ${textField("event-source-ids", "Tapahtuman lähdetunnisteet", entitySources, { required: true })}
+        ${selectField("event-type", "Tyyppi", typeOptions, event?.type ?? "", { hint: "Työn luonne: tarkastus, huolto, korjaus vai uusiminen." })}
+        ${selectField("event-status", "Tila", statusOptions, event?.status ?? "suggested", { hint: "Vain Hyväksytty osallistuu kassapolkuun ja vastiketarpeeseen. Ehdotettu = ei päätöstä, Toteutunut = tehty, Peruttu = ei toteuteta." })}
+        ${textareaField("event-notes", "Huomio", event?.notes ?? "", { hint: "Vapaa muistiinpano; ei vaikuta laskentaan." })}
+        ${textField("event-observation-ids", "Linkitetyt havainnot (tunnisteet)", observationIds, { hint: "Havainnot jotka perustelevat korjauksen — näkyvät detaljissa, eivät vaikuta laskentaan." })}
+        ${textField("event-source-ids", "Tapahtuman lähdetunnisteet", entitySources, { required: true, hint: "Päätös tai asiakirja josta tapahtuma on, esim. hallitus-2026-01." })}
       </div>
       <p class="form-hint">Alkuperä: ${escapeHtml(origin === "manual" ? "Manuaalinen" : origin)}</p>
       <input type="hidden" id="event-origin" value="${escapeHtml(origin)}">
@@ -2022,7 +2022,7 @@ function openEventEditor(mode, eventId, prefill) {
         <h4>Toteuma</h4>
         <div class="form-grid">
           ${numberField("event-actual-year", "Toteumavuosi", event?.actual?.year ?? "", { required: true, step: 1 })}
-          ${dateField("event-actual-occurred-at", "Toteutumispäivä", event?.actual?.occurredAt ?? "")}
+          ${dateField("event-actual-occurred-at", "Toteutumispäivä", event?.actual?.occurredAt ?? "", { hint: "Milloin työ valmistui; vapaaehtoinen." })}
           ${numberField("event-actual-amount", "Summa €", event?.actual?.amount ?? "", { min: 0, step: "0.01" })}
           ${numberField("event-actual-quantity", "Määrä", event?.actual?.quantity ?? "", { min: 1, step: 1 })}
           ${selectField("event-actual-cost-evidence", "Kustannusnäyttö", costEvidenceOptions(model), event?.actual?.costEvidenceId ?? "")}
@@ -2031,8 +2031,8 @@ function openEventEditor(mode, eventId, prefill) {
 
       <fieldset class="form-grid">
         <legend class="form-hint">Muutoksen metatiedot (operaation lähteet esitäytetään tapahtuman lähteistä, muokattavissa)</legend>
-        ${textField("event-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true })}
-        ${textField("event-explanation", "Muutoksen selitys (vapaaehtoinen)", "")}
+        ${textField("event-op-source-ids", "Operaation lähdetunnisteet", entitySources, { required: true, hint: "Esitäytetään yllä olevasta lähteestä; muokkaa vain jos muutoksen lähde on eri." })}
+        ${textField("event-explanation", "Muutoksen selitys (vapaaehtoinen)", "", { hint: "Miksi tämä muutos tehtiin." })}
       </fieldset>
       <p id="event-feedback" class="form-feedback" role="status" aria-live="polite"></p>
       <div class="button-row">
@@ -2077,11 +2077,11 @@ function appendScheduleRow(scenario, entry) {
   row.innerHTML = `
     <div class="form-grid compact">
       ${textField(`event-schedule-${uid}-id`, "Rivitunniste", uid, { readonly: true })}
-      ${numberField(`event-schedule-${uid}-year`, "Vuosi", entry?.year ?? "", { required: true, step: 1 })}
-      ${numberField(`event-schedule-${uid}-amount`, "Summa €", entry?.amount ?? "", { min: 0, step: "0.01" })}
-      ${numberField(`event-schedule-${uid}-quantity`, "Määrä", entry?.quantity ?? "", { min: 1, step: 1 })}
-      ${selectField(`event-schedule-${uid}-cost-evidence`, "Kustannusnäyttö", costEvidenceOptions(state.admin), entry?.costEvidenceId ?? "")}
-      ${textField(`event-schedule-${uid}-explanation`, "Selitys", entry?.explanation ?? "")}
+      ${numberField(`event-schedule-${uid}-year`, "Vuosi", entry?.year ?? "", { required: true, step: 1, hint: "Vuosi jolle työ tässä skenaariossa ajoittuu." })}
+      ${numberField(`event-schedule-${uid}-amount`, "Summa €", entry?.amount ?? "", { min: 0, step: "0.01", hint: "Pakollinen kun kustannusnäyttö ei ole DATA GAP; yksikköhinta × määrä." })}
+      ${numberField(`event-schedule-${uid}-quantity`, "Määrä", entry?.quantity ?? "", { min: 1, step: 1, hint: "Jätä tyhjäksi kun yksikkö on \"erä\"." })}
+      ${selectField(`event-schedule-${uid}-cost-evidence`, "Kustannusnäyttö", costEvidenceOptions(state.admin), entry?.costEvidenceId ?? "", { hint: "Mihin hintatietoon rivi nojaa." })}
+      ${textField(`event-schedule-${uid}-explanation`, "Selitys", entry?.explanation ?? "", { hint: "Miksi juuri tämä vuosi tai summa tässä skenaariossa." })}
     </div>
     <div class="button-row">
       <button type="button" class="secondary schedule-copy-row">Kopioi kaikkiin skenaarioihin</button>
@@ -3840,13 +3840,35 @@ function horizonQuery() {
 
 /* -------- field helpers -------- */
 
+/**
+ * The always-visible one-liner under a field: what to type into it and when
+ * to leave it blank, which the field's own name cannot say. Rendered for
+ * every helper through this one function so a hint reads identically
+ * wherever it appears, and joined into aria-describedby ahead of the error
+ * span so a screen reader hears the guidance before any complaint.
+ *
+ * Fields whose name already says everything get no hint on purpose: a hint
+ * on every field is a hint nobody reads.
+ */
+function fieldHint(id, hint) {
+  return hint === undefined || hint === ""
+    ? ""
+    : `<span class="field-hint" id="${id}-hint">${escapeHtml(hint)}</span>`;
+}
+
+/** The describedby list for a field, naming its hint only when it has one. */
+function describedBy(id, hint) {
+  return hint === undefined || hint === "" ? `${id}-error` : `${id}-hint ${id}-error`;
+}
+
 function textField(id, label, value, opts = {}) {
   const attrs = [
     opts.required ? "required" : "",
     opts.readonly ? "readonly" : "",
   ].filter(Boolean).join(" ");
   return `<label for="${id}">${escapeHtml(label)}
-    <input id="${id}" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error" autocomplete="off">
+    <input id="${id}" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${describedBy(id, opts.hint)}" autocomplete="off">
+    ${fieldHint(id, opts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }
@@ -3858,23 +3880,26 @@ function numberField(id, label, value, opts = {}) {
     opts.step !== undefined ? `step="${opts.step}"` : "",
   ].filter(Boolean).join(" ");
   return `<label for="${id}">${escapeHtml(label)}
-    <input id="${id}" type="number" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error">
+    <input id="${id}" type="number" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${describedBy(id, opts.hint)}">
+    ${fieldHint(id, opts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }
 
-function selectField(id, label, options, selected) {
+function selectField(id, label, options, selected, fieldOpts = {}) {
   const opts = options.map(([value, text]) =>
     `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(text)}</option>`).join("");
   return `<label for="${id}">${escapeHtml(label)}
-    <select id="${id}" aria-describedby="${id}-error">${opts}</select>
+    <select id="${id}" aria-describedby="${describedBy(id, fieldOpts.hint)}">${opts}</select>
+    ${fieldHint(id, fieldOpts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }
 
-function checkboxField(id, label, checked) {
+function checkboxField(id, label, checked, opts = {}) {
   return `<label class="checkbox-field" for="${id}">
-    <input id="${id}" type="checkbox"${checked ? " checked" : ""}> ${escapeHtml(label)}
+    <input id="${id}" type="checkbox"${checked ? " checked" : ""} aria-describedby="${describedBy(id, opts.hint)}"> ${escapeHtml(label)}
+    ${fieldHint(id, opts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }
@@ -3882,7 +3907,8 @@ function checkboxField(id, label, checked) {
 function dateField(id, label, value, opts = {}) {
   const attrs = [opts.required ? "required" : ""].filter(Boolean).join(" ");
   return `<label for="${id}">${escapeHtml(label)}
-    <input id="${id}" type="date" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${id}-error">
+    <input id="${id}" type="date" value="${escapeHtml(String(value ?? ""))}" ${attrs} aria-describedby="${describedBy(id, opts.hint)}">
+    ${fieldHint(id, opts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }
@@ -3890,7 +3916,8 @@ function dateField(id, label, value, opts = {}) {
 function textareaField(id, label, value, opts = {}) {
   const attrs = [opts.required ? "required" : ""].filter(Boolean).join(" ");
   return `<label for="${id}">${escapeHtml(label)}
-    <textarea id="${id}" rows="${opts.rows ?? 3}" ${attrs} aria-describedby="${id}-error">${escapeHtml(String(value ?? ""))}</textarea>
+    <textarea id="${id}" rows="${opts.rows ?? 3}" ${attrs} aria-describedby="${describedBy(id, opts.hint)}">${escapeHtml(String(value ?? ""))}</textarea>
+    ${fieldHint(id, opts.hint)}
     <span class="field-error" id="${id}-error"></span>
   </label>`;
 }

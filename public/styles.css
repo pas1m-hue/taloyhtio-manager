@@ -175,6 +175,17 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, C
 .checkbox-field { display: flex; align-items: center; gap: .5rem; }
 .checkbox-field input { width: auto; }
 .form-hint { color: var(--muted); font-size: .78rem; font-weight: 500; }
+/* Always visible, under the input it belongs to: what to type here and when
+   to leave it blank. Sits above .field-error so a complaint never displaces
+   the guidance. */
+.field-hint {
+  display: block;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  margin-top: .2rem;
+}
 .form-feedback { min-height: 1.2em; font-size: .85rem; font-weight: 650; }
 .form-feedback.is-error { color: var(--danger); }
 .form-feedback.is-ok { color: var(--ok); }
