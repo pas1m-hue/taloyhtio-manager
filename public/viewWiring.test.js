@@ -286,3 +286,69 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
     expect(js).toContain('$("#finance-budget-filter-year").addEventListener("change", renderBudgetVsActual)');
   });
 });
+
+// A guard against a branch that can never run. The editor-open functions take
+// a `mode`, and callers only ever pass "new" or "edit" — but nothing stops a
+// new branch from testing a value nobody passes. `if (mode === "create")`
+// type-checks, lints and reviews cleanly, renders a form that looks correct,
+// and silently does nothing, which is exactly how the identifier generation
+// shipped dead the first time.
+//
+// So: every mode literal app.js compares against must be one some call site
+// actually passes.
+describe("static editor-mode cross-check", () => {
+  /** Mode literals passed at `openXEditor("...")` call sites. */
+  function passedModes() {
+    const modes = new Set();
+    for (const match of js.matchAll(/\bopen[A-Za-z]*Editor\(\s*"([\w-]+)"/g)) {
+      modes.add(match[1]);
+    }
+    return modes;
+  }
+
+  /**
+   * Mode literals compared inside the editor-open functions, e.g.
+   * `mode === "edit"`. Scoped to those function bodies because `mode` is also
+   * the name of the app-level admin/visitor state, which is a different thing
+   * with a different set of legal values.
+   */
+  function comparedModes() {
+    const modes = new Set();
+    for (const match of js.matchAll(/\nfunction open[A-Za-z]*Editor\([\s\S]*?\n}/g)) {
+      for (const compare of match[0].matchAll(/\bmode\s*[=!]==\s*"([\w-]+)"/g)) {
+        modes.add(compare[1]);
+      }
+    }
+    return modes;
+  }
+
+  it("finds the call sites and the comparisons at all", () => {
+    // Without this the two checks below pass vacuously if the regexes ever
+    // stop matching the code they are meant to read.
+    expect(passedModes().size).toBeGreaterThan(0);
+    expect(comparedModes().size).toBeGreaterThan(0);
+  });
+
+  it("compares only mode values some caller actually passes", () => {
+    const passed = passedModes();
+    for (const mode of comparedModes()) {
+      expect(
+        passed.has(mode),
+        `app.js branches on mode === "${mode}", but no openXEditor() call site ` +
+          `passes it. Modes actually passed: ${[...passed].sort().join(", ")}. ` +
+          `That branch can never run.`,
+      ).toBe(true);
+    }
+  });
+
+  it("wires identifier generation into all four create forms", () => {
+    // The generation only ever runs for a new entity, so it sits behind the
+    // mode guard the check above protects.
+    for (const entityType of ["asset", "observation", "building_event", "cost_evidence"]) {
+      expect(
+        js.includes(`wireIdentifierGeneration(\n      "${entityType}"`),
+        `expected wireIdentifierGeneration() for ${entityType}`,
+      ).toBe(true);
+    }
+  });
+});

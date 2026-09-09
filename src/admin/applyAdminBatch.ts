@@ -185,13 +185,25 @@ function validateCommand(
   }
 }
 
+/**
+ * Source identifiers stay mandatory: they say which document an edit came
+ * from, and the forms prefill them from the entity itself, so they cost the
+ * user nothing. The explanation does not — it is prose only the one person
+ * entering the data would ever read, and requiring it bought nothing but
+ * "testi" and "paivitys". An empty explanation is therefore valid here.
+ *
+ * The relaxation has to reach validateAuditTrail in the same change:
+ * applyAdminBatch copies this explanation straight onto the audit row, that
+ * row is validated as part of the resulting snapshot, and the same snapshot
+ * validation runs on every load. Loosening only this check would trade a
+ * clean field error for an INVALID_ADMIN_DATA on the whole batch.
+ */
 function validateOperationMetadata(operation: AdminDataOperation): void {
   if (operation.sourceIds.length === 0 ||
-      operation.sourceIds.some((item) => item.trim() === "") ||
-      operation.explanation.trim() === "") {
+      operation.sourceIds.some((item) => item.trim() === "")) {
     throw new DomainValidationError(
       "INVALID_ADMIN_OPERATION",
-      `Admin operation ${operation.type} requires sourceIds and explanation.`,
+      `Admin operation ${operation.type} requires sourceIds.`,
     );
   }
   if (operation.type === "save_building_event") {

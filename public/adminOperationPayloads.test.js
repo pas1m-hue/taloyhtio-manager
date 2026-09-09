@@ -73,6 +73,10 @@ import {
   validateFinancialEntryInput,
   validateObservationInput,
   validatePriceLevelConfirmationInput,
+  pickPrefillSource,
+  slugifyIdentifier,
+  generateEntityId,
+  resolveGeneratedField,
 } from "./adminOperationPayloads.js";
 
 const ASSETS = [
@@ -152,19 +156,26 @@ describe("buildSaveHousingCompanyOperation", () => {
     });
   });
 
-  it("requires operation sourceIds and explanation (not hardcoded)", () => {
+  it("requires operation sourceIds (not hardcoded)", () => {
     const result = buildSaveHousingCompanyOperation({
       ...validRaw,
       sourceIds: "",
-      explanation: "   ",
+      explanation: "Hallitus tarkisti perustiedot.",
     });
     expect(result).toEqual({
       ok: false,
-      errors: {
-        sourceIds: expect.any(String),
-        explanation: expect.any(String),
-      },
+      errors: { sourceIds: expect.any(String) },
     });
+  });
+
+  it("accepts a blank explanation and sends it as an empty string", () => {
+    const result = buildSaveHousingCompanyOperation({ ...validRaw, explanation: "   " });
+    expect(result.ok).toBe(true);
+    // Empty string, never undefined: the value crosses JSONB, which drops
+    // undefined keys, so an absent key and an undefined one are the same
+    // thing on the way back.
+    expect(result.operation.explanation).toBe("");
+    expect(Object.hasOwn(result.operation, "explanation")).toBe(true);
   });
 });
 
@@ -1213,14 +1224,14 @@ describe("validateFinancialAccountInput / buildSaveFinancialAccountOperation", (
     });
   });
 
-  it("rejects a missing sourceIds or explanation, mirroring housing-company metadata", () => {
+  it("rejects a missing sourceIds but accepts a missing explanation", () => {
     const missingSource = buildSaveFinancialAccountOperation({ ...validRaw, sourceIds: "" });
     expect(missingSource.ok).toBe(false);
     expect(missingSource.errors.sourceIds).toBeDefined();
 
     const missingExplanation = buildSaveFinancialAccountOperation({ ...validRaw, explanation: "" });
-    expect(missingExplanation.ok).toBe(false);
-    expect(missingExplanation.errors.explanation).toBeDefined();
+    expect(missingExplanation.ok).toBe(true);
+    expect(missingExplanation.operation.explanation).toBe("");
   });
 });
 
@@ -1293,12 +1304,190 @@ describe("validateFinancialEntryInput / buildSaveFinancialEntryOperation", () =>
 
   it("reports operation-metadata errors under operationSourceIds, not sourceIds", () => {
     const result = buildSaveFinancialEntryOperation(
-      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "", explanation: "" },
+      { accountCode: "5300", year: "2025", actualAmount: "12000", sourceIds: "row_source", operationSourceIds: "", explanation: "Tuonti." },
       FINANCIAL_ACCOUNTS,
     );
     expect(result.ok).toBe(false);
     expect(result.errors.operationSourceIds).toBeDefined();
     expect(result.errors.sourceIds).toBeUndefined();
+  });
+});
+
+describe("slugifyIdentifier", () => {
+  it("lowercases and joins words with underscores", () => {
+    expect(slugifyIdentifier("Julkisivun maalaus")).toBe("julkisivun_maalaus");
+  });
+
+  it("folds Finnish diacritics to their base letters", () => {
+    expect(slugifyIdentifier("Ääkkösiä")).toBe("aakkosia");
+    expect(slugifyIdentifier("Åke Öhman")).toBe("ake_ohman");
+    expect(slugifyIdentifier("Lämmin vesi -varaajat")).toBe("lammin_vesi_varaajat");
+  });
+
+  it("collapses runs of punctuation into a single underscore", () => {
+    expect(slugifyIdentifier("IV-puhdistus")).toBe("iv_puhdistus");
+    expect(slugifyIdentifier("Katto:  vuoto!! (2026)")).toBe("katto_vuoto_2026");
+    expect(slugifyIdentifier("a___b")).toBe("a_b");
+  });
+
+  it("trims underscores from both ends", () => {
+    expect(slugifyIdentifier("  ...katto...  ")).toBe("katto");
+  });
+
+  it("returns an empty string when nothing survives", () => {
+    expect(slugifyIdentifier("")).toBe("");
+    expect(slugifyIdentifier("   ")).toBe("");
+    expect(slugifyIdentifier("!!!___!!!")).toBe("");
+    expect(slugifyIdentifier(undefined)).toBe("");
+  });
+
+  it("cuts a long title at a word boundary, never mid-word", () => {
+    const long = "Tarkastuksessa havaittiin, että ullakon eristeissä on laajalti " +
+      "kosteusjälkiä pohjoispäädyn alueella ja aluskate vaikuttaa repeytyneeltä.";
+    const slug = slugifyIdentifier(long);
+    expect(slug.length).toBeLessThanOrEqual(40);
+    // The cut lands on a boundary, so the last word is whole.
+    expect(slug).toBe("tarkastuksessa_havaittiin_etta_ullakon");
+    expect(slug.endsWith("_")).toBe(false);
+  });
+
+  it("hard-truncates a single word with no boundary to cut at", () => {
+    const slug = slugifyIdentifier("supercalifragilisticexpialidociousantidisestablishmentarianism");
+    expect(slug).toBe("supercalifragilisticexpialidociousantidi");
+    expect(slug.length).toBe(40);
+  });
+
+  it("keeps every identifier already in the data expressible", () => {
+    expect(slugifyIdentifier("Lämmin vesi varaajat")).toBe("lammin_vesi_varaajat");
+    expect(slugifyIdentifier("condensation a2 a3 b6 2026")).toBe("condensation_a2_a3_b6_2026");
+  });
+});
+
+describe("generateEntityId", () => {
+  it("prefixes by entity type", () => {
+    expect(generateEntityId("asset", "Julkisivu", [])).toBe("asset_julkisivu");
+    expect(generateEntityId("observation", "Kosteusjälki", [])).toBe("observation_kosteusjalki");
+    expect(generateEntityId("building_event", "IV-puhdistus", [])).toBe("event_iv_puhdistus");
+    expect(generateEntityId("cost_evidence", "Kuntoarvio", [])).toBe("cost_kuntoarvio");
+  });
+
+  it("numbers a collision instead of erroring, counting up from 2", () => {
+    const taken = ["event_kuntoarvio"];
+    const second = generateEntityId("building_event", "Kuntoarvio", taken);
+    expect(second).toBe("event_kuntoarvio_2");
+
+    // A second collision must not hand back _2 again.
+    const third = generateEntityId("building_event", "Kuntoarvio", [...taken, second]);
+    expect(third).toBe("event_kuntoarvio_3");
+    expect(third).not.toBe(second);
+
+    const fourth = generateEntityId("building_event", "Kuntoarvio", [...taken, second, third]);
+    expect(fourth).toBe("event_kuntoarvio_4");
+  });
+
+  it("collides on the slug, so differently written titles still get separate ids", () => {
+    const first = generateEntityId("building_event", "Kunto arvio", []);
+    const second = generateEntityId("building_event", "kunto-arvio!", [first]);
+    expect(first).toBe("event_kunto_arvio");
+    expect(second).toBe("event_kunto_arvio_2");
+  });
+
+  it("numbers after truncation, so a long title still yields a free id", () => {
+    const long = "Tarkastuksessa havaittiin että ullakon eristeissä kosteutta";
+    const first = generateEntityId("observation", long, []);
+    const second = generateEntityId("observation", long, [first]);
+    expect(second).toBe(`${first}_2`);
+  });
+
+  it("returns an empty string for a title that slugifies to nothing", () => {
+    expect(generateEntityId("asset", "   ", [])).toBe("");
+    expect(generateEntityId("asset", "!!!", [])).toBe("");
+  });
+
+  it("returns an empty string for an unknown entity type", () => {
+    expect(generateEntityId("housing_company", "Taloyhtiö", [])).toBe("");
+  });
+});
+
+describe("resolveGeneratedField", () => {
+  it("fills the field from the title while the user has not touched it", () => {
+    expect(resolveGeneratedField({
+      touched: false, current: "", generated: "event_kuntoarvio",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("keeps regenerating as the title keeps changing", () => {
+    expect(resolveGeneratedField({
+      touched: false, current: "event_kunto", generated: "event_kuntoarvio",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("never overwrites an identifier the user chose, however the title changes", () => {
+    // The order matters and is the whole point: the user edits the identifier
+    // FIRST and changes the title AFTER. Run the other way round, this passes
+    // whether or not the touched flag exists.
+    let touched = false;
+    let value = "";
+
+    // 1. User types a title; the field follows along.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_iv_puhdistus" });
+    expect(value).toBe("event_iv_puhdistus");
+
+    // 2. User edits the identifier by hand.
+    touched = true;
+    value = "event_iv_2026";
+
+    // 3. User goes back and changes the title. The identifier must not move.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_ilmanvaihdon_puhdistus" });
+    expect(value).toBe("event_iv_2026");
+
+    // 4. And it must not come back on any later change either.
+    value = resolveGeneratedField({ touched, current: value, generated: "event_jotain_muuta" });
+    expect(value).toBe("event_iv_2026");
+  });
+
+  it("leaves the field alone when there is nothing to generate from yet", () => {
+    // Clearing the title must not wipe an identifier that is already there.
+    expect(resolveGeneratedField({
+      touched: false, current: "event_kuntoarvio", generated: "",
+    })).toBe("event_kuntoarvio");
+  });
+
+  it("keeps a touched empty field empty", () => {
+    expect(resolveGeneratedField({
+      touched: true, current: "", generated: "event_kuntoarvio",
+    })).toBe("");
+  });
+});
+
+describe("pickPrefillSource", () => {
+  it("uses the first field that has content", () => {
+    expect(pickPrefillSource(["kuntoarvio-2024", ""])).toBe("kuntoarvio-2024");
+  });
+
+  it("falls back to the sourceUrl when the sourceId is blank", () => {
+    // The cost-evidence form is the only one whose source can live in either
+    // of two fields, and the fallback is easy to write the wrong way round.
+    // A blank sourceId must not win over a filled sourceUrl.
+    expect(pickPrefillSource(["", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("https://urakoitsija.fi/tarjous-2026.pdf");
+    expect(pickPrefillSource(["   ", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("https://urakoitsija.fi/tarjous-2026.pdf");
+  });
+
+  it("prefers the sourceId when both are filled", () => {
+    expect(pickPrefillSource(["K003", "https://urakoitsija.fi/tarjous-2026.pdf"]))
+      .toBe("K003");
+  });
+
+  it("returns an empty string when nothing is filled", () => {
+    expect(pickPrefillSource(["", "   "])).toBe("");
+    expect(pickPrefillSource([])).toBe("");
+    expect(pickPrefillSource([undefined, undefined])).toBe("");
+  });
+
+  it("returns the untrimmed value so the mirror matches what was typed", () => {
+    expect(pickPrefillSource([" board_2026 "])).toBe(" board_2026 ");
   });
 });
 

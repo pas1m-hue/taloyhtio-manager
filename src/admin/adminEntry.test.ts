@@ -194,13 +194,71 @@ describe("V2.1 admin manual entry", () => {
     ]))).toThrowError(/more than once/);
   });
 
-  it("requires named sources and an explanation for every admin operation", () => {
+  it("requires named sources for every admin operation", () => {
     expect(() => applyAdminBatch(adminBaselineSnapshot, command([{
       type: "save_asset",
       value: newAsset,
       sourceIds: [],
+      explanation: "Uusi lämpöpumppu",
+    }]))).toThrowError(/requires sourceIds/);
+
+    expect(() => applyAdminBatch(adminBaselineSnapshot, command([{
+      type: "save_asset",
+      value: newAsset,
+      sourceIds: ["   "],
+      explanation: "Uusi lämpöpumppu",
+    }]))).toThrowError(/requires sourceIds/);
+  });
+
+  it("accepts an operation with no explanation and records the empty one", () => {
+    const next = applyAdminBatch(adminBaselineSnapshot, command([{
+      type: "save_asset",
+      value: newAsset,
+      sourceIds: ["manual_admin_entry_2026"],
       explanation: "",
-    }]))).toThrowError(/requires sourceIds and explanation/);
+    }]));
+
+    expect(next.assets.some((item) => item.id === newAsset.id)).toBe(true);
+    const audit = next.auditTrail.at(-1);
+    expect(audit?.entityKey).toBe(newAsset.id);
+    expect(audit?.explanation).toBe("");
+  });
+
+  it("keeps a snapshot loadable after an explanation-less save", () => {
+    // The regression this guards is not the save but the *next read*:
+    // validateAdminDataSnapshot walks the whole audit trail on every load,
+    // so one empty explanation on one row would lock the entire workspace
+    // out if validateAuditTrail still demanded non-empty text.
+    const saved = applyAdminBatch(adminBaselineSnapshot, command([{
+      type: "save_asset",
+      value: newAsset,
+      sourceIds: ["manual_admin_entry_2026"],
+      explanation: "",
+    }]));
+
+    expect(() => applyAdminBatch(saved, command([{
+      type: "save_asset",
+      value: { ...newAsset, name: "Lämpöpumppu 2" },
+      sourceIds: ["manual_admin_entry_2026"],
+      explanation: "",
+    }], saved.revision))).not.toThrow();
+  });
+
+  it("still accepts a trail written while the explanation was mandatory", () => {
+    const withText = applyAdminBatch(adminBaselineSnapshot, command([{
+      type: "save_asset",
+      value: newAsset,
+      sourceIds: ["manual_admin_entry_2026"],
+      explanation: "Hallituksen päätös 2026-01",
+    }]));
+
+    expect(withText.auditTrail.at(-1)?.explanation).toBe("Hallituksen päätös 2026-01");
+    expect(() => applyAdminBatch(withText, command([{
+      type: "save_asset",
+      value: { ...newAsset, active: false },
+      sourceIds: ["manual_admin_entry_2026"],
+      explanation: "",
+    }], withText.revision))).not.toThrow();
   });
 
   it("rejects an event whose evidence or asset is absent from the final batch", () => {

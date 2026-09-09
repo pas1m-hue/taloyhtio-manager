@@ -296,8 +296,129 @@ export function validateAssetInput(raw) {
 }
 
 /**
- * Operation-level metadata required by every admin operation: at least one
- * source id and a user-written explanation. Not a generic hardcoded default.
+ * Longest slug we will generate, before the prefix and before any collision
+ * number. The longest identifiers in the real data are 30-36 characters
+ * including their prefix, so 40 keeps every existing name expressible while
+ * stopping a pasted sentence from becoming the key.
+ */
+const MAX_SLUG_LENGTH = 40;
+
+/** Entity-type prefixes, taken from the identifiers already in the data. */
+export const ENTITY_ID_PREFIXES = {
+  asset: "asset_",
+  observation: "observation_",
+  building_event: "event_",
+  cost_evidence: "cost_",
+};
+
+/**
+ * Turns a human title into the identifier body: lowercase, diacritics folded
+ * (ä/å to a, ö to o), every run of non-alphanumerics to one underscore, no
+ * underscore at either end.
+ *
+ * Truncation cuts at the last underscore at or before MAX_SLUG_LENGTH so a
+ * word is not sliced mid-syllable; a first word longer than the limit has no
+ * boundary to cut at and is truncated hard. Both are better than the
+ * alternative of letting a 200-character description become the key.
+ * @param {unknown} title
+ * @returns {string}
+ */
+export function slugifyIdentifier(title) {
+  const text = typeof title === "string" ? title : "";
+  const folded = text
+    .normalize("NFD")
+    // Combining marks: this is what turns ä into a and ö into o, once the
+    // NFD above has split them into a base letter plus its diaeresis.
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (folded.length <= MAX_SLUG_LENGTH) return folded;
+  const cut = folded.slice(0, MAX_SLUG_LENGTH);
+  const boundary = cut.lastIndexOf("_");
+  return (boundary > 0 ? cut.slice(0, boundary) : cut).replace(/_+$/, "");
+}
+
+/**
+ * Builds an unused identifier for a new entity from its title.
+ *
+ * A collision appends a number and is silent: two observations of the same
+ * thing in the same year is a normal way to work, not a mistake worth an
+ * error message. The number counts up from 2, so the second
+ * `event_kuntoarvio` is `event_kuntoarvio_2` and the third `_3`.
+ *
+ * Returns "" for a title that slugifies to nothing, so the caller leaves the
+ * field alone rather than prefilling a bare prefix.
+ * @param {keyof typeof ENTITY_ID_PREFIXES} entityType
+ * @param {unknown} title
+ * @param {Iterable<string>} existingIds
+ * @returns {string}
+ */
+export function generateEntityId(entityType, title, existingIds) {
+  const prefix = ENTITY_ID_PREFIXES[entityType];
+  if (prefix === undefined) return "";
+  const slug = slugifyIdentifier(title);
+  if (slug === "") return "";
+
+  const taken = new Set(existingIds ?? []);
+  const candidate = `${prefix}${slug}`;
+  if (!taken.has(candidate)) return candidate;
+  for (let suffix = 2; ; suffix += 1) {
+    const next = `${candidate}_${suffix}`;
+    if (!taken.has(next)) return next;
+  }
+}
+
+/**
+ * Decides what a generated field should hold after something it watches
+ * changed. Extracted from the form wiring so the rule is under test: this is
+ * the one that prevents the most irritating regression available here, a
+ * deliberately chosen identifier silently replaced when the title is edited
+ * afterwards.
+ *
+ * - `touched` — the user has edited the field themselves. Their value stands,
+ *   permanently. There is no un-touching.
+ * - `generated === ""` — there is nothing to name the entity after yet, so
+ *   whatever is in the field stays rather than being blanked.
+ * @param {{ touched: boolean, current: string, generated: string }} input
+ * @returns {string}
+ */
+export function resolveGeneratedField({ touched, current, generated }) {
+  if (touched) return current;
+  if (generated === "") return current;
+  return generated;
+}
+
+/**
+ * Picks which of an entity's own source fields the operation should cite.
+ *
+ * Most forms hold a single sourceIds field, but cost evidence carries its
+ * source as either a sourceId or a sourceUrl — spec 5.6 requires one of the
+ * two, not both — so the caller passes them in fallback order and the first
+ * one with content wins. Returns the raw (untrimmed) value so the prefill
+ * mirrors exactly what the user typed; "" when every field is blank.
+ * @param {ReadonlyArray<string | undefined>} values
+ * @returns {string}
+ */
+export function pickPrefillSource(values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return "";
+}
+
+/**
+ * Operation-level metadata for every admin operation. The source identifiers
+ * are required — the forms prefill them from the entity being saved, so they
+ * are a click, not typing. The explanation is optional: it is prose nobody
+ * but the single person entering the data would read, and requiring it only
+ * produced "testi".
+ *
+ * An omitted explanation is the empty string, never undefined. The value goes
+ * through JSONB, which drops undefined keys, so an optional property would be
+ * indistinguishable from an absent one after a single round trip — the
+ * three-state distinction exactOptionalPropertyTypes offers cannot survive
+ * the wire, and every producer here would pay for it in conditional spreads.
  * @param {Record<string, unknown>} raw
  * @returns {ValidationResult<{ sourceIds: string[], explanation: string }>}
  */
@@ -311,9 +432,6 @@ export function validateOperationMeta(raw) {
   }
 
   const explanation = toTrimmed(raw.explanation);
-  if (explanation === "") {
-    errors.explanation = "Muutoksen selitys on pakollinen.";
-  }
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value: { sourceIds, explanation } };
