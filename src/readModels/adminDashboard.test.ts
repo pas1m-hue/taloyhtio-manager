@@ -193,3 +193,36 @@ describe("group-level actuals reach both the admin UI and the publication", () =
       .toBe(fingerprintAdminPublishableContent(base));
   });
 });
+
+describe("the cash path table is admin-only (feature/cashpath-rebuild)", () => {
+  it("reaches the admin UI through the dashboard read model", () => {
+    const model = buildAdminDashboardReadModel(snapshotWithMaintenanceData(), undefined, HORIZON);
+
+    expect(model.cashPathTable.scenarios.base.rows).toEqual([]);
+    expect(model.cashPathTable.completedRepairs).toEqual([]);
+    // The forecast the visitor cards and Vastiketarve read is still there,
+    // untouched, beside it.
+    expect(model.calculations.liquidity.status).toBe("unavailable");
+  });
+
+  it("does not reach the publication: balance sheets stay out of the fingerprint", () => {
+    // The table reads balance sheets and budgets. Neither feeds a published
+    // calculation, so adding a balance sheet must not make the workspace
+    // look unpublished - the same rule the group budget follows above.
+    const base = snapshotWithMaintenanceData();
+    const withBalanceSheet = createAdminDataSnapshot({
+      ...base,
+      balanceSheetSnapshots: [{
+        id: "tase_2025",
+        asOfDate: "2025-12-31",
+        sourceIds: ["tilinpaatos_2025"],
+        entries: [{ section: "current_assets" as const, key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208 }],
+      }],
+    });
+
+    expect(fingerprintAdminPublishableContent(withBalanceSheet))
+      .toBe(fingerprintAdminPublishableContent(base));
+    expect(buildAdminDashboardReadModel(withBalanceSheet, undefined, HORIZON).cashPathTable)
+      .toEqual(buildAdminDashboardReadModel(base, undefined, HORIZON).cashPathTable);
+  });
+});
