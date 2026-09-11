@@ -4681,7 +4681,7 @@ describe("Selvitykset (feature/selvitykset)", () => {
 
     it("carries the statement's header, standing text and empty timing", () => {
       const vm = buildMaintenanceDocumentViewModel(documents, "maintenance_need");
-      expect(vm.header).toEqual({ periodLabel: "2026–2030", boardHandledAt: "10.3.2026", meetingPresentedAt: "" });
+      expect(vm.header).toEqual({ periodLabel: "2026–2030", boardHandledAtLabel: "10.3.2026", meetingPresentedAtLabel: "" });
       expect(vm.standingText).toContain("hallituksen tämän hetken näkemys");
       expect(vm.rows[1]).toEqual({ first: "Y", second: "" });
     });

@@ -3518,8 +3518,8 @@ function prefillMaintenanceNeedHeader(current) {
 function maintenanceDocumentTable(vm) {
   const header = vm.header === null ? "" : `<dl class="md-header">
     <dt>Kausi</dt><dd>${escapeHtml(vm.header.periodLabel || "—")}</dd>
-    <dt>Hallitus käsitellyt</dt><dd>${escapeHtml(vm.header.boardHandledAt || "—")}</dd>
-    <dt>Esitelty yhtiökokoukselle</dt><dd>${escapeHtml(vm.header.meetingPresentedAt || "—")}</dd>
+    <dt>Hallitus käsitellyt</dt><dd>${escapeHtml(vm.header.boardHandledAtLabel || "—")}</dd>
+    <dt>Esitelty yhtiökokoukselle</dt><dd>${escapeHtml(vm.header.meetingPresentedAtLabel || "—")}</dd>
   </dl>`;
   const standing = vm.standingText === "" ? "" : `<p class="md-standing">${escapeHtml(vm.standingText)}</p>`;
   const table = vm.isEmpty

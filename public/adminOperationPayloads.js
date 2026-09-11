@@ -4610,7 +4610,7 @@ const TECHNICAL_LIFESPAN_NOTES = [
  * @returns {{
  *   kind: string, title: string, headers: string[], isEmpty: boolean, rowCount: number,
  *   rows: Array<{ first: string, second: string }>,
- *   header: { periodLabel: string, boardHandledAt: string, meetingPresentedAt: string } | null,
+ *   header: { periodLabel: string, boardHandledAtLabel: string, meetingPresentedAtLabel: string } | null,
  *   standingText: string, notes: string[], sourceIds: string[],
  *   current: any | null,
  * }}
@@ -4632,8 +4632,10 @@ export function buildMaintenanceDocumentViewModel(documents, kind) {
   const header = kind === "maintenance_need" && doc
     ? {
       periodLabel: doc.period ? `${doc.period.startYear}–${doc.period.endYear}` : "",
-      boardHandledAt: formatFinnishDate(doc.boardHandledAt),
-      meetingPresentedAt: formatFinnishDate(doc.meetingPresentedAt),
+      // Display strings, already formatted - named as labels so no caller
+      // mistakes them for the stored ISO dates on `current`.
+      boardHandledAtLabel: formatFinnishDate(doc.boardHandledAt),
+      meetingPresentedAtLabel: formatFinnishDate(doc.meetingPresentedAt),
     }
     : null;
   return {
