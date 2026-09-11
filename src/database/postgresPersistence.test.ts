@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdminDataBatchCommand,
+  AdminDataSnapshot,
   CreateVisitorSessionCommand,
   Horizon,
   PublishAdminDataCommand,
@@ -11,6 +12,7 @@ import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { publishAdminRevision } from "../application/publishingApplicationService.js";
 import { buildVisitorPublishedView } from "../publishing/visitorPublishedView.js";
+import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 import {
   applyVisitorSessionChanges,
   createVisitorSession,
@@ -464,6 +466,73 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.maintenanceDocuments).toEqual([]);
   });
 
+  it("reads a liquidity baseline stored under the old field name (refactor/hoitokate-naming)", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    // Every admin snapshot and publication written before the rename carries
+    // `currentAnnualRepairCollection`. Without the read-side rename the loaded
+    // record has no `currentAnnualOperatingMargin`, validateLiquidityBaseline
+    // fails on nonNegative(undefined), and the workspace cannot be loaded.
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+    await pool.query(
+      `UPDATE tm_publications
+       SET payload = replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+    const baseline = loaded!.liquidityBaselines[0]!;
+    expect(baseline.currentAnnualOperatingMargin)
+      .toBe(adminBaselineSnapshot.liquidityBaselines[0]!.currentAnnualOperatingMargin);
+    expect(baseline).not.toHaveProperty("currentAnnualRepairCollection");
+
+    const published = await publications.loadCurrent(COMPANY_ID);
+    expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
+      .toBe(baseline.currentAnnualOperatingMargin);
+    expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualRepairCollection");
+  });
+
+  it("keeps a publication's stored fingerprint valid across the rename", async () => {
+    // The version of the test above that matches production: the fingerprint
+    // was computed over the OLD key when the publication was made, and
+    // validatePublishedDataSnapshot recomputes it on every load. A hash taken
+    // over the renamed content fails that check for every publication that
+    // exists (INVALID_PUBLISHED_DATA on the public overview - found live).
+    // The legacy-key content is built from the raw JSON, so this fingerprint
+    // is what an old deployment would have written, not what the current
+    // code computes.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    const legacyAdmin = JSON.parse(
+      JSON.stringify(adminBaselineSnapshot)
+        .replaceAll("currentAnnualOperatingMargin", "currentAnnualRepairCollection"),
+    ) as AdminDataSnapshot;
+    const legacyFingerprint = fingerprintAdminPublishableContent(legacyAdmin);
+    await pool.query(
+      `UPDATE tm_publications
+       SET payload = jsonb_set(
+             replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb,
+             '{contentFingerprint}', to_jsonb($2::text)),
+           content_fingerprint = $2
+       WHERE company_id = $1`,
+      [COMPANY_ID, legacyFingerprint],
+    );
+
+    const published = await publications.loadCurrent(COMPANY_ID);
+    expect(published?.contentFingerprint).toBe(legacyFingerprint);
+    expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
+      .toBe(adminBaselineSnapshot.liquidityBaselines[0]!.currentAnnualOperatingMargin);
+    // And the workspace does not report a phantom change to publish.
+    const loaded = await publications.load(COMPANY_ID);
+    expect(fingerprintAdminPublishableContent(loaded!)).toBe(legacyFingerprint);
+  });
+
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
     // The tests above each pin one field, which means a future field
@@ -687,6 +756,28 @@ describe("V2.5 PostgreSQL visitor-session repository", () => {
       "2026-07-17T20:30:00+03:00",
     );
     expect(reloaded.sessionRevision).toBe(1);
+  });
+
+  it("reads a session's liquidity override stored under the old field name", async () => {
+    await createVisitorSession(publications, sessions, sessionCommand());
+    await applyVisitorSessionChanges(publications, sessions, {
+      ...sessionBatch(0),
+      operations: [{
+        type: "set_liquidity_overrides",
+        value: { annualOperatingMarginByScenario: { base: 12_000 } },
+      }],
+    });
+    // A session inside its TTL, written before the rename.
+    await pool.query(
+      `UPDATE tm_visitor_sessions
+       SET payload = replace(payload::text, 'annualOperatingMarginByScenario', 'annualRepairCollectionByScenario')::jsonb
+       WHERE session_id = $1`,
+      ["visitor-db-session"],
+    );
+
+    const loaded = await sessions.load("visitor-db-session");
+    expect(loaded?.liquidityOverrides.annualOperatingMarginByScenario).toEqual({ base: 12_000 });
+    expect(loaded?.liquidityOverrides).not.toHaveProperty("annualRepairCollectionByScenario");
   });
 
   it("rejects duplicate sessions and stale browser revisions", async () => {

@@ -233,7 +233,7 @@ function validateCustomEvent(value: SessionCustomEvent): void {
 }
 
 function validateLiquidityOverrides(value: SessionLiquidityOverrides): void {
-  const annual = value.annualRepairCollectionByScenario;
+  const annual = value.annualOperatingMarginByScenario;
   if ((value.currentCash !== undefined && !nonNegative(value.currentCash)) ||
       (value.trailing12mOperatingCosts !== undefined &&
         !nonNegative(value.trailing12mOperatingCosts)) ||

@@ -9,6 +9,7 @@ import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
 import { postgresErrorCode } from "./postgresErrors.js";
 import { instantIso, instantMillis, integer } from "./postgresValues.js";
+import { withRenamedOverrideField } from "../domain/legacyFieldNames.js";
 
 interface SessionRow extends Record<string, unknown> {
   session_id: string;
@@ -344,13 +345,18 @@ function parseAccessRow(row: AccessRow): VisitorSessionAccessRecord {
 }
 
 function parsePayload(value: unknown): VisitorSessionWorkspace {
+  let payload: VisitorSessionWorkspace;
   try {
-    return clone((typeof value === "string"
+    payload = clone((typeof value === "string"
       ? JSON.parse(value)
       : value) as VisitorSessionWorkspace);
   } catch {
     throw integrityError("Stored visitor-session payload is not valid JSON.");
   }
+  // A session written before the rename, still inside its TTL.
+  return payload.liquidityOverrides === undefined
+    ? payload
+    : { ...payload, liquidityOverrides: withRenamedOverrideField(payload.liquidityOverrides) };
 }
 
 function validateAccessRecord(

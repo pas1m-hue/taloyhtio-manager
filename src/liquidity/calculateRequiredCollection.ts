@@ -13,7 +13,7 @@ export interface CalculateRequiredCollectionInput {
   readonly horizon: Horizon;
   readonly initialCash: number;
   readonly operatingBufferTarget: number;
-  readonly currentAnnualRepairCollection: number;
+  readonly currentAnnualOperatingMargin: number;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
   /**
@@ -49,9 +49,9 @@ export function calculateRequiredCollection(
     "operatingBufferTarget",
   );
   const currentCollectionCents = toSignedCents(
-    input.currentAnnualRepairCollection,
+    input.currentAnnualOperatingMargin,
     "INVALID_COLLECTION_INPUT",
-    "currentAnnualRepairCollection",
+    "currentAnnualOperatingMargin",
   );
   const costByYear = projectionCostMap(input.projection, input.horizon);
   const planningYearCount = input.horizon.endYear - input.horizon.startYear + 1;
@@ -87,7 +87,7 @@ export function calculateRequiredCollection(
   const base = {
     scenario: input.projection.scenario,
     knownCostRequiredAnnualCollection: fromCents(requiredAnnualCents),
-    currentAnnualRepairCollection: fromCents(currentCollectionCents),
+    currentAnnualOperatingMargin: fromCents(currentCollectionCents),
     additionalAnnualCollection: fromCents(additionalAnnualCents),
     currentMonthlyCollection: fromCents(Math.ceil(currentCollectionCents / 12)),
     requiredMonthlyCollection: fromCents(Math.ceil(requiredAnnualCents / 12)),

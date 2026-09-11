@@ -591,7 +591,7 @@ describe("workflow integration", () => {
       currentCash: correctedWorkbookLiquidityBaseline.currentCash,
       trailing12mOperatingCosts:
         correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
     } as const;
     const before = buildLiquidityForecast({
       projection: beforeProjection,

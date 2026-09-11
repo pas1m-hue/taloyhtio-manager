@@ -290,7 +290,7 @@ describe("V2.3 visitor session workspace", () => {
     await commitVisitorSessionBatch(sessions, batch("visitor-session-1", [{
       type: "set_liquidity_overrides",
       value: {
-        annualRepairCollectionByScenario: {
+        annualOperatingMarginByScenario: {
           base: 20_000,
           stress: 30_000,
         },
@@ -303,9 +303,9 @@ describe("V2.3 visitor session workspace", () => {
       AS_OF,
     );
     if (model.liquidity.status !== "available") throw new Error("fixture requires liquidity");
-    expect(model.liquidity.forecast.scenarios.base.cashPath.annualRepairCollection)
+    expect(model.liquidity.forecast.scenarios.base.cashPath.annualOperatingMargin)
       .toBe(20_000);
-    expect(model.liquidity.forecast.scenarios.stress.cashPath.annualRepairCollection)
+    expect(model.liquidity.forecast.scenarios.stress.cashPath.annualOperatingMargin)
       .toBe(30_000);
     // The scenario the visitor did not override falls back to the published
     // figure, and that figure is now the computed hoitokate. It used to be
@@ -313,7 +313,7 @@ describe("V2.3 visitor session workspace", () => {
     // standing in for income on the collection side of the same cash path. The
     // two are within 200 EUR of each other by coincidence; one is money coming
     // in and the other is money going out.
-    expect(model.liquidity.forecast.scenarios.optimistic.cashPath.annualRepairCollection)
+    expect(model.liquidity.forecast.scenarios.optimistic.cashPath.annualOperatingMargin)
       .toBe(financialActualsExpected.operatingMargin);
   });
 
@@ -484,7 +484,7 @@ describe("V2.3 visitor session workspace", () => {
       missingFields: [
         "currentCash",
         "trailing12mOperatingCosts",
-        "currentAnnualRepairCollection",
+        "currentAnnualOperatingMargin",
       ],
     });
   });
@@ -506,7 +506,7 @@ describe("V2.3 visitor session workspace", () => {
       value: {
         currentCash: 20_000,
         trailing12mOperatingCosts: 36_000,
-        annualRepairCollectionByScenario: {
+        annualOperatingMarginByScenario: {
           optimistic: 5_000,
           base: 7_500,
           stress: 10_000,

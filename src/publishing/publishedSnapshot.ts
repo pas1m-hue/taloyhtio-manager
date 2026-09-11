@@ -16,6 +16,7 @@ import {
   type PublishedGroupActual,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot } from "../admin/adminDataValidation.js";
+import { withLegacyBaselineKey } from "../domain/legacyFieldNames.js";
 
 interface PublishableContent {
   readonly housingCompany: PublishedDataSnapshot["housingCompany"];
@@ -416,8 +417,13 @@ const ADDITIVE_CONTENT_KEYS = [
 ] as const;
 
 function fingerprintPublishableContent(content: PublishableContent): string {
+  // Hashed under the stored (legacy) baseline key - see legacyFieldNames.ts.
+  const hashed = {
+    ...content,
+    liquidityBaselines: content.liquidityBaselines.map(withLegacyBaselineKey),
+  } as unknown as PublishableContent;
   const canonical = JSON.stringify(
-    sortObjectKeysRecursively(withoutEmptyAdditiveKeys(content)),
+    sortObjectKeysRecursively(withoutEmptyAdditiveKeys(hashed)),
   );
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;

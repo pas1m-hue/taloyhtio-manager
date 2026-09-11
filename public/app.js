@@ -3713,7 +3713,7 @@ function renderRequiredCollection() {
   // it, and that the baseline's old hand-entered number no longer drives it.
   const marginNote = buildOperatingMarginNote(
     state.admin.calculations.operatingFigures.margin,
-    state.admin.latestLiquidityBaseline?.currentAnnualRepairCollection,
+    state.admin.latestLiquidityBaseline?.currentAnnualOperatingMargin,
     money,
   );
   host.innerHTML = `<p class="muted">${escapeHtml(marginNote)}</p>
@@ -3733,7 +3733,7 @@ function renderRequiredCollection() {
       <div class="metric">${money(rc.knownCostRequiredAnnualCollection)}</div>
       <div class="metric-label">vaadittu hoitokate tunnetuille kustannuksille</div>
       <ul>
-        <li>Nykyinen hoitokate ${money(rc.currentAnnualRepairCollection)}/v</li>
+        <li>Nykyinen hoitokate ${money(rc.currentAnnualOperatingMargin)}/v</li>
         <li>Lisätarve ${money(rc.additionalAnnualCollection)}/v</li>
         <li>Lisätarve ${money(rc.additionalMonthlyCollection)}/kk</li>
         ${perApartment === undefined ? "" : `<li>${money(perApartment)}/asunto/kk</li>`}
@@ -3759,7 +3759,7 @@ const LIQUIDITY_FIELD_LABELS = {
   liquidityBaseline: "Likviditeetin lähtötietue (save_liquidity_baseline)",
   currentCash: "Nykyinen kassa",
   trailing12mOperatingCosts: "12 kk hoitokulut (lasketaan tilidatasta)",
-  currentAnnualRepairCollection: "Hoitokate (lasketaan tilidatasta)",
+  currentAnnualOperatingMargin: "Hoitokate (lasketaan tilidatasta)",
   operatingMargin: "Hoitokate (lasketaan tilidatasta)",
 };
 
@@ -3899,7 +3899,7 @@ async function saveLiquidity(event) {
       currentCash: optionalNumber(data.get("currentCash")),
       trailing12mOperatingCosts: optionalNumber(data.get("trailing12mOperatingCosts")),
       bufferMonths: optionalNumber(data.get("bufferMonths")),
-      annualRepairCollectionByScenario: compact({
+      annualOperatingMarginByScenario: compact({
         optimistic: optionalNumber(data.get("optimistic")),
         base: optionalNumber(data.get("base")),
         stress: optionalNumber(data.get("stress")),
@@ -4010,7 +4010,7 @@ function fillLiquidityForm(model) {
   form.elements.trailing12mOperatingCosts.value = a.trailing12mOperatingCosts;
   form.elements.bufferMonths.value = a.operatingBufferSettings.bufferMonths ?? "";
   for (const scenario of SCENARIOS) {
-    form.elements[scenario].value = a.annualRepairCollectionByScenario[scenario];
+    form.elements[scenario].value = a.annualOperatingMarginByScenario[scenario];
   }
 }
 
