@@ -4634,6 +4634,21 @@ describe("Selvitykset (feature/selvitykset)", () => {
       const vm = buildMaintenanceDocumentViewModel(undefined, "completed_works");
       expect(vm).toMatchObject({ isEmpty: true, rowCount: 0, rows: [], header: null, current: null, title: "Tehdyt toimenpiteet" });
     });
+
+    it("withholds the lifespan notes until there is a table for them to qualify", () => {
+      // "Yllä olevat vuosimäärät" refers to rows; over "Ei sisältöä" it
+      // refers to nothing.
+      expect(buildMaintenanceDocumentViewModel(undefined, "technical_lifespan").notes).toEqual([]);
+      expect(buildMaintenanceDocumentViewModel(
+        [{ id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["s"], rows: [] }],
+        "technical_lifespan",
+      ).notes).toEqual([]);
+      expect(buildMaintenanceDocumentViewModel(documents, "technical_lifespan").notes).toHaveLength(2);
+    });
+
+    it("shows the statement's standing text even without rows, since it describes the document", () => {
+      expect(buildMaintenanceDocumentViewModel(undefined, "maintenance_need").standingText).toContain("hallituksen tämän hetken näkemys");
+    });
   });
 
   describe("describeMaintenanceDocumentReplace", () => {
