@@ -446,6 +446,24 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.groupActuals).toEqual([]);
   });
 
+  it("defaults maintenanceDocuments missing from a pre-existing stored row instead of throwing", async () => {
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    // Same regression as above (feature/selvitykset handoff §3): every row
+    // written before this collection existed has no such JSONB key, and
+    // validateAdminDataSnapshot's uniqueBy() would throw "is not iterable".
+    await pool.query(
+      `UPDATE tm_admin_snapshots
+       SET payload = payload - 'maintenanceDocuments'
+       WHERE company_id = $1`,
+      [COMPANY_ID],
+    );
+
+    const loaded = await publications.load(COMPANY_ID);
+
+    expect(loaded).toBeDefined();
+    expect(loaded!.maintenanceDocuments).toEqual([]);
+  });
+
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
     // The tests above each pin one field, which means a future field
@@ -458,7 +476,7 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
          - 'financialYears' - 'liquidityBaselines' - 'assets' - 'observations'
          - 'costEvidence' - 'priceLevelConfirmations' - 'events'
          - 'financialAccounts' - 'financialEntries' - 'balanceSheetSnapshots'
-         - 'groupBudgets' - 'groupActuals' - 'auditTrail'
+         - 'groupBudgets' - 'groupActuals' - 'maintenanceDocuments' - 'auditTrail'
        WHERE company_id = $1`,
       [COMPANY_ID],
     );
@@ -471,7 +489,7 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
       loaded!.observations, loaded!.costEvidence, loaded!.priceLevelConfirmations,
       loaded!.events, loaded!.financialAccounts, loaded!.financialEntries,
       loaded!.balanceSheetSnapshots, loaded!.groupBudgets, loaded!.groupActuals,
-      loaded!.auditTrail,
+      loaded!.maintenanceDocuments, loaded!.auditTrail,
     ]) {
       expect(collection).toEqual([]);
     }
