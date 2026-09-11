@@ -4618,8 +4618,11 @@ export function buildMaintenanceDocumentViewModel(documents, kind) {
     rowCount: rows.length,
     rows,
     header,
+    // The standing text describes the document and shows whether or not it
+    // has rows yet; the notes qualify the figures in the table, so they only
+    // appear once there is a table to qualify.
     standingText: kind === "maintenance_need" ? MAINTENANCE_NEED_STANDING_TEXT : "",
-    notes: kind === "technical_lifespan" ? [...TECHNICAL_LIFESPAN_NOTES] : [],
+    notes: kind === "technical_lifespan" && rows.length > 0 ? [...TECHNICAL_LIFESPAN_NOTES] : [],
     sourceIds: doc ? normalizeSourceList(doc.sourceIds) : [],
     current: doc,
   };
