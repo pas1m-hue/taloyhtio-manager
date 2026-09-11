@@ -14,6 +14,7 @@ import {
   type DeletableAdminEntityType,
   type GroupActual,
   type GroupBudget,
+  type MaintenanceDocument,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot, validateBuildingEventRuntime } from "./adminDataValidation.js";
 
@@ -31,6 +32,7 @@ export interface CreateAdminSnapshotInput {
   readonly balanceSheetSnapshots?: AdminDataSnapshot["balanceSheetSnapshots"];
   readonly groupBudgets?: AdminDataSnapshot["groupBudgets"];
   readonly groupActuals?: AdminDataSnapshot["groupActuals"];
+  readonly maintenanceDocuments?: AdminDataSnapshot["maintenanceDocuments"];
   readonly updatedAt: string;
   readonly updatedBy: string;
 }
@@ -54,6 +56,7 @@ export function createAdminDataSnapshot(
     balanceSheetSnapshots: clone(input.balanceSheetSnapshots ?? []),
     groupBudgets: clone(input.groupBudgets ?? []),
     groupActuals: clone(input.groupActuals ?? []),
+    maintenanceDocuments: clone(input.maintenanceDocuments ?? []),
     auditTrail: [],
     updatedAt: input.updatedAt,
     updatedBy: input.updatedBy,
@@ -160,6 +163,7 @@ interface MutableAdminState {
   balanceSheetSnapshots: BalanceSheetSnapshot[];
   groupBudgets: GroupBudget[];
   groupActuals: GroupActual[];
+  maintenanceDocuments: MaintenanceDocument[];
   auditTrail: AdminAuditEntry[];
   updatedAt: string;
   updatedBy: string;
@@ -260,6 +264,8 @@ function describeOperation(operation: AdminDataOperation): {
       return { entityType: "group_budget", entityKey: operation.value.id };
     case "save_group_actual":
       return { entityType: "group_actual", entityKey: operation.value.id };
+    case "save_maintenance_document":
+      return { entityType: "maintenance_document", entityKey: operation.value.id };
     case "delete_entity":
       return { entityType: operation.entityType, entityKey: operation.entityKey };
   }
@@ -330,6 +336,10 @@ function saveOperation(state: MutableAdminState, operation: AdminDataOperation):
     case "save_group_actual":
       state.groupActuals = upsertById(state.groupActuals, operation.value);
       return;
+    case "save_maintenance_document":
+      // id === kind, so this is "replace the whole table" (types.ts).
+      state.maintenanceDocuments = upsertById(state.maintenanceDocuments, operation.value);
+      return;
     case "delete_entity":
       throw new DomainValidationError(
         "INVALID_ADMIN_OPERATION",
@@ -389,6 +399,9 @@ function deleteOperation(
     case "group_actual":
       state.groupActuals = state.groupActuals.filter((item) => item.id !== key);
       return;
+    case "maintenance_document":
+      state.maintenanceDocuments = state.maintenanceDocuments.filter((item) => item.id !== key);
+      return;
   }
 }
 
@@ -426,6 +439,8 @@ function findCurrent(
       return state.groupBudgets.find((item) => item.id === key);
     case "group_actual":
       return state.groupActuals.find((item) => item.id === key);
+    case "maintenance_document":
+      return state.maintenanceDocuments.find((item) => item.id === key);
   }
 }
 
@@ -455,6 +470,8 @@ function normalize(state: MutableAdminState): Omit<AdminDataSnapshot, "revision"
     balanceSheetSnapshots: [...state.balanceSheetSnapshots].sort(byId).map(clone),
     groupBudgets: [...state.groupBudgets].sort(byId).map(clone),
     groupActuals: [...state.groupActuals].sort(byId).map(clone),
+    // Sorted by id like every collection; the rows inside are not touched.
+    maintenanceDocuments: [...state.maintenanceDocuments].sort(byId).map(clone),
   };
 }
 

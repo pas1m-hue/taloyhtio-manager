@@ -237,6 +237,90 @@ export interface BalanceSheetSnapshot {
   readonly notes?: string;
 }
 
+/**
+ * The three board documents of the Selvitykset view (handoff
+ * feature/selvitykset). They are reference text, not calculation input:
+ * nothing here reaches the projection, the cash path, the forecast or a
+ * publication.
+ *
+ * ONE COLLECTION, ONE DOCUMENT PER KIND. Each document is the unit the user
+ * works with - a statement is replaced as a whole when it is updated, never
+ * edited row by row - so `id` is the kind itself and a save_maintenance_document
+ * with the same kind is "replace this table". That is upsertById's ordinary
+ * behaviour, and the reason there is no row-level key: a row has no identity
+ * of its own. The rows keep the order they were pasted in; the technical
+ * lifespan list is grouped by subject in its source and must not be resorted.
+ *
+ * `kind` is a discriminated union rather than a loose type field because the
+ * maintenance-need statement carries a period and two dates the other two do
+ * not have, and the validation branches on that.
+ */
+export const MAINTENANCE_DOCUMENT_KINDS = [
+  "completed_works",
+  "maintenance_need",
+  "technical_lifespan",
+] as const;
+export type MaintenanceDocumentKind = (typeof MAINTENANCE_DOCUMENT_KINDS)[number];
+
+/** One line of "Tehdyt toimenpiteet": a year and what was done. */
+export interface CompletedWorkRow {
+  readonly year: number;
+  readonly description: string;
+}
+
+/**
+ * One line of the kunnossapitotarveselvitys. The target timing is free text
+ * ("kevät 2026") and usually absent - absent is the normal state, not a gap.
+ */
+export interface MaintenanceNeedRow {
+  readonly measure: string;
+  readonly targetTiming?: string;
+}
+
+/** One line of "Tekninen käyttöikä": a component and its interval as text. */
+export interface TechnicalLifespanRow {
+  readonly item: string;
+  readonly interval: string;
+}
+
+interface MaintenanceDocumentBase {
+  readonly sourceIds: readonly string[];
+  readonly notes?: string;
+}
+
+export interface CompletedWorksDocument extends MaintenanceDocumentBase {
+  readonly id: "completed_works";
+  readonly kind: "completed_works";
+  readonly rows: readonly CompletedWorkRow[];
+}
+
+/**
+ * AsOYL 6:3 §: the board's statement of the next five years' maintenance
+ * need, presented to the yhtiökokous. The period is the statement's
+ * identity and is required; the two dates are recorded when known.
+ */
+export interface MaintenanceNeedStatement extends MaintenanceDocumentBase {
+  readonly id: "maintenance_need";
+  readonly kind: "maintenance_need";
+  readonly period: { readonly startYear: number; readonly endYear: number };
+  /** Date the board handled the statement. */
+  readonly boardHandledAt?: string;
+  /** Date the statement was presented to the yhtiökokous. */
+  readonly meetingPresentedAt?: string;
+  readonly rows: readonly MaintenanceNeedRow[];
+}
+
+export interface TechnicalLifespanDocument extends MaintenanceDocumentBase {
+  readonly id: "technical_lifespan";
+  readonly kind: "technical_lifespan";
+  readonly rows: readonly TechnicalLifespanRow[];
+}
+
+export type MaintenanceDocument =
+  | CompletedWorksDocument
+  | MaintenanceNeedStatement
+  | TechnicalLifespanDocument;
+
 /** Manually entered liquidity inputs captured at one named date. */
 export interface LiquidityBaselineRecord {
   readonly id: string;
@@ -541,6 +625,7 @@ export const ADMIN_ENTITY_TYPES = [
   "balance_sheet_snapshot",
   "group_budget",
   "group_actual",
+  "maintenance_document",
 ] as const;
 export type AdminEntityType = (typeof ADMIN_ENTITY_TYPES)[number];
 
@@ -570,7 +655,8 @@ export type AdminEntitySnapshot =
   | FinancialEntry
   | BalanceSheetSnapshot
   | GroupBudget
-  | GroupActual;
+  | GroupActual
+  | MaintenanceDocument;
 
 export interface AdminAuditEntry {
   readonly id: string;
@@ -607,6 +693,7 @@ export interface AdminDataSnapshot {
   readonly balanceSheetSnapshots: readonly BalanceSheetSnapshot[];
   readonly groupBudgets: readonly GroupBudget[];
   readonly groupActuals: readonly GroupActual[];
+  readonly maintenanceDocuments: readonly MaintenanceDocument[];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly updatedAt: string;
   readonly updatedBy: string;
@@ -631,6 +718,7 @@ export type AdminDataOperation =
   | ({ readonly type: "save_balance_sheet_snapshot"; readonly value: BalanceSheetSnapshot } & AdminOperationMetadata)
   | ({ readonly type: "save_group_budget"; readonly value: GroupBudget } & AdminOperationMetadata)
   | ({ readonly type: "save_group_actual"; readonly value: GroupActual } & AdminOperationMetadata)
+  | ({ readonly type: "save_maintenance_document"; readonly value: MaintenanceDocument } & AdminOperationMetadata)
   | ({
       readonly type: "delete_entity";
       readonly entityType: DeletableAdminEntityType;

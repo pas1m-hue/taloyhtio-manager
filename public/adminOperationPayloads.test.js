@@ -44,6 +44,12 @@ import {
   groupScheduleByScenario,
   buildForecastCompletenessLines,
   buildCashPathViewModel,
+  parseMaintenanceDocumentPasteInput,
+  validateMaintenanceNeedHeaderInput,
+  buildMaintenanceDocumentSourceId,
+  buildMaintenanceDocumentOperation,
+  buildMaintenanceDocumentViewModel,
+  describeMaintenanceDocumentReplace,
   buildGroupActualId,
   buildGroupActualSeries,
   buildGroupActualImportOperations,
@@ -4433,6 +4439,241 @@ describe("describeApiError", () => {
   it("falls back rather than rendering undefined", () => {
     expect(describeApiError(undefined)).toBe("Tuntematon virhe.");
     expect(describeApiError({})).toBe("Tuntematon virhe.");
+  });
+});
+
+describe("Selvitykset (feature/selvitykset)", () => {
+  describe("parseMaintenanceDocumentPasteInput", () => {
+    it("parses two columns and keeps the pasted order", () => {
+      const parsed = parseMaintenanceDocumentPasteInput(
+        "technical_lifespan",
+        "Vesikatto, tiili\t30–50 v\nViemärit\t50 v – rakennuksen ikä\nIkkunat\tyli 50 v",
+      );
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.rows).toEqual([
+        { item: "Vesikatto, tiili", interval: "30–50 v" },
+        { item: "Viemärit", interval: "50 v – rakennuksen ikä" },
+        { item: "Ikkunat", interval: "yli 50 v" },
+      ]);
+    });
+
+    it("recognises and skips a header row", () => {
+      const parsed = parseMaintenanceDocumentPasteInput("completed_works", "Vuosi\tToimenpide\n2012\tVesikaton uusiminen");
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.rows).toEqual([{ year: 2012, description: "Vesikaton uusiminen" }]);
+    });
+
+    it("keeps two rows of the same year, as pasted", () => {
+      const parsed = parseMaintenanceDocumentPasteInput("completed_works", "2025\tA\n2025\tB\n2019\tC");
+      expect(parsed.rows.map((row) => row.description)).toEqual(["A", "B", "C"]);
+    });
+
+    it("accepts an empty target timing on any row, including the last one", () => {
+      // The browser drops an empty last cell from the last pasted line, so
+      // the last row arrives with one column. An empty timing is the normal
+      // state of this table, so a one-column row is simply a row without a
+      // timing - on the last line and on every other.
+      const parsed = parseMaintenanceDocumentPasteInput(
+        "maintenance_need",
+        "Ilmanvaihdon puhdistus\tkevät 2026\nJulkisivut\nVaraajat\t\nSalaojat",
+      );
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.rows).toEqual([
+        { measure: "Ilmanvaihdon puhdistus", targetTiming: "kevät 2026" },
+        { measure: "Julkisivut" },
+        { measure: "Varaajat" },
+        { measure: "Salaojat" },
+      ]);
+    });
+
+    it("reports a missing required second column on the last line by name, not with tab advice", () => {
+      // A trailing tab would be dropped by the same browser behaviour, so
+      // "add a tab" is advice that cannot work. The row is missing data.
+      const parsed = parseMaintenanceDocumentPasteInput("technical_lifespan", "Viemärit\t50 v\nIkkunat");
+      expect(parsed.rows).toHaveLength(1);
+      expect(parsed.errors).toEqual([{ row: 2, message: "Rivi 2: kunnossapitojakso puuttuu (odotettiin 2 saraketta, löytyi 1)." }]);
+      expect(parsed.errors[0].message).not.toMatch(/sarkai/i);
+    });
+
+    it("reports bad rows by line number and keeps the good ones", () => {
+      const parsed = parseMaintenanceDocumentPasteInput(
+        "completed_works",
+        "2012\tVesikatto\n\nkaksituhatta\tX\n2019\t\n2020\tA\tB\n\t Ikkunat",
+      );
+      expect(parsed.rows).toEqual([{ year: 2012, description: "Vesikatto" }]);
+      expect(parsed.errors.map((e) => e.row)).toEqual([3, 4, 5, 6]);
+      expect(parsed.errors[0].message).toContain("ei ole kokonaisluku");
+      expect(parsed.errors[1].message).toContain("toimenpide puuttuu");
+      expect(parsed.errors[2].message).toContain("löytyi 3");
+      expect(parsed.errors[3].message).toContain("vuosi puuttuu");
+    });
+
+    it("handles CRLF, an unknown kind, and non-string input without throwing", () => {
+      expect(parseMaintenanceDocumentPasteInput("technical_lifespan", "A\t1 v\r\nB\t2 v").rows).toHaveLength(2);
+      expect(parseMaintenanceDocumentPasteInput("bogus", "A\tB").errors[0].message).toContain("Tuntematon");
+      expect(parseMaintenanceDocumentPasteInput("completed_works", undefined)).toEqual({ kind: "completed_works", rows: [], errors: [] });
+    });
+  });
+
+  describe("validateMaintenanceNeedHeaderInput", () => {
+    it("requires the period and accepts the dates as optional", () => {
+      expect(validateMaintenanceNeedHeaderInput({ periodStartYear: "2026", periodEndYear: "2030", boardHandledAt: "", meetingPresentedAt: "" }))
+        .toEqual({ ok: true, value: { period: { startYear: 2026, endYear: 2030 } } });
+      const missing = validateMaintenanceNeedHeaderInput({ periodStartYear: "", periodEndYear: "2030" });
+      expect(missing.ok).toBe(false);
+      expect(Object.keys(missing.errors)).toEqual(["periodStartYear"]);
+    });
+
+    it("rejects an inverted period and a malformed date", () => {
+      const inverted = validateMaintenanceNeedHeaderInput({ periodStartYear: "2030", periodEndYear: "2026" });
+      expect(inverted.ok).toBe(false);
+      expect(inverted.errors.periodEndYear).toContain("ennen alkuvuotta");
+      const badDate = validateMaintenanceNeedHeaderInput({ periodStartYear: "2026", periodEndYear: "2030", boardHandledAt: "eilen" });
+      expect(badDate.ok).toBe(false);
+      expect(Object.keys(badDate.errors)).toEqual(["boardHandledAt"]);
+    });
+  });
+
+  describe("buildMaintenanceDocumentSourceId", () => {
+    it("names the document, with the period for the statement", () => {
+      expect(buildMaintenanceDocumentSourceId("completed_works")).toBe("tehdyt_toimenpiteet");
+      expect(buildMaintenanceDocumentSourceId("technical_lifespan")).toBe("tekninen_kayttoika");
+      expect(buildMaintenanceDocumentSourceId("maintenance_need", { periodStartYear: "2026", periodEndYear: "2030" }))
+        .toBe("kunnossapitotarveselvitys_2026_2030");
+      expect(buildMaintenanceDocumentSourceId("maintenance_need", { periodStartYear: "", periodEndYear: "" }))
+        .toBe("kunnossapitotarveselvitys");
+    });
+
+    it("does not overwrite a hand-written source when the period changes", () => {
+      // The PR #24 trap with a different trigger: the period fields regenerate
+      // the source, and a source the user typed must survive that.
+      const generated = buildMaintenanceDocumentSourceId("maintenance_need", { periodStartYear: "2027", periodEndYear: "2031" });
+      expect(resolveGeneratedField({ touched: true, current: "poytakirja_2026_03", generated })).toBe("poytakirja_2026_03");
+      expect(resolveGeneratedField({ touched: false, current: "kunnossapitotarveselvitys_2026_2030", generated }))
+        .toBe("kunnossapitotarveselvitys_2027_2031");
+    });
+  });
+
+  describe("buildMaintenanceDocumentOperation", () => {
+    it("builds one replace operation with the header only on the statement", () => {
+      const meta = { sourceIds: ["tekninen_kayttoika"], explanation: "" };
+      const lifespan = buildMaintenanceDocumentOperation(
+        { kind: "technical_lifespan", rows: [{ item: "A", interval: "1 v" }] },
+        { period: { startYear: 2026, endYear: 2030 } },
+        meta,
+      );
+      expect(lifespan).toEqual({
+        type: "save_maintenance_document",
+        value: { id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["tekninen_kayttoika"], rows: [{ item: "A", interval: "1 v" }] },
+        sourceIds: ["tekninen_kayttoika"],
+        explanation: "",
+      });
+      const statement = buildMaintenanceDocumentOperation(
+        { kind: "maintenance_need", rows: [{ measure: "X" }] },
+        { period: { startYear: 2026, endYear: 2030 }, boardHandledAt: "2026-03-10" },
+        meta,
+      );
+      expect(statement.value).toMatchObject({ id: "maintenance_need", period: { startYear: 2026, endYear: 2030 }, boardHandledAt: "2026-03-10" });
+    });
+
+    it("round-trips through the real batch: the operation replaces the table", () => {
+      const snapshot = createAdminDataSnapshot({
+        housingCompany: { id: "c", name: "As Oy", apartmentCount: 4 },
+        maintenanceDocuments: [{
+          id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["x"],
+          rows: Array.from({ length: 19 }, (_, i) => ({ item: `Kohde ${i}`, interval: "1 v" })),
+        }],
+        updatedAt: "2026-09-11T10:00:00.123+03:00",
+        updatedBy: "admin:test",
+      });
+      const parsed = parseMaintenanceDocumentPasteInput("technical_lifespan", "A\t1 v\nB\t2 v\nC\t3 v");
+      const operation = buildMaintenanceDocumentOperation(parsed, undefined, { sourceIds: ["tekninen_kayttoika"], explanation: "" });
+      const next = applyAdminBatch(snapshot, {
+        companyId: "c", expectedRevision: 0, actorId: "admin:test",
+        occurredAt: "2026-09-11T10:01:00.456+03:00", operations: [operation],
+      });
+      expect(next.maintenanceDocuments[0].rows).toHaveLength(3);
+      expect(next.maintenanceDocuments[0].rows.map((r) => r.item)).toEqual(["A", "B", "C"]);
+    });
+  });
+
+  describe("buildMaintenanceDocumentViewModel", () => {
+    const documents = [
+      { id: "completed_works", kind: "completed_works", sourceIds: ["s"], rows: [
+        { year: 2025, description: "A" }, { year: 2012, description: "B" }, { year: 2025, description: "C" },
+      ] },
+      { id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["s"], rows: [
+        { item: "Vesikatto", interval: "30 v" }, { item: "Ikkunat", interval: "50 v" }, { item: "Hissi", interval: "25 v" },
+      ] },
+      { id: "maintenance_need", kind: "maintenance_need", sourceIds: ["s"], period: { startYear: 2026, endYear: 2030 },
+        boardHandledAt: "2026-03-10", rows: [{ measure: "X", targetTiming: "kevät 2026" }, { measure: "Y" }] },
+    ];
+
+    it("sorts completed works by year, stably", () => {
+      const vm = buildMaintenanceDocumentViewModel(documents, "completed_works");
+      expect(vm.rows).toEqual([
+        { first: "2012", second: "B" }, { first: "2025", second: "A" }, { first: "2025", second: "C" },
+      ]);
+    });
+
+    it("leaves the technical lifespan list in its stored (subject) order", () => {
+      const vm = buildMaintenanceDocumentViewModel(documents, "technical_lifespan");
+      expect(vm.rows.map((row) => row.first)).toEqual(["Vesikatto", "Ikkunat", "Hissi"]);
+      expect(vm.notes).toHaveLength(2);
+      expect(vm.notes[1]).toContain("suuntaa antavia");
+    });
+
+    it("carries the statement's header, standing text and empty timing", () => {
+      const vm = buildMaintenanceDocumentViewModel(documents, "maintenance_need");
+      expect(vm.header).toEqual({ periodLabel: "2026–2030", boardHandledAt: "2026-03-10", meetingPresentedAt: "" });
+      expect(vm.standingText).toContain("hallituksen tämän hetken näkemys");
+      expect(vm.rows[1]).toEqual({ first: "Y", second: "" });
+    });
+
+    it("is empty, and does not throw, without documents", () => {
+      const vm = buildMaintenanceDocumentViewModel(undefined, "completed_works");
+      expect(vm).toMatchObject({ isEmpty: true, rowCount: 0, rows: [], header: null, current: null, title: "Tehdyt toimenpiteet" });
+    });
+  });
+
+  describe("describeMaintenanceDocumentReplace", () => {
+    const documents = [{ id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["s"],
+      rows: Array.from({ length: 19 }, (_, i) => ({ item: `K${i}`, interval: "1 v" })) }];
+
+    it("says the paste replaces the current rows", () => {
+      const parsed = { rows: [{}, {}, {}], errors: [] };
+      expect(describeMaintenanceDocumentReplace(parsed, documents, "technical_lifespan"))
+        .toEqual({ parsedCount: 3, currentCount: 19, summary: "3 riviä tunnistettu. Korvaa nykyiset 19 riviä.", canSubmit: true });
+    });
+
+    it("says there is nothing to replace, and blocks an empty or erroneous paste", () => {
+      expect(describeMaintenanceDocumentReplace({ rows: [{}], errors: [] }, documents, "completed_works").summary)
+        .toBe("1 riviä tunnistettu. Ei aiempaa sisältöä.");
+      expect(describeMaintenanceDocumentReplace({ rows: [], errors: [] }, documents, "technical_lifespan").canSubmit).toBe(false);
+      expect(describeMaintenanceDocumentReplace({ rows: [{}], errors: [{ row: 1, message: "x" }] }, documents, "technical_lifespan").canSubmit).toBe(false);
+    });
+  });
+
+  describe("planEntityDeletion for a maintenance document", () => {
+    it("deletes only the document, labelled with its row count", () => {
+      const model = {
+        assets: [], observations: [], events: [], costEvidence: [], priceLevelConfirmations: [], financialEntries: [],
+        maintenanceDocuments: [{ id: "technical_lifespan", kind: "technical_lifespan", sourceIds: ["tekninen_kayttoika"],
+          rows: [{ item: "A", interval: "1 v" }, { item: "B", interval: "2 v" }] }],
+      };
+      const plan = planEntityDeletion(model, { entityType: "maintenance_document", entityKey: "technical_lifespan" });
+      expect(plan.target.label).toBe("Tekninen käyttöikä (2 riviä)");
+      expect(plan.target.sources).toEqual(["tekninen_kayttoika"]);
+      // The target is its own only delete; nothing cascades from a document.
+      expect(plan.deletes.map((item) => `${item.entityType}:${item.entityKey}`))
+        .toEqual(["maintenance_document:technical_lifespan"]);
+      expect(plan.updates).toEqual([]);
+      const ops = buildDeletionOperations(plan, { explanation: "" });
+      expect(ops).toEqual([{
+        type: "delete_entity", entityType: "maintenance_document", entityKey: "technical_lifespan",
+        sourceIds: ["maintenance_document:technical_lifespan"], explanation: "",
+      }]);
+    });
   });
 });
 

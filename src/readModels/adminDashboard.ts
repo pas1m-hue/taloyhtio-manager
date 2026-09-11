@@ -49,6 +49,7 @@ export interface AdminDashboardReadModel {
   readonly balanceSheetSnapshots: AdminDataSnapshot["balanceSheetSnapshots"];
   readonly groupBudgets: AdminDataSnapshot["groupBudgets"];
   readonly groupActuals: AdminDataSnapshot["groupActuals"];
+  readonly maintenanceDocuments: AdminDataSnapshot["maintenanceDocuments"];
   readonly auditTrail: readonly AdminAuditEntry[];
   readonly publication: AdminPublicationStatus;
   readonly counts: AdminDashboardCounts;
@@ -104,6 +105,7 @@ export function buildAdminDashboardReadModel(
     balanceSheetSnapshots: admin.balanceSheetSnapshots,
     groupBudgets: admin.groupBudgets,
     groupActuals: admin.groupActuals,
+    maintenanceDocuments: admin.maintenanceDocuments,
     auditTrail: admin.auditTrail,
     publication,
     counts,

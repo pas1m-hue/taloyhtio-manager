@@ -387,3 +387,14 @@ tr.row-budget td { font-style: italic; background: var(--soft); }
 .cashpath-completed { margin-top: 1rem; }
 .cashpath-completed summary { cursor: pointer; font-weight: 650; color: var(--accent); }
 .state-block + .table-wrap { margin-top: 1rem; }
+
+/* Selvitykset (feature/selvitykset) */
+.md-card { margin-bottom: 1.25rem; }
+.md-card .md-standing { border-left: 3px solid var(--line); padding: .4rem .8rem; margin: .5rem 0 .75rem; color: var(--muted); font-style: italic; }
+.md-card .md-notes { margin: .6rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: .9rem; }
+.md-card dl.md-header { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .8rem; margin: 0 0 .75rem; }
+.md-card dl.md-header dt { color: var(--muted); }
+.md-card dl.md-header dd { margin: 0; }
+.md-editor { margin-top: 1rem; }
+.md-editor summary { cursor: pointer; font-weight: 650; color: var(--accent); }
+.md-editor form { margin-top: .75rem; }

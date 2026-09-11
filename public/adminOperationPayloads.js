@@ -4387,6 +4387,266 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
   };
 }
 
+/* -------- Selvitykset: the three board documents (feature/selvitykset) -------- */
+
+/** Mirrors MAINTENANCE_DOCUMENT_KINDS in domain/types.ts. */
+export const MAINTENANCE_DOCUMENT_KINDS = ["completed_works", "maintenance_need", "technical_lifespan"];
+
+export const MAINTENANCE_DOCUMENT_TITLES = {
+  completed_works: "Tehdyt toimenpiteet",
+  maintenance_need: "Kunnossapitotarveselvitys",
+  technical_lifespan: "Tekninen käyttöikä",
+};
+
+/**
+ * Column rules per kind. `optionalSecond` is the whole answer to the
+ * trailing-column problem (handoff §2): a browser drops an empty last cell
+ * from the last pasted line, and the one table where the second column is
+ * legitimately empty - the target timing of a maintenance need - is exactly
+ * the one where a one-column row must therefore be accepted on any line.
+ * Where the second column is required, a one-column row is a real error
+ * whether the browser trimmed it or not: there is no valid content that a
+ * trailing tab would have carried.
+ */
+const MAINTENANCE_DOCUMENT_COLUMNS = {
+  completed_works: { headers: ["vuosi", "toimenpide"], optionalSecond: false },
+  maintenance_need: { headers: ["toimenpide", "tavoiteajankohta"], optionalSecond: true },
+  technical_lifespan: { headers: ["kohde", "kunnossapitojakso"], optionalSecond: false },
+};
+
+/**
+ * @typedef {Object} ParsedMaintenanceIssue
+ * @property {number} row
+ * @property {string} message
+ */
+
+/**
+ * Strict, pure parser for the three "liitä tekstinä" formats of the
+ * Selvitykset view: two tab-separated columns, an optional header row that
+ * is recognised and skipped, errors by line number. Rows come back in the
+ * pasted order; nothing here sorts.
+ * @param {string} kind
+ * @param {string} rawText
+ * @returns {{ kind: string, rows: Array<any>, errors: ParsedMaintenanceIssue[] }}
+ */
+export function parseMaintenanceDocumentPasteInput(kind, rawText) {
+  const spec = MAINTENANCE_DOCUMENT_COLUMNS[kind];
+  if (!spec) return { kind, rows: [], errors: [{ row: 0, message: `Tuntematon selvitystyyppi "${kind}".` }] };
+  const text = typeof rawText === "string" ? rawText : "";
+  const lines = text.split(/\r\n|\r|\n/);
+
+  let startIndex = 0;
+  const firstDataIndex = lines.findIndex((line) => line.trim() !== "");
+  if (firstDataIndex !== -1) {
+    const firstCols = lines[firstDataIndex].split("\t").map((cell) => cell.trim().toLowerCase());
+    const isHeader = firstCols.length >= 1 && firstCols[0] === spec.headers[0] &&
+      (firstCols.length === 1 || firstCols[1] === spec.headers[1]);
+    if (isHeader) startIndex = firstDataIndex + 1;
+  }
+
+  /** @type {Array<any>} */
+  const rows = [];
+  /** @type {ParsedMaintenanceIssue[]} */
+  const errors = [];
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const row = i + 1;
+    const cols = line.split("\t").map((cell) => cell.trim());
+    const [first, second] = cols;
+    if (cols.length > 2) {
+      errors.push({ row, message: `Rivi ${row}: odotettiin 2 saraketta, löytyi ${cols.length}.` });
+      continue;
+    }
+    if (cols.length < 2 && !spec.optionalSecond) {
+      errors.push({ row, message: `Rivi ${row}: ${spec.headers[1]} puuttuu (odotettiin 2 saraketta, löytyi 1).` });
+      continue;
+    }
+    if (first === "") {
+      errors.push({ row, message: `Rivi ${row}: ${spec.headers[0]} puuttuu.` });
+      continue;
+    }
+    if (kind === "completed_works") {
+      const year = Number(first);
+      if (!Number.isInteger(year)) {
+        errors.push({ row, message: `Rivi ${row}: vuosi "${first}" ei ole kokonaisluku.` });
+        continue;
+      }
+      if (second === "") {
+        errors.push({ row, message: `Rivi ${row}: toimenpide puuttuu.` });
+        continue;
+      }
+      rows.push({ year, description: second });
+    } else if (kind === "maintenance_need") {
+      const timing = second ?? "";
+      rows.push(timing === "" ? { measure: first } : { measure: first, targetTiming: timing });
+    } else {
+      if (second === "") {
+        errors.push({ row, message: `Rivi ${row}: kunnossapitojakso puuttuu.` });
+        continue;
+      }
+      rows.push({ item: first, interval: second });
+    }
+  }
+  return { kind, rows, errors };
+}
+
+/**
+ * The statement's header fields, validated. The period is required: a
+ * statement without one is not the AsOYL 6:3 § document. Dates are optional.
+ * @param {Record<string, unknown>} raw
+ * @returns {ValidationResult<{ period: { startYear: number, endYear: number }, boardHandledAt?: string, meetingPresentedAt?: string }>}
+ */
+export function validateMaintenanceNeedHeaderInput(raw) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  const startYear = parseNumber(raw.periodStartYear);
+  const endYear = parseNumber(raw.periodEndYear);
+  if (!Number.isInteger(startYear)) errors.periodStartYear = "Kauden alkuvuosi on pakollinen kokonaisluku.";
+  if (!Number.isInteger(endYear)) errors.periodEndYear = "Kauden loppuvuosi on pakollinen kokonaisluku.";
+  if (Number.isInteger(startYear) && Number.isInteger(endYear) && endYear < startYear) {
+    errors.periodEndYear = "Kauden loppuvuosi ei voi olla ennen alkuvuotta.";
+  }
+  const boardHandledAt = toTrimmed(raw.boardHandledAt);
+  if (boardHandledAt !== "" && !isValidDate(boardHandledAt)) {
+    errors.boardHandledAt = "Anna kelvollinen päivämäärä.";
+  }
+  const meetingPresentedAt = toTrimmed(raw.meetingPresentedAt);
+  if (meetingPresentedAt !== "" && !isValidDate(meetingPresentedAt)) {
+    errors.meetingPresentedAt = "Anna kelvollinen päivämäärä.";
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  /** @type {{ period: { startYear: number, endYear: number }, boardHandledAt?: string, meetingPresentedAt?: string }} */
+  const value = { period: { startYear, endYear } };
+  if (boardHandledAt !== "") value.boardHandledAt = boardHandledAt;
+  if (meetingPresentedAt !== "") value.meetingPresentedAt = meetingPresentedAt;
+  return { ok: true, value };
+}
+
+/**
+ * The source identifier a document cites by default: its own identity, as
+ * spec §12b does for deletions. The statement's carries its period so two
+ * statements are told apart; it changes as the period is typed, which is why
+ * the caller runs it through resolveGeneratedField - a source the user has
+ * written by hand must survive a later change to the period.
+ * @param {string} kind
+ * @param {{ periodStartYear?: unknown, periodEndYear?: unknown }} [header]
+ * @returns {string}
+ */
+export function buildMaintenanceDocumentSourceId(kind, header) {
+  if (kind === "completed_works") return "tehdyt_toimenpiteet";
+  if (kind === "technical_lifespan") return "tekninen_kayttoika";
+  if (kind !== "maintenance_need") return "";
+  const start = parseNumber(header?.periodStartYear);
+  const end = parseNumber(header?.periodEndYear);
+  return Number.isInteger(start) && Number.isInteger(end)
+    ? `kunnossapitotarveselvitys_${start}_${end}`
+    : "kunnossapitotarveselvitys";
+}
+
+/**
+ * The single save_maintenance_document operation for one paste. The whole
+ * document goes in the value - id === kind makes the save a replace.
+ * @param {{ kind: string, rows: Array<any> }} parsed
+ * @param {{ period?: { startYear: number, endYear: number }, boardHandledAt?: string, meetingPresentedAt?: string } | undefined} header
+ * @param {{ sourceIds: string[], explanation: string }} opMeta
+ */
+export function buildMaintenanceDocumentOperation(parsed, header, opMeta) {
+  const value = { id: parsed.kind, kind: parsed.kind, sourceIds: opMeta.sourceIds, rows: parsed.rows };
+  if (parsed.kind === "maintenance_need" && header) Object.assign(value, header);
+  return {
+    type: /** @type {const} */ ("save_maintenance_document"),
+    value,
+    sourceIds: opMeta.sourceIds,
+    explanation: opMeta.explanation,
+  };
+}
+
+const MAINTENANCE_NEED_STANDING_TEXT =
+  "Tämä kunnossapitotarveselvitys on hallituksen tämän hetken näkemys tulevista korjauksista. " +
+  "Hallitus teettää pienehköjä korjauksia hoitotalouden korjausbudjetin puitteissa. " +
+  "Yhtiökokous tekee päätökset tulevista merkittävistä korjauksista ja niiden rahoituksesta.";
+
+const TECHNICAL_LIFESPAN_NOTES = [
+  "Viemärit voidaan pystyä myös sukittamaan tai pinnoittamaan.",
+  "Yllä olevat vuosimäärät ovat suuntaa antavia ja kohteiden todellinen käyttöikä riippuu siitä, " +
+    "miten niitä on vuosikymmenien aikana hoidettu ja huollettu.",
+];
+
+/**
+ * One document, ready to render. Completed works are sorted by year here,
+ * stably, so two rows of the same year keep their pasted order; the other
+ * two keep the stored order untouched (the lifespan list is by subject in
+ * its source). The standing text and the notes belong to the document
+ * kind, not to the company's data, so they are constants attached here.
+ * @param {ReadonlyArray<any> | undefined} documents state.admin.maintenanceDocuments
+ * @param {string} kind
+ * @returns {{
+ *   kind: string, title: string, headers: string[], isEmpty: boolean, rowCount: number,
+ *   rows: Array<{ first: string, second: string }>,
+ *   header: { periodLabel: string, boardHandledAt: string, meetingPresentedAt: string } | null,
+ *   standingText: string, notes: string[], sourceIds: string[],
+ *   current: any | null,
+ * }}
+ */
+export function buildMaintenanceDocumentViewModel(documents, kind) {
+  const doc = (Array.isArray(documents) ? documents : []).find((item) => item.kind === kind) ?? null;
+  const spec = MAINTENANCE_DOCUMENT_COLUMNS[kind] ?? { headers: ["", ""] };
+  const stored = doc && Array.isArray(doc.rows) ? doc.rows : [];
+  let rows;
+  if (kind === "completed_works") {
+    rows = stored.map((row, index) => ({ row, index }))
+      .sort((a, b) => (a.row.year - b.row.year) || (a.index - b.index))
+      .map(({ row }) => ({ first: String(row.year), second: String(row.description ?? "") }));
+  } else if (kind === "maintenance_need") {
+    rows = stored.map((row) => ({ first: String(row.measure ?? ""), second: String(row.targetTiming ?? "") }));
+  } else {
+    rows = stored.map((row) => ({ first: String(row.item ?? ""), second: String(row.interval ?? "") }));
+  }
+  const header = kind === "maintenance_need" && doc
+    ? {
+      periodLabel: doc.period ? `${doc.period.startYear}–${doc.period.endYear}` : "",
+      boardHandledAt: String(doc.boardHandledAt ?? ""),
+      meetingPresentedAt: String(doc.meetingPresentedAt ?? ""),
+    }
+    : null;
+  return {
+    kind,
+    title: MAINTENANCE_DOCUMENT_TITLES[kind] ?? kind,
+    headers: [...spec.headers],
+    isEmpty: rows.length === 0,
+    rowCount: rows.length,
+    rows,
+    header,
+    standingText: kind === "maintenance_need" ? MAINTENANCE_NEED_STANDING_TEXT : "",
+    notes: kind === "technical_lifespan" ? [...TECHNICAL_LIFESPAN_NOTES] : [],
+    sourceIds: doc ? normalizeSourceList(doc.sourceIds) : [],
+    current: doc,
+  };
+}
+
+/**
+ * What a paste would do, for the preview: it replaces, never adds.
+ * @param {{ rows: Array<any>, errors: Array<any> }} parsed
+ * @param {ReadonlyArray<any> | undefined} documents
+ * @param {string} kind
+ * @returns {{ parsedCount: number, currentCount: number, summary: string, canSubmit: boolean }}
+ */
+export function describeMaintenanceDocumentReplace(parsed, documents, kind) {
+  const current = (Array.isArray(documents) ? documents : []).find((item) => item.kind === kind);
+  const currentCount = current && Array.isArray(current.rows) ? current.rows.length : 0;
+  const parsedCount = parsed.rows.length;
+  const replaceText = current === undefined
+    ? "Ei aiempaa sisältöä."
+    : `Korvaa nykyiset ${currentCount} riviä.`;
+  return {
+    parsedCount,
+    currentCount,
+    summary: `${parsedCount} riviä tunnistettu. ${replaceText}`,
+    canSubmit: parsedCount > 0 && parsed.errors.length === 0,
+  };
+}
+
 /* -------- Cash path table (feature/cashpath-rebuild) -------- */
 
 /** How a cost evidence status reads on a banner row. */
@@ -4554,6 +4814,7 @@ const DELETE_ENTITY_LABELS = {
   group_actual: ["ryhmätason toteuma", "ryhmätason toteumaa"],
   financial_year: ["tilikausi", "tilikautta"],
   liquidity_baseline: ["maksuvalmiuden lähtötieto", "maksuvalmiuden lähtötietoa"],
+  maintenance_document: ["selvitys", "selvitystä"],
 };
 
 /** Order the confirmation lists things in — the deletion target's own kind first is handled by the caller. */
@@ -4570,6 +4831,7 @@ const DELETE_ENTITY_ORDER = [
   "group_actual",
   "financial_year",
   "liquidity_baseline",
+  "maintenance_document",
 ];
 
 /** @param {{ entityType: string, entityKey: string }} ref */
@@ -4612,6 +4874,11 @@ function describeDeleteTarget(model, entityType, entityKey) {
     case "group_actual": {
       const groupActual = (model.groupActuals ?? []).find((item) => item.id === entityKey);
       return groupActual === undefined ? entityKey : `${groupActual.group} ${groupActual.year}`;
+    }
+    case "maintenance_document": {
+      const doc = (model.maintenanceDocuments ?? []).find((item) => item.id === entityKey);
+      const title = MAINTENANCE_DOCUMENT_TITLES[entityKey] ?? entityKey;
+      return doc === undefined ? title : `${title} (${doc.rows.length} riviä)`;
     }
     default:
       return entityKey;
@@ -4695,6 +4962,8 @@ function deleteTargetSourceIds(model, entityType, entityKey) {
       return normalizeSourceList(find(model.groupBudgets, (item) => item.id === entityKey)?.sourceIds);
     case "group_actual":
       return normalizeSourceList(find(model.groupActuals, (item) => item.id === entityKey)?.sourceIds);
+    case "maintenance_document":
+      return normalizeSourceList(find(model.maintenanceDocuments, (item) => item.id === entityKey)?.sourceIds);
     default:
       // PriceLevelConfirmation has no source field; it only ever appears as a
       // cascade child of the cost evidence it confirms.

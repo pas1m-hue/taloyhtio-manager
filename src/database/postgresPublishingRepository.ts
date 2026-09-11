@@ -321,6 +321,7 @@ function withDefaultedAdminCollections(
     balanceSheetSnapshots: payload.balanceSheetSnapshots ?? [],
     groupBudgets: payload.groupBudgets ?? [],
     groupActuals: payload.groupActuals ?? [],
+    maintenanceDocuments: payload.maintenanceDocuments ?? [],
     auditTrail: payload.auditTrail ?? [],
   };
 }

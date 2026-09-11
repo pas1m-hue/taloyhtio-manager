@@ -22,6 +22,7 @@ import {
   type GroupActual,
   type GroupBudget,
   type HousingCompany,
+  type MaintenanceDocument,
   type LiquidityBaselineRecord,
   type Observation,
   type PriceLevelConfirmation,
@@ -56,6 +57,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   uniqueBy(state.balanceSheetSnapshots, (item) => item.id, "balance sheet snapshot");
   uniqueBy(state.groupBudgets, (item) => item.id, "group budget");
   uniqueBy(state.groupActuals, (item) => item.id, "group actual");
+  uniqueBy(state.maintenanceDocuments, (item) => item.id, "maintenance document");
 
   const assets = new Map(state.assets.map((item) => [item.id, item]));
   const events = new Map(state.events.map((item) => [item.id, item]));
@@ -82,6 +84,7 @@ export function validateAdminDataSnapshot(state: AdminDataSnapshot): void {
   state.balanceSheetSnapshots.forEach(validateBalanceSheetSnapshot);
   state.groupBudgets.forEach(validateGroupBudget);
   state.groupActuals.forEach(validateGroupActual);
+  state.maintenanceDocuments.forEach(validateMaintenanceDocument);
 
   // projectEvents is the calculation boundary validator. Suggested events are
   // validated as approved copies here so manual drafts cannot retain broken
@@ -369,6 +372,54 @@ function uniqueBy<T>(
       throw invalid(`Duplicate or empty ${label}: ${key || "<empty>"}`);
     }
     seen.add(key);
+  }
+}
+
+/**
+ * A document's id is its kind (types.ts): that is what makes a re-paste
+ * replace the table instead of adding a second one. Rows may be empty - an
+ * emptied statement is still a statement - but every row present must carry
+ * its required text, and the maintenance-need statement must name its
+ * period, since a statement without one is not the AsOYL 6:3 § document.
+ */
+function validateMaintenanceDocument(value: MaintenanceDocument): void {
+  if (value.id !== value.kind || !validSources(value.sourceIds) ||
+      !Array.isArray(value.rows)) {
+    throw invalid(`Maintenance document ${value.id || "<empty>"} is invalid`);
+  }
+  switch (value.kind) {
+    case "completed_works":
+      value.rows.forEach((row) => {
+        if (!Number.isInteger(row.year) || !isNonEmpty(row.description)) {
+          throw invalid(`Completed work row ${row.year} is invalid`);
+        }
+      });
+      return;
+    case "maintenance_need":
+      if (value.period === undefined || value.period === null ||
+          !Number.isInteger(value.period.startYear) ||
+          !Number.isInteger(value.period.endYear) ||
+          value.period.endYear < value.period.startYear ||
+          (value.boardHandledAt !== undefined && !validDate(value.boardHandledAt)) ||
+          (value.meetingPresentedAt !== undefined && !validDate(value.meetingPresentedAt))) {
+        throw invalid("Maintenance need statement period or dates are invalid");
+      }
+      value.rows.forEach((row) => {
+        if (!isNonEmpty(row.measure) ||
+            (row.targetTiming !== undefined && typeof row.targetTiming !== "string")) {
+          throw invalid("Maintenance need row is invalid");
+        }
+      });
+      return;
+    case "technical_lifespan":
+      value.rows.forEach((row) => {
+        if (!isNonEmpty(row.item) || !isNonEmpty(row.interval)) {
+          throw invalid(`Technical lifespan row ${row.item || "<empty>"} is invalid`);
+        }
+      });
+      return;
+    default:
+      throw invalid(`Maintenance document kind ${String((value as { kind: unknown }).kind)} is unknown`);
   }
 }
 
