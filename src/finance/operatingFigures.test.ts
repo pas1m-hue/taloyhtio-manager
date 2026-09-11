@@ -2,9 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   computeOperatingCostFigures,
   computeOperatingMarginFigures,
+  computeOperatingMarginSeries,
   type CalculationFinancialAccount,
   type FinancialActualsSource,
 } from "./operatingFigures.js";
+import {
+  cashPathFinancialAccounts,
+  cashPathFinancialEntries,
+  cashPathGroupActuals,
+  cashPathGroupBudgets,
+} from "../fixtures/cashPathTable.js";
 
 /**
  * Figures reproduced from the real company data (handoff
@@ -290,3 +297,108 @@ function renamedWithoutNature(
     return { ...rest, group: "Kunnossapito" };
   });
 }
+
+describe("computeOperatingMarginSeries", () => {
+  const source = {
+    financialAccounts: cashPathFinancialAccounts,
+    financialEntries: cashPathFinancialEntries,
+    groupActuals: cashPathGroupActuals,
+    groupBudgets: cashPathGroupBudgets,
+  };
+
+  it("states each closed year from that year's own parts", () => {
+    // The old table repeated the latest year's hoitokate down every row. Three
+    // different years with three different results from three different sums
+    // is what proves the series reads each year for itself.
+    const series = computeOperatingMarginSeries(source, "actual");
+
+    expect(series.map((row) => row.year)).toEqual([2023, 2024, 2025]);
+    expect(series[0]).toEqual({
+      year: 2023,
+      income: 37_207.38, // 36 237,38 group-level + 720,00 + 250,00
+      costsExcludingRepairs: 31_501.00, // 11 480,00 + 20 021,00
+      repairs: 1_385.00,
+      operatingMargin: 5_706.38,
+    });
+    expect(series[1]).toEqual({
+      year: 2024,
+      income: 42_644.00,
+      costsExcludingRepairs: 32_500.00,
+      repairs: 5_348.53,
+      operatingMargin: 10_144.00,
+    });
+    expect(series[2]).toEqual({
+      year: 2025,
+      income: 43_906.75,
+      costsExcludingRepairs: 34_029.46,
+      repairs: 3_881.55,
+      operatingMargin: 9_877.29,
+    });
+  });
+
+  it("agrees with the latest-year figure the forecast uses", () => {
+    const series = computeOperatingMarginSeries(source, "actual");
+    const latest = available(computeOperatingMarginFigures(source));
+
+    expect(series.at(-1)?.operatingMargin).toBe(latest.operatingMargin);
+    expect(series.at(-1)?.year).toBe(latest.latestActualYear);
+  });
+
+  it("builds the budget side with the group budget winning over the account", () => {
+    // 4600's own budget row says 9 000,00; the approved group budget says
+    // 9 680,00. 42 714,26 - (42 935,71 - 9 680,00) = 9 458,55 - the handoff's
+    // worked figure - is only reached if the group budget wins.
+    const series = computeOperatingMarginSeries(source, "budget");
+    const budget2026 = series.find((row) => row.year === 2026);
+
+    expect(budget2026).toEqual({
+      year: 2026,
+      income: 42_714.26,
+      costsExcludingRepairs: 33_255.71,
+      repairs: 9_680.00,
+      operatingMargin: 9_458.55,
+    });
+  });
+
+  it("states a budget year for every year that has one, not just the latest", () => {
+    const series = computeOperatingMarginSeries(source, "budget");
+
+    expect(series.map((row) => row.year)).toEqual([2023, 2024, 2025, 2026]);
+    expect(series.find((row) => row.year === 2025)?.operatingMargin).toBe(9_350.00);
+  });
+
+  it("omits a year whose repair figure is missing rather than calling it zero", () => {
+    const withoutRepairs2024 = {
+      ...source,
+      financialEntries: cashPathFinancialEntries.filter(
+        (entry) => !(entry.accountCode === "4600" && entry.year === 2024),
+      ),
+    };
+    const series = computeOperatingMarginSeries(withoutRepairs2024, "actual");
+
+    expect(series.map((row) => row.year)).toEqual([2023, 2025]);
+  });
+
+  it("omits a year whose income is missing rather than showing a deficit", () => {
+    const withoutIncome2023 = {
+      ...source,
+      groupActuals: [],
+      financialEntries: cashPathFinancialEntries.filter(
+        (entry) => !(entry.year === 2023 && entry.accountCode.startsWith("3")),
+      ),
+    };
+    const series = computeOperatingMarginSeries(withoutIncome2023, "actual");
+
+    expect(series.map((row) => row.year)).toEqual([2024, 2025]);
+  });
+
+  it("has an empty budget side when the source carries no budget figures", () => {
+    const publicationShaped = {
+      financialAccounts: cashPathFinancialAccounts,
+      financialEntries: cashPathFinancialEntries.map(({ budgetAmount: _b, ...rest }) => rest),
+      groupActuals: cashPathGroupActuals,
+    };
+
+    expect(computeOperatingMarginSeries(publicationShaped, "budget")).toEqual([]);
+  });
+});
