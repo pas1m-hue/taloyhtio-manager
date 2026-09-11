@@ -43,6 +43,7 @@ import {
   deriveEventYearOptions,
   groupScheduleByScenario,
   buildForecastCompletenessLines,
+  buildCashPathViewModel,
   buildGroupActualId,
   buildGroupActualSeries,
   buildGroupActualImportOperations,
@@ -4432,6 +4433,80 @@ describe("describeApiError", () => {
   it("falls back rather than rendering undefined", () => {
     expect(describeApiError(undefined)).toBe("Tuntematon virhe.");
     expect(describeApiError({})).toBe("Tuntematon virhe.");
+  });
+});
+
+describe("buildCashPathViewModel", () => {
+  const model = {
+    latestActualYear: 2025,
+    maintenancePlanCoverageThroughYear: 2030,
+    scenarios: {
+      base: {
+        scenario: "base",
+        rows: [
+          { rowKind: "actual", year: 2025, openingCash: 16977, operatingMargin: 9877.29, repairs: 3881.55, closingCash: 22208, repairBudget: 9400, marginVsBudget: 527.29 },
+          { rowKind: "budget", year: 2026, openingCash: 22208, operatingMargin: 9458.55, repairs: 4300, repairDataGapCount: 0, closingCash: 27366.55, repairBudget: 9680 },
+        ],
+        knownRepairs: {
+          rows: [
+            { year: 2026, eventId: "e1", scheduleEntryId: "s1", assetId: "a", title: "Ilmanvaihdon puhdistus", amount: 2500, priceQuality: "estimate" },
+            { year: 2028, eventId: "e2", scheduleEntryId: "s2", assetId: "a", title: "Salaojat", priceQuality: "data_gap" },
+          ],
+          total: 2500,
+          dataGapCount: 1,
+        },
+      },
+      stress: { scenario: "stress", rows: [], knownRepairs: { rows: [], total: 0, dataGapCount: 0 } },
+    },
+    completedRepairs: [{ year: 2025, eventId: "e0", assetId: "a", title: "IV-eristys", amount: 1545 }],
+  };
+
+  it("attaches the row class from rowKind, and from nothing else", () => {
+    // Both rows have every cell filled; only the discriminant tells them
+    // apart. If the renderer inferred quality from the cells, both would
+    // read as actual.
+    const vm = buildCashPathViewModel(model, "base");
+
+    expect(vm.rows.map((row) => [row.year, row.rowKind, row.rowClass, row.yearLabel])).toEqual([
+      [2025, "actual", "row-actual", "2025"],
+      [2026, "budget", "row-budget", "2026 (budjetti)"],
+    ]);
+    expect(vm.hasBudgetRow).toBe(true);
+  });
+
+  it("labels the price quality on each banner row", () => {
+    const vm = buildCashPathViewModel(model, "base");
+
+    expect(vm.knownRepairs.rows.map((row) => row.qualityLabel)).toEqual(["arvio", "DATA GAP"]);
+    expect(vm.knownRepairs.total).toBe(2500);
+    expect(vm.knownRepairs.dataGapCount).toBe(1);
+    expect(vm.knownRepairs.isEmpty).toBe(false);
+  });
+
+  it("follows the scenario", () => {
+    const vm = buildCashPathViewModel(model, "stress");
+
+    expect(vm.isEmpty).toBe(true);
+    expect(vm.knownRepairs.isEmpty).toBe(true);
+    // Completed repairs are not a scenario: they are the same in every tab.
+    expect(vm.completedRepairs.rows).toEqual(model.completedRepairs);
+  });
+
+  it("says the coverage is unset instead of implying the table is complete", () => {
+    const vm = buildCashPathViewModel({ ...model, maintenancePlanCoverageThroughYear: undefined }, "base");
+
+    expect(vm.coverageLine).toContain("ei ole asetettu");
+    expect(buildCashPathViewModel(model, "base").coverageLine).toContain("2030");
+  });
+
+  it("is empty, and does not throw, for a missing model or scenario", () => {
+    for (const input of [undefined, null, {}, { scenarios: {} }]) {
+      const vm = buildCashPathViewModel(input, "base");
+      expect(vm.isEmpty).toBe(true);
+      expect(vm.rows).toEqual([]);
+      expect(vm.knownRepairs).toEqual({ isEmpty: true, rows: [], total: 0, dataGapCount: 0 });
+      expect(vm.completedRepairs).toEqual({ isEmpty: true, rows: [] });
+    }
   });
 });
 
