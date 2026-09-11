@@ -158,9 +158,9 @@ export const cashPathEvents: readonly BuildingEvent[] = [
     status: "approved",
     sourceIds: ["pts_2024"],
     schedule: [
-      { id: "iv_o", scenario: "optimistic", year: 2026, costEvidenceId: "K_iv" },
-      { id: "iv_b", scenario: "base", year: 2026, costEvidenceId: "K_iv" },
-      { id: "iv_s", scenario: "stress", year: 2026, costEvidenceId: "K_iv" },
+      { id: "iv_o", scenario: "optimistic", year: 2026, amount: 2_500, costEvidenceId: "K_iv" },
+      { id: "iv_b", scenario: "base", year: 2026, amount: 2_500, costEvidenceId: "K_iv" },
+      { id: "iv_s", scenario: "stress", year: 2026, amount: 2_500, costEvidenceId: "K_iv" },
     ],
   },
   {
@@ -172,9 +172,9 @@ export const cashPathEvents: readonly BuildingEvent[] = [
     status: "approved",
     sourceIds: ["pts_2024"],
     schedule: [
-      { id: "fa_o", scenario: "optimistic", year: 2028, costEvidenceId: "K_facade" },
-      { id: "fa_b", scenario: "base", year: 2027, costEvidenceId: "K_facade" },
-      { id: "fa_s", scenario: "stress", year: 2027, costEvidenceId: "K_facade" },
+      { id: "fa_o", scenario: "optimistic", year: 2028, amount: 15_000, costEvidenceId: "K_facade" },
+      { id: "fa_b", scenario: "base", year: 2027, amount: 15_000, costEvidenceId: "K_facade" },
+      { id: "fa_s", scenario: "stress", year: 2027, amount: 15_000, costEvidenceId: "K_facade" },
     ],
   },
   {
@@ -188,14 +188,14 @@ export const cashPathEvents: readonly BuildingEvent[] = [
     status: "approved",
     sourceIds: ["pts_2024"],
     schedule: [
-      { id: "wh_o1", scenario: "optimistic", year: 2026, quantity: 1, costEvidenceId: "K_heater" },
-      { id: "wh_o2", scenario: "optimistic", year: 2032, quantity: 1, costEvidenceId: "K_heater" },
-      { id: "wh_b1", scenario: "base", year: 2026, quantity: 1, costEvidenceId: "K_heater" },
-      { id: "wh_b2", scenario: "base", year: 2029, quantity: 2, costEvidenceId: "K_heater" },
-      { id: "wh_b3", scenario: "base", year: 2033, quantity: 2, costEvidenceId: "K_heater" },
-      { id: "wh_s1", scenario: "stress", year: 2026, quantity: 2, costEvidenceId: "K_heater" },
-      { id: "wh_s2", scenario: "stress", year: 2028, quantity: 3, costEvidenceId: "K_heater" },
-      { id: "wh_s3", scenario: "stress", year: 2033, quantity: 2, costEvidenceId: "K_heater" },
+      { id: "wh_o1", scenario: "optimistic", year: 2026, quantity: 1, amount: 1_800, costEvidenceId: "K_heater" },
+      { id: "wh_o2", scenario: "optimistic", year: 2032, quantity: 1, amount: 1_800, costEvidenceId: "K_heater" },
+      { id: "wh_b1", scenario: "base", year: 2026, quantity: 1, amount: 1_800, costEvidenceId: "K_heater" },
+      { id: "wh_b2", scenario: "base", year: 2029, quantity: 2, amount: 3_600, costEvidenceId: "K_heater" },
+      { id: "wh_b3", scenario: "base", year: 2033, quantity: 2, amount: 3_600, costEvidenceId: "K_heater" },
+      { id: "wh_s1", scenario: "stress", year: 2026, quantity: 2, amount: 3_600, costEvidenceId: "K_heater" },
+      { id: "wh_s2", scenario: "stress", year: 2028, quantity: 3, amount: 5_400, costEvidenceId: "K_heater" },
+      { id: "wh_s3", scenario: "stress", year: 2033, quantity: 2, amount: 3_600, costEvidenceId: "K_heater" },
     ],
   },
   {
@@ -230,7 +230,7 @@ export const cashPathEvents: readonly BuildingEvent[] = [
     status: "suggested",
     sourceIds: ["pts_2024"],
     schedule: [
-      { id: "so_b", scenario: "base", year: 2029, costEvidenceId: "K_facade" },
+      { id: "so_b", scenario: "base", year: 2029, amount: 15_000, costEvidenceId: "K_facade" },
     ],
   },
 ];

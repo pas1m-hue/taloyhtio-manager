@@ -11,6 +11,7 @@ import {
   latestLiquidityBaseline,
   type SnapshotCalculationReadModel,
 } from "./calculationReadModel.js";
+import { buildCashPathTable, type CashPathTableReadModel } from "./cashPathTable.js";
 
 export interface AdminDashboardCounts {
   readonly assets: number;
@@ -52,6 +53,11 @@ export interface AdminDashboardReadModel {
   readonly publication: AdminPublicationStatus;
   readonly counts: AdminDashboardCounts;
   readonly calculations: SnapshotCalculationReadModel;
+  /**
+   * Admin-only: it reads balance sheets and budgets, neither of which a
+   * publication carries, and the visitor view has no cash path table.
+   */
+  readonly cashPathTable: CashPathTableReadModel;
 }
 
 export function buildAdminDashboardReadModel(
@@ -102,6 +108,7 @@ export function buildAdminDashboardReadModel(
     publication,
     counts,
     calculations,
+    cashPathTable: buildCashPathTable(admin),
   });
 }
 
