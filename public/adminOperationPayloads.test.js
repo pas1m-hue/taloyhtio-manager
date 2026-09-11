@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyAdminBatch, createAdminDataSnapshot } from "../src/admin/applyAdminBatch.js";
+import { isBalanceCashEntry } from "../src/finance/balanceCash.js";
 import {
   buildAccountCostsViewModel,
   buildAssetListViewModel,
@@ -7,6 +8,7 @@ import {
   buildBalanceSheetViewModel,
   computeBalanceReconciliation,
   computeBalanceRatios,
+  isCashEntry,
   buildBalanceComparisonViewModel,
   buildBudgetVsActualViewModel,
   buildCostEvidenceListViewModel,
@@ -2108,6 +2110,29 @@ describe("computeBalanceReconciliation", () => {
       ],
     });
     expect(result.balances).toBe(true);
+  });
+});
+
+describe("isCashEntry", () => {
+  it("picks the same line as the server's isBalanceCashEntry", () => {
+    // The two rules are a deliberate duplicate across the browser/server
+    // boundary (src/finance/balanceCash.ts). This is the test that fails
+    // when one of them moves without the other; the set covers every branch
+    // either rule has, so a new branch on one side shows up as a mismatch.
+    const entries = [
+      { key: "rahat", name: "Kassa" },
+      { key: "ca_02", name: "Rahat ja pankkisaamiset" },
+      { key: "ca_03", name: "RAHAT JA PANKKISAAMISET 31.12." },
+      { key: "ca_04", name: "Rahat" },
+      { key: "ca_05", name: "Pankkisaamiset" },
+      { key: "myyntisaamiset", name: "Myyntisaamiset" },
+      { key: "rahat_2", name: "Rahat ja pankki" },
+      { key: "", name: "" },
+    ];
+    for (const entry of entries) {
+      expect(isCashEntry(entry), JSON.stringify(entry)).toBe(isBalanceCashEntry(entry));
+    }
+    expect(entries.filter(isCashEntry).map((e) => e.key)).toEqual(["rahat", "ca_02", "ca_03", "rahat_2"]);
   });
 });
 

@@ -3465,8 +3465,15 @@ export function computeBalanceReconciliation(snapshot) {
   };
 }
 
-/** Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio. */
-function isCashEntry(entry) {
+/**
+ * Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio.
+ *
+ * A DELIBERATE DUPLICATE of isBalanceCashEntry in src/finance/balanceCash.ts,
+ * which picks the cash path table's cash columns server-side. The two must
+ * agree, and adminOperationPayloads.test.js pins them against each other -
+ * that is why this is exported. Change both, or neither.
+ */
+export function isCashEntry(entry) {
   if (entry.key === "rahat") return true;
   return entry.name.toLowerCase().startsWith("rahat ja pankki");
 }
