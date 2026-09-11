@@ -44,6 +44,7 @@ import {
   groupScheduleByScenario,
   buildForecastCompletenessLines,
   buildCashPathViewModel,
+  formatFinnishDate,
   parseMaintenanceDocumentPasteInput,
   validateMaintenanceNeedHeaderInput,
   buildMaintenanceDocumentSourceId,
@@ -4442,6 +4443,61 @@ describe("describeApiError", () => {
   });
 });
 
+describe("formatFinnishDate", () => {
+  it("turns an ISO date into a Finnish one, without leading zeros", () => {
+    expect(formatFinnishDate("2026-04-28")).toBe("28.4.2026");
+    expect(formatFinnishDate("2025-12-31")).toBe("31.12.2025");
+    expect(formatFinnishDate("2026-01-05")).toBe("5.1.2026");
+  });
+
+  it("returns anything that is not exactly YYYY-MM-DD unchanged", () => {
+    expect(formatFinnishDate("2025-Q4")).toBe("2025-Q4");
+    expect(formatFinnishDate("2026-07-17T15:00:00+03:00")).toBe("2026-07-17T15:00:00+03:00");
+    expect(formatFinnishDate("kevät 2026")).toBe("kevät 2026");
+    expect(formatFinnishDate("")).toBe("");
+  });
+
+  it("gives an empty string for a missing value, so callers can fall back to a dash", () => {
+    expect(formatFinnishDate(undefined)).toBe("");
+    expect(formatFinnishDate(null)).toBe("");
+    expect(formatFinnishDate(undefined) || "—").toBe("—");
+  });
+
+  it("does not go through Date: the day must not shift with the time zone", () => {
+    // A date-only ISO string is UTC midnight to the Date constructor. West of
+    // UTC that reads back as the previous day, and in Finland it does the
+    // same the moment anyone round-trips it through toISOString(). Both are
+    // shown here on purpose, so a later "simplification" to new Date() has
+    // its bug spelled out beside the assertion that catches it.
+    const originalTz = process.env.TZ;
+    try {
+      process.env.TZ = "America/Los_Angeles";
+      expect(new Date("2026-04-28").getDate()).toBe(27); // the trap, west of UTC
+      expect(formatFinnishDate("2026-04-28")).toBe("28.4.2026");
+
+      process.env.TZ = "Europe/Helsinki";
+      expect(new Date("2026-04-28T00:00").toISOString().slice(0, 10)).toBe("2026-04-27"); // the trap, at home
+      expect(formatFinnishDate("2026-04-28")).toBe("28.4.2026");
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
+  it("does not construct a Date at all", () => {
+    // Belt to the braces above: with Date replaced by something that throws,
+    // a string transform still works and a Date-based one cannot.
+    const RealDate = globalThis.Date;
+    globalThis.Date = function BrokenDate() { throw new Error("formatFinnishDate must not use Date"); };
+    try {
+      expect(formatFinnishDate("2026-04-28")).toBe("28.4.2026");
+      expect(formatFinnishDate("2025-Q4")).toBe("2025-Q4");
+    } finally {
+      globalThis.Date = RealDate;
+    }
+  });
+});
+
 describe("Selvitykset (feature/selvitykset)", () => {
   describe("parseMaintenanceDocumentPasteInput", () => {
     it("parses two columns and keeps the pasted order", () => {
@@ -4625,7 +4681,7 @@ describe("Selvitykset (feature/selvitykset)", () => {
 
     it("carries the statement's header, standing text and empty timing", () => {
       const vm = buildMaintenanceDocumentViewModel(documents, "maintenance_need");
-      expect(vm.header).toEqual({ periodLabel: "2026–2030", boardHandledAt: "2026-03-10", meetingPresentedAt: "" });
+      expect(vm.header).toEqual({ periodLabel: "2026–2030", boardHandledAt: "10.3.2026", meetingPresentedAt: "" });
       expect(vm.standingText).toContain("hallituksen tämän hetken näkemys");
       expect(vm.rows[1]).toEqual({ first: "Y", second: "" });
     });

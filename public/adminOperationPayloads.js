@@ -408,6 +408,32 @@ export function pickPrefillSource(values) {
 }
 
 /**
+ * "2026-04-28" -> "28.4.2026". The one place a stored ISO date becomes a
+ * Finnish one for display; the stored form stays ISO everywhere.
+ *
+ * DELIBERATELY NOT `new Date()`, AND NOT Intl.DateTimeFormat. A date-only ISO
+ * string is parsed by the Date constructor as UTC midnight, and rendered in
+ * a local zone it can read back as the previous day - west of UTC directly,
+ * and in Finland the moment anyone round-trips it through toISOString().
+ * That is the kind of bug found only when someone wonders why a date is
+ * wrong, so this is a string transform and the test pins that it never
+ * touches Date at all.
+ *
+ * Anything that is not exactly YYYY-MM-DD comes back unchanged: "2025-Q4"
+ * is a real value in the data, and a timestamp is not this function's job.
+ * @param {unknown} value
+ * @returns {string} the formatted date, the input as a string, or "" for a missing value
+ */
+export function formatFinnishDate(value) {
+  if (value === undefined || value === null) return "";
+  const text = String(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return text;
+  const [, year, month, day] = match;
+  return `${Number(day)}.${Number(month)}.${year}`;
+}
+
+/**
  * Operation-level metadata for every admin operation. The source identifiers
  * are required — the forms prefill them from the entity being saved, so they
  * are a click, not typing. The explanation is optional: it is prose nobody
@@ -4606,8 +4632,8 @@ export function buildMaintenanceDocumentViewModel(documents, kind) {
   const header = kind === "maintenance_need" && doc
     ? {
       periodLabel: doc.period ? `${doc.period.startYear}–${doc.period.endYear}` : "",
-      boardHandledAt: String(doc.boardHandledAt ?? ""),
-      meetingPresentedAt: String(doc.meetingPresentedAt ?? ""),
+      boardHandledAt: formatFinnishDate(doc.boardHandledAt),
+      meetingPresentedAt: formatFinnishDate(doc.meetingPresentedAt),
     }
     : null;
   return {

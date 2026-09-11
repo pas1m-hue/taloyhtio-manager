@@ -16,6 +16,7 @@ import {
   buildGroupBudgetImportOperations,
   buildForecastCompletenessLines,
   buildCashPathViewModel,
+  formatFinnishDate,
   parseMaintenanceDocumentPasteInput,
   validateMaintenanceNeedHeaderInput,
   buildMaintenanceDocumentSourceId,
@@ -912,7 +913,7 @@ function renderAssetDetail() {
       <button type="button" class="danger" id="detail-delete-asset">Poista</button>
     </div>
     ${detailGroup("Havainnot", observations.map((o) =>
-      `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei havaintoja.")}
+      `<li><strong>${escapeHtml(formatFinnishDate(o.observedAt))}</strong><br>${escapeHtml(o.description)}</li>`), "Ei havaintoja.")}
     ${detailGroup("Tapahtumat", events.map((e) =>
       `<li><strong>${escapeHtml(e.title)}</strong> · ${escapeHtml(e.status)} · ${escapeHtml(e.type)}</li>`), "Ei tapahtumia.")}
     ${detailGroup("Kustannusnäyttö", evidence.map((c) => {
@@ -1274,7 +1275,7 @@ function renderObservations() {
     <tbody>${vm.rows.map((row) => `
       <tr class="${row.id === selectedId ? "is-selected" : ""}" data-observation-id="${escapeHtml(row.id)}">
         <td>${escapeHtml(row.assetName)}</td>
-        <td>${escapeHtml(row.observedAt)}</td>
+        <td>${escapeHtml(formatFinnishDate(row.observedAt))}</td>
         <td>${escapeHtml(row.description)}</td>
         <td>${escapeHtml(row.sourceIds.join(", ") || "—")}</td>
         <td><button type="button" class="secondary row-select">Näytä</button></td>
@@ -1306,7 +1307,7 @@ function renderObservationDetail() {
   $("#detail-panel-body").innerHTML = `
     <div class="detail-group">
       <div class="detail-item"><span>Rakennusosa</span><strong>${escapeHtml(asset?.name ?? observation.assetId)}</strong></div>
-      <div class="detail-item"><span>Havaintopäivä</span><strong>${escapeHtml(observation.observedAt)}</strong></div>
+      <div class="detail-item"><span>Havaintopäivä</span><strong>${escapeHtml(formatFinnishDate(observation.observedAt))}</strong></div>
       <div class="detail-item"><span>Kuvaus</span><strong>${escapeHtml(observation.description)}</strong></div>
       <div class="detail-item"><span>Lähdetunnisteet</span><strong>${escapeHtml((observation.sourceIds ?? []).join(", ") || "—")}</strong></div>
     </div>
@@ -1525,7 +1526,7 @@ function costEvidenceRow(row, selected) {
     <td class="num">${row.quantity ?? "—"}</td>
     <td>${row.priceLevelYear}</td>
     <td>${confirmation}</td>
-    <td>${escapeHtml(row.validUntil ?? "—")}${expired}</td>
+    <td>${escapeHtml(formatFinnishDate(row.validUntil) || "—")}${expired}</td>
     <td>${source}</td>
     <td><button type="button" class="secondary row-select">Näytä</button></td>
   </tr>`;
@@ -1556,7 +1557,7 @@ function renderCostEvidenceDetail() {
       <div class="detail-item"><span>Summa</span><strong>${isDataGap ? "DATA GAP" : money(evidence.amount ?? 0)}</strong></div>
       <div class="detail-item"><span>Yksikkö / määrä</span><strong>${escapeHtml(evidence.unit)}${evidence.quantity !== undefined ? ` · ${evidence.quantity}` : ""}</strong></div>
       <div class="detail-item"><span>Hintatasovuosi</span><strong>${evidence.priceLevelYear}${confirmed ? ` · vahvistettu ${PROJECTION_PRICE_LEVEL_YEAR}` : ""}</strong></div>
-      <div class="detail-item"><span>Voimassaolo</span><strong>${escapeHtml(evidence.validUntil ?? "—")}</strong></div>
+      <div class="detail-item"><span>Voimassaolo</span><strong>${escapeHtml(formatFinnishDate(evidence.validUntil) || "—")}</strong></div>
       <div class="detail-item"><span>Lähde</span><strong>${evidence.sourceUrl ? `<a href="${escapeHtml(evidence.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(evidence.sourceUrl)}</a>` : escapeHtml(evidence.sourceId ?? "—")}</strong></div>
       <div class="detail-item"><span>Huomio</span><strong>${escapeHtml(evidence.notes ?? "—")}</strong></div>
     </div>
@@ -1904,7 +1905,7 @@ function renderEventDetail() {
 
   const scheduleBlock = event.status === "actual"
     ? detailGroup("Toteuma", event.actual ? [
-        `<li>Vuosi ${event.actual.year}${event.actual.occurredAt ? ` · ${escapeHtml(event.actual.occurredAt)}` : ""}${event.actual.amount !== undefined ? ` · ${money(event.actual.amount)}` : ""}${event.actual.quantity !== undefined ? ` · ${event.actual.quantity} kpl` : ""}</li>`,
+        `<li>Vuosi ${event.actual.year}${event.actual.occurredAt ? ` · ${escapeHtml(formatFinnishDate(event.actual.occurredAt))}` : ""}${event.actual.amount !== undefined ? ` · ${money(event.actual.amount)}` : ""}${event.actual.quantity !== undefined ? ` · ${event.actual.quantity} kpl` : ""}</li>`,
         `<li>${escapeHtml(costEvidenceLabel(evidenceById.get(event.actual.costEvidenceId), event.actual.costEvidenceId))}</li>`,
       ] : [], "Ei toteumatietoja.")
     : SCENARIOS.map((scenario) => {
@@ -1931,7 +1932,7 @@ function renderEventDetail() {
     </div>
     ${scheduleBlock}
     ${detailGroup("Linkitetyt havainnot", linkedObservations.map((o) =>
-      `<li><strong>${escapeHtml(o.observedAt)}</strong><br>${escapeHtml(o.description)}</li>`), "Ei linkitettyjä havaintoja.")}
+      `<li><strong>${escapeHtml(formatFinnishDate(o.observedAt))}</strong><br>${escapeHtml(o.description)}</li>`), "Ei linkitettyjä havaintoja.")}
   `;
   $("#detail-edit-event").addEventListener("click", () => openEventEditor("edit", event.id));
   $("#detail-delete-event").addEventListener(
@@ -3222,7 +3223,7 @@ function populateBalancePositionSelector(snapshots) {
   const sorted = [...snapshots].sort((a, b) => String(a.asOfDate).localeCompare(String(b.asOfDate)));
   const current = select.value;
   select.innerHTML = sorted.map((snapshot) =>
-    `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(snapshot.asOfDate)} (${escapeHtml(snapshot.id)})</option>`
+    `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(formatFinnishDate(snapshot.asOfDate))} (${escapeHtml(snapshot.id)})</option>`
   ).join("");
   $("#finance-position-selector").hidden = sorted.length <= 1;
   const stillExists = sorted.some((snapshot) => snapshot.id === current);
@@ -3243,7 +3244,7 @@ function populateBalanceCompareSelector(sorted, selectedId) {
   const current = select.value;
   const otherOptions = sorted
     .filter((snapshot) => snapshot.id !== selectedId)
-    .map((snapshot) => `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(snapshot.asOfDate)} (${escapeHtml(snapshot.id)})</option>`)
+    .map((snapshot) => `<option value="${escapeHtml(snapshot.id)}">${escapeHtml(formatFinnishDate(snapshot.asOfDate))} (${escapeHtml(snapshot.id)})</option>`)
     .join("");
   select.innerHTML = `<option value="">Ei vertailua</option>${otherOptions}`;
 
@@ -3317,7 +3318,7 @@ function renderBalancePosition() {
   const balanceYear = Number(String(snapshot.asOfDate).slice(0, 4));
   if (trailing12m.status === "available" && Number.isInteger(balanceYear) &&
       trailing12m.latestActualYear !== balanceYear) {
-    kpiNotes.push(`Kulutoteumat ovat vuodelta ${trailing12m.latestActualYear}, tase ${escapeHtml(snapshot.asOfDate)} — kassa kuukausina -tunnusluku yhdistää eri ajankohtien lukuja.`);
+    kpiNotes.push(`Kulutoteumat ovat vuodelta ${trailing12m.latestActualYear}, tase ${escapeHtml(formatFinnishDate(snapshot.asOfDate))} — kassa kuukausina -tunnusluku yhdistää eri ajankohtien lukuja.`);
   }
 
   const kpis = `
@@ -3362,7 +3363,7 @@ function renderBalancePosition() {
       return `<section class="card">
         <h3>${escapeHtml(group.label)}</h3>
         <div class="table-wrap"><table>
-          <thead><tr><th></th><th>${escapeHtml(snapshot.asOfDate)}</th><th>${escapeHtml(olderSnapshot.asOfDate)}</th><th>Muutos €</th></tr></thead>
+          <thead><tr><th></th><th>${escapeHtml(formatFinnishDate(snapshot.asOfDate))}</th><th>${escapeHtml(formatFinnishDate(olderSnapshot.asOfDate))}</th><th>Muutos €</th></tr></thead>
           ${sectionBlocks}
         </table></div>
         <p class="metric">${escapeHtml(group.label)} YHTEENSÄ: ${money(group.newerGroupTotal)} (${moneyChange(group.groupChange)})</p>
@@ -3671,7 +3672,7 @@ function renderCashpath() {
           : `<div class="table-wrap"><table>
           <thead><tr><th>Vuosi</th><th>Korjaus</th><th class="num">Toteutunut hinta</th></tr></thead>
           <tbody>${vm.completedRepairs.rows.map((row) => `<tr>
-            <td>${row.year}${row.occurredAt ? ` <span class="muted">· ${escapeHtml(row.occurredAt)}</span>` : ""}</td>
+            <td>${row.year}${row.occurredAt ? ` <span class="muted">· ${escapeHtml(formatFinnishDate(row.occurredAt))}</span>` : ""}</td>
             <td>${escapeHtml(row.title)}</td>
             <td class="num">${row.amount === undefined ? `<span class="muted">hinta puuttuu</span>` : money(row.amount)}</td>
           </tr>`).join("")}</tbody></table></div>`}

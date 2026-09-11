@@ -343,6 +343,25 @@ describe("static Selvitykset cross-check (feature/selvitykset)", () => {
   });
 });
 
+describe("static date-formatting cross-check (feature/date-formatting)", () => {
+  it("renders every stored date through formatFinnishDate, never raw", () => {
+    // One shared formatter, not six copies, was the point of the task. A raw
+    // `escapeHtml(x.observedAt)` is a site that slipped back to ISO.
+    const rawDateRenders = [...js.matchAll(
+      /escapeHtml\((?!formatFinnishDate\()[\w.?]*\.(observedAt|validUntil|asOfDate|occurredAt|boardHandledAt|meetingPresentedAt)\b[^)]*\)/g,
+    )].map((m) => m[0]);
+    expect(rawDateRenders).toEqual([]);
+    expect(js).toContain("formatFinnishDate,");
+  });
+
+  it("keeps the observation date filter comparing ISO strings", () => {
+    // Formatting is display-only; "28.4.2026" < "5.1.2026" as strings would
+    // break the from/to filter, so it must keep comparing the stored form.
+    expect(js).toContain("if (from && observation.observedAt < from) return false;");
+    expect(js).toContain("if (to && observation.observedAt > to) return false;");
+  });
+});
+
 // A guard against a branch that can never run. The editor-open functions take
 // a `mode`, and callers only ever pass "new" or "edit" — but nothing stops a
 // new branch from testing a value nobody passes. `if (mode === "create")`
