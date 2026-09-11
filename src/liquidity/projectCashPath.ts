@@ -12,7 +12,7 @@ export interface ProjectCashPathInput {
   readonly projection: ScenarioProjection;
   readonly horizon: Horizon;
   readonly initialCash: number;
-  readonly annualRepairCollection: number;
+  readonly annualOperatingMargin: number;
   readonly operatingBufferTarget: number;
   /**
    * Last year the maintenance plan covers. Omitted means unknown coverage, in
@@ -45,9 +45,9 @@ export function projectCashPath(
     "initialCash",
   );
   const annualCollectionCents = toSignedCents(
-    input.annualRepairCollection,
+    input.annualOperatingMargin,
     "INVALID_COLLECTION_INPUT",
-    "annualRepairCollection",
+    "annualOperatingMargin",
   );
   const bufferCents = toCents(
     input.operatingBufferTarget,
@@ -79,7 +79,7 @@ export function projectCashPath(
         ...(openingCashCents === undefined
           ? {}
           : { openingCash: fromCents(openingCashCents) }),
-        annualRepairCollection: fromCents(annualCollectionCents),
+        annualOperatingMargin: fromCents(annualCollectionCents),
         operatingBufferTarget: fromCents(bufferCents),
         costsKnown: false,
       });
@@ -97,7 +97,7 @@ export function projectCashPath(
     years.push({
       year,
       openingCash: fromCents(openingCashCents!),
-      annualRepairCollection: fromCents(annualCollectionCents),
+      annualOperatingMargin: fromCents(annualCollectionCents),
       knownRepairCosts: fromCents(knownRepairCostCents),
       closingCash: fromCents(closingCashCents),
       operatingBufferTarget: fromCents(bufferCents),
@@ -121,7 +121,7 @@ export function projectCashPath(
     scenario: input.projection.scenario,
     years,
     initialCash: fromCents(initialCashCents),
-    annualRepairCollection: fromCents(annualCollectionCents),
+    annualOperatingMargin: fromCents(annualCollectionCents),
     operatingBufferTarget: fromCents(bufferCents),
     knownRepairCostsTotal: fromCents(knownRepairCostsTotalCents),
     collectionTotal: fromCents(annualCollectionCents * years.length),

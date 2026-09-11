@@ -59,7 +59,7 @@ const invalidAiOrigin: EventOrigin = "llm_suggestion";
 const validCollectionResult = {
   scenario: "base",
   knownCostRequiredAnnualCollection: 10_000,
-  currentAnnualRepairCollection: 8_000,
+  currentAnnualOperatingMargin: 8_000,
   additionalAnnualCollection: 2_000,
   currentMonthlyCollection: 666.67,
   requiredMonthlyCollection: 833.34,

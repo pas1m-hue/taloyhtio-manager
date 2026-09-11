@@ -146,7 +146,7 @@ export function buildSeedOperations(
     id: LIQUIDITY_BASELINE_ID,
     asOfDate: "2025-12-31",
     currentCash: 22_208.49,
-    currentAnnualRepairCollection: 9_680,
+    currentAnnualOperatingMargin: 9_680,
     trailing12mOperatingCosts: trailingCosts.value,
     sourceIds: [EXCEL_CURRENT_PERIOD_SOURCE_ID, ...trailingCosts.sourceIds],
     notes: trailingCosts.notes,

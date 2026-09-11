@@ -17,7 +17,7 @@ export interface BuildLiquidityForecastInput {
   readonly horizon: Horizon;
   readonly currentCash: number;
   readonly trailing12mOperatingCosts: number;
-  readonly currentAnnualRepairCollection: number;
+  readonly currentAnnualOperatingMargin: number;
   readonly operatingBufferSettings?: OperatingBufferSettings;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
@@ -47,7 +47,7 @@ export function buildLiquidityForecast(
       projection,
       horizon: input.horizon,
       initialCash: input.currentCash,
-      annualRepairCollection: input.currentAnnualRepairCollection,
+      annualOperatingMargin: input.currentAnnualOperatingMargin,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
       ...(input.maintenancePlanCoverageThroughYear === undefined
         ? {}
@@ -66,7 +66,7 @@ export function buildLiquidityForecast(
       horizon: input.horizon,
       initialCash: input.currentCash,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
-      currentAnnualRepairCollection: input.currentAnnualRepairCollection,
+      currentAnnualOperatingMargin: input.currentAnnualOperatingMargin,
       ...(input.totalChargeableAreaM2 === undefined
         ? {}
         : { totalChargeableAreaM2: input.totalChargeableAreaM2 }),

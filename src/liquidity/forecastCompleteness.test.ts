@@ -28,7 +28,7 @@ function requiredCollection(coverage?: number) {
     horizon: HORIZON,
     initialCash: 20_000,
     operatingBufferTarget: 5_000,
-    currentAnnualRepairCollection: 1_000,
+    currentAnnualOperatingMargin: 1_000,
     ...(coverage === undefined ? {} : { maintenancePlanCoverageThroughYear: coverage }),
   });
 }
@@ -38,7 +38,7 @@ function fundingNeed(coverage?: number) {
     projection: baseProjection(),
     horizon: HORIZON,
     initialCash: 20_000,
-    annualRepairCollection: 1_000,
+    annualOperatingMargin: 1_000,
     operatingBufferTarget: 5_000,
     ...(coverage === undefined ? {} : { maintenancePlanCoverageThroughYear: coverage }),
   });

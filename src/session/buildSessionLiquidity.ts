@@ -31,7 +31,7 @@ export function buildSessionLiquidityModel(
   const missing: (
     | "currentCash"
     | "trailing12mOperatingCosts"
-    | "currentAnnualRepairCollection"
+    | "currentAnnualOperatingMargin"
   )[] = [];
 
   // Both operating figures come from the publication's account data, computed
@@ -61,17 +61,17 @@ export function buildSessionLiquidityModel(
   const publishedCollection = marginFigures.status === "available"
     ? marginFigures.operatingMargin
     : undefined;
-  const annualOverrides = overrides.annualRepairCollectionByScenario ?? {};
+  const annualOverrides = overrides.annualOperatingMarginByScenario ?? {};
   if (publishedCollection === undefined &&
       SCENARIOS.some((scenario) => annualOverrides[scenario] === undefined)) {
-    missing.push("currentAnnualRepairCollection");
+    missing.push("currentAnnualOperatingMargin");
   }
   if (currentCash === undefined || trailing12mOperatingCosts === undefined ||
-      missing.includes("currentAnnualRepairCollection")) {
+      missing.includes("currentAnnualOperatingMargin")) {
     return { status: "unavailable", missingFields: missing };
   }
 
-  const annualRepairCollectionByScenario = {
+  const annualOperatingMarginByScenario = {
     optimistic: annualOverrides.optimistic ?? publishedCollection!,
     base: annualOverrides.base ?? publishedCollection!,
     stress: annualOverrides.stress ?? publishedCollection!,
@@ -93,7 +93,7 @@ export function buildSessionLiquidityModel(
         },
     apartmentCount: overrides.apartmentCount ??
       publication.housingCompany.apartmentCount,
-    annualRepairCollectionByScenario,
+    annualOperatingMarginByScenario,
   };
   return {
     status: "available",
@@ -120,14 +120,14 @@ function buildForecast(
   });
   const scenarios = {} as Record<Scenario, ScenarioLiquidityForecast>;
   for (const scenario of SCENARIOS) {
-    const annualRepairCollection =
-      assumptions.annualRepairCollectionByScenario[scenario];
+    const annualOperatingMargin =
+      assumptions.annualOperatingMarginByScenario[scenario];
     const scenarioProjection = projection.scenarios[scenario];
     const cashPath = projectCashPath({
       projection: scenarioProjection,
       horizon: workspace.horizon,
       initialCash: assumptions.currentCash,
-      annualRepairCollection,
+      annualOperatingMargin,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
       ...(maintenancePlanCoverageThroughYear === undefined
         ? {}
@@ -138,7 +138,7 @@ function buildForecast(
       horizon: workspace.horizon,
       initialCash: assumptions.currentCash,
       operatingBufferTarget: operatingBuffer.operatingBufferTarget,
-      currentAnnualRepairCollection: annualRepairCollection,
+      currentAnnualOperatingMargin: annualOperatingMargin,
       ...(assumptions.totalChargeableAreaM2 === undefined
         ? {}
         : { totalChargeableAreaM2: assumptions.totalChargeableAreaM2 }),

@@ -120,7 +120,7 @@ export function buildSnapshotCalculations(
           currentCash: latest.currentCash,
           trailing12mOperatingCosts:
             operatingFigures.costs.trailing12mOperatingCosts,
-          currentAnnualRepairCollection: operatingFigures.margin.operatingMargin,
+          currentAnnualOperatingMargin: operatingFigures.margin.operatingMargin,
           ...(snapshot.housingCompany.operatingBuffer === undefined
             ? {}
             : { operatingBufferSettings: snapshot.housingCompany.operatingBuffer }),

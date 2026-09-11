@@ -159,7 +159,7 @@ describe("V2.1 admin manual entry", () => {
       asOfDate: "2026-12-31",
       currentCash: 25_000,
       trailing12mOperatingCosts: 36_000,
-      currentAnnualRepairCollection: 10_000,
+      currentAnnualOperatingMargin: 10_000,
       sourceIds: ["financial_statement_2026"],
     };
     const next = applyAdminBatch(adminBaselineSnapshot, command([
@@ -287,7 +287,7 @@ describe("V2.1 admin manual entry", () => {
           asOfDate: "not-a-date",
           currentCash: 1,
           trailing12mOperatingCosts: 1,
-          currentAnnualRepairCollection: 1,
+          currentAnnualOperatingMargin: 1,
           sourceIds: ["x"],
         },
       }),
@@ -434,7 +434,7 @@ describe("V2.1 admin manual entry", () => {
       projection,
       currentCash: baseline!.currentCash,
       trailing12mOperatingCosts: baseline!.trailing12mOperatingCosts,
-      currentAnnualRepairCollection: baseline!.currentAnnualRepairCollection,
+      currentAnnualOperatingMargin: baseline!.currentAnnualOperatingMargin,
       horizon: { startYear: 2027, endYear: 2035 },
       apartmentCount: next.housingCompany.apartmentCount,
       totalChargeableAreaM2: 1_245,

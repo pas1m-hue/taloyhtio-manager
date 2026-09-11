@@ -237,7 +237,7 @@ describe("V2.4 application services and UI read models", () => {
     if (liquidity.status !== "available") throw new Error("expected a forecast");
     // The forecast reads the computed figures, not the baseline's stored
     // 34 029,46 and 9 680 - which is the entire point of the change.
-    expect(liquidity.forecast.scenarios.base.cashPath.annualRepairCollection)
+    expect(liquidity.forecast.scenarios.base.cashPath.annualOperatingMargin)
       .toBe(financialActualsExpected.operatingMargin);
     // The buffer target is the computed divisor spread over its months, so
     // asserting it is asserting that the divisor reached the buffer at all.

@@ -133,7 +133,7 @@ describe("projectCashPath and findFundingNeed", () => {
       projection,
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection: 0,
+      annualOperatingMargin: 0,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
     });
 
@@ -159,7 +159,7 @@ describe("projectCashPath and findFundingNeed", () => {
       projection: waterHeaterProjection().scenarios.base,
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection: 0,
+      annualOperatingMargin: 0,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       // Covers the horizon's last year, so this stays the fully-covered
       // regression case: a complete forecast still reports complete.
@@ -184,8 +184,8 @@ describe("projectCashPath and findFundingNeed", () => {
       projection: waterHeaterProjection().scenarios.base,
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection:
-        correctedWorkbookLiquidityBaseline.currentAnnualRepairCollection,
+      annualOperatingMargin:
+        correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
     });
     const signal = findFundingNeed(path, waterHeaterHorizon);
@@ -207,7 +207,7 @@ describe("projectCashPath and findFundingNeed", () => {
       projection: projection.scenarios.stress,
       horizon: { startYear: 2026, endYear: 2030 },
       initialCash: 10_000,
-      annualRepairCollection: 0,
+      annualOperatingMargin: 0,
       operatingBufferTarget: 5_000,
     });
     const signal = findFundingNeed(path, { startYear: 2026, endYear: 2030 });
@@ -230,7 +230,7 @@ describe("projectCashPath and findFundingNeed", () => {
     const common = {
       horizon: waterHeaterHorizon,
       initialCash: 22_208.49,
-      annualRepairCollection: 1_000,
+      annualOperatingMargin: 1_000,
       operatingBufferTarget: 9_925.26,
     } as const;
 
@@ -245,7 +245,7 @@ describe("projectCashPath and findFundingNeed", () => {
         projection: simpleProjection({ horizonAmount: 11_999 }),
         horizon: { startYear: 2027, endYear: 2030 },
         initialCash: 10_000,
-        annualRepairCollection: 1_000,
+        annualOperatingMargin: 1_000,
         operatingBufferTarget: 5_000,
       }),
       "INVALID_SCENARIO_PROJECTION",
@@ -261,7 +261,7 @@ describe("maintenance plan coverage in the cash path", () => {
       projection: waterHeaterProjection().scenarios.optimistic,
       horizon: coverageHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection: 1_000,
+      annualOperatingMargin: 1_000,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       ...(coverage === undefined
         ? {}
@@ -335,7 +335,7 @@ describe("maintenance plan coverage in the cash path", () => {
       projection: waterHeaterProjection().scenarios.optimistic,
       horizon: coverageHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection: 1_000,
+      annualOperatingMargin: 1_000,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
     });
 
@@ -384,7 +384,7 @@ describe("maintenance plan coverage in the cash path", () => {
       projection: waterHeaterProjection().scenarios.base,
       horizon: coverageHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
-      annualRepairCollection: 0,
+      annualOperatingMargin: 0,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       maintenancePlanCoverageThroughYear: 2031,
     });
@@ -416,7 +416,7 @@ describe("calculateRequiredCollection", () => {
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
       // A plan reaching the horizon's last year, so this stays the
       // fully-covered regression case for forecastComplete.
       maintenancePlanCoverageThroughYear: waterHeaterHorizon.endYear,
@@ -425,7 +425,7 @@ describe("calculateRequiredCollection", () => {
     expect(result).toMatchObject({
       scenario: "base",
       knownCostRequiredAnnualCollection: 835.2,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
       additionalAnnualCollection: 835.2,
       currentMonthlyCollection: 0,
       requiredMonthlyCollection: 69.6,
@@ -443,7 +443,7 @@ describe("calculateRequiredCollection", () => {
       horizon: { startYear: 2027, endYear: 2029 },
       initialCash: 10_000,
       operatingBufferTarget: 5_000,
-      currentAnnualRepairCollection: 2_000,
+      currentAnnualOperatingMargin: 2_000,
     });
 
     expect(result.knownCostRequiredAnnualCollection).toBe(7_000);
@@ -459,8 +459,8 @@ describe("calculateRequiredCollection", () => {
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
-      currentAnnualRepairCollection:
-        correctedWorkbookLiquidityBaseline.currentAnnualRepairCollection,
+      currentAnnualOperatingMargin:
+        correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
     });
 
     expect(result.knownCostRequiredAnnualCollection).toBe(835.2);
@@ -474,7 +474,7 @@ describe("calculateRequiredCollection", () => {
       horizon: { startYear: 2027, endYear: 2029 },
       initialCash: 10_000,
       operatingBufferTarget: 5_000,
-      currentAnnualRepairCollection: 2_000,
+      currentAnnualOperatingMargin: 2_000,
       totalChargeableAreaM2: 1_000,
       apartmentCount: 20,
     });
@@ -493,7 +493,7 @@ describe("calculateRequiredCollection", () => {
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
     } as const;
 
     const optimistic = calculateRequiredCollection({
@@ -526,7 +526,7 @@ describe("calculateRequiredCollection", () => {
       horizon: { startYear: 2026, endYear: 2030 },
       initialCash: 10_000,
       operatingBufferTarget: 5_000,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
     });
 
     expect(result.forecastComplete).toBe(false);
@@ -561,13 +561,13 @@ describe("calculateRequiredCollection", () => {
         horizon,
         initialCash: item.initialCash,
         operatingBufferTarget: item.buffer,
-        currentAnnualRepairCollection: 0,
+        currentAnnualOperatingMargin: 0,
       });
       const exactPath = projectCashPath({
         projection,
         horizon,
         initialCash: item.initialCash,
-        annualRepairCollection: required.knownCostRequiredAnnualCollection,
+        annualOperatingMargin: required.knownCostRequiredAnnualCollection,
         operatingBufferTarget: item.buffer,
       });
 
@@ -581,7 +581,7 @@ describe("calculateRequiredCollection", () => {
           projection,
           horizon,
           initialCash: item.initialCash,
-          annualRepairCollection:
+          annualOperatingMargin:
             required.knownCostRequiredAnnualCollection - 0.01,
           operatingBufferTarget: item.buffer,
         });
@@ -600,7 +600,7 @@ describe("calculateRequiredCollection", () => {
         horizon: { startYear: 2027, endYear: 2029 },
         initialCash: 10_000,
         operatingBufferTarget: 5_000,
-        currentAnnualRepairCollection: 0,
+        currentAnnualOperatingMargin: 0,
         totalChargeableAreaM2: 0,
       }),
       "INVALID_CHARGE_BASIS",
@@ -611,7 +611,7 @@ describe("calculateRequiredCollection", () => {
         horizon: { startYear: 2027, endYear: 2029 },
         initialCash: -1,
         operatingBufferTarget: 5_000,
-        currentAnnualRepairCollection: 0,
+        currentAnnualOperatingMargin: 0,
       }),
       "INVALID_CASH_INPUT",
     );
@@ -627,7 +627,7 @@ describe("buildLiquidityForecast", () => {
       currentCash: correctedWorkbookLiquidityBaseline.currentCash,
       trailing12mOperatingCosts:
         correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
-      currentAnnualRepairCollection: 0,
+      currentAnnualOperatingMargin: 0,
       totalChargeableAreaM2: 1_000,
       apartmentCount: 20,
     });
@@ -649,7 +649,7 @@ describe("buildLiquidityForecast", () => {
       horizon: waterHeaterHorizon,
       currentCash: 22_208.49,
       trailing12mOperatingCosts: 34_029.46,
-      currentAnnualRepairCollection: 1_000,
+      currentAnnualOperatingMargin: 1_000,
     } as const;
     const before = JSON.stringify(input);
 

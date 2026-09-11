@@ -32,14 +32,14 @@ export const adminBaselineLiquidity: LiquidityBaselineRecord = {
   currentCash: correctedWorkbookLiquidityBaseline.currentCash,
   trailing12mOperatingCosts:
     correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
-  currentAnnualRepairCollection:
-    correctedWorkbookLiquidityBaseline.currentAnnualRepairCollection,
+  currentAnnualOperatingMargin:
+    correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
   sourceIds: [
     correctedWorkbookLiquidityBaseline.sources.currentCash,
     correctedWorkbookLiquidityBaseline.sources.trailing12mOperatingCosts,
-    correctedWorkbookLiquidityBaseline.sources.currentAnnualRepairCollection,
+    correctedWorkbookLiquidityBaseline.sources.currentAnnualOperatingMargin,
   ],
-  notes: correctedWorkbookLiquidityBaseline.notes.currentAnnualRepairCollection,
+  notes: correctedWorkbookLiquidityBaseline.notes.currentAnnualOperatingMargin,
 };
 
 export const adminBaselineSnapshot = createAdminDataSnapshot({

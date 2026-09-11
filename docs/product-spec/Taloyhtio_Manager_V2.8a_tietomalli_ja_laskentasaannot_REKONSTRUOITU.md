@@ -184,7 +184,7 @@ Nykyinen `FinancialYear` tukee vain vuosittaisia kokonaissummia. Excelin mukaise
 |`asOfDate`|kelvollinen päivämäärä|
 |`currentCash`|numero >= 0|
 |`trailing12mOperatingCosts`|numero >= 0|
-|`currentAnnualRepairCollection`|numero >= 0|
+|`currentAnnualOperatingMargin`|numero >= 0 — hoitokate (tulot − hoitokulut ilman korjauksia); nimi oli `currentAnnualRepairCollection` ennen refactor/hoitokate-naming -muutosta, tallennettu data luetaan vanhalla nimellä|
 |`sourceIds`|vähintään yksi lähde|
 
 ### 5.4 Asset

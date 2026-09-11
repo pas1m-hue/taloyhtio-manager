@@ -10,6 +10,7 @@ import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
 import { postgresErrorCode } from "./postgresErrors.js";
 import { instantMillis, integer } from "./postgresValues.js";
+import { withRenamedBaselineField } from "./legacyFieldNames.js";
 
 interface AdminRow extends Record<string, unknown> {
   company_id: string;
@@ -310,7 +311,7 @@ function withDefaultedAdminCollections(
   return {
     ...payload,
     financialYears: payload.financialYears ?? [],
-    liquidityBaselines: payload.liquidityBaselines ?? [],
+    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withRenamedBaselineField),
     assets: payload.assets ?? [],
     observations: payload.observations ?? [],
     costEvidence: payload.costEvidence ?? [],
@@ -379,6 +380,7 @@ function withDefaultedPublishedCollections(
 ): PublishedDataSnapshot {
   return {
     ...payload,
+    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withRenamedBaselineField),
     financialAccounts: payload.financialAccounts ?? [],
     financialEntries: payload.financialEntries ?? [],
     groupActuals: payload.groupActuals ?? [],

@@ -327,7 +327,7 @@ export interface LiquidityBaselineRecord {
   readonly asOfDate: string;
   readonly currentCash: number;
   readonly trailing12mOperatingCosts: number;
-  readonly currentAnnualRepairCollection: number;
+  readonly currentAnnualOperatingMargin: number;
   readonly sourceIds: readonly string[];
   readonly notes?: string;
 }
@@ -902,7 +902,7 @@ export interface CashPathYear {
    * the chain breaks exactly once, where the knowledge does.
    */
   readonly openingCash?: number;
-  readonly annualRepairCollection: number;
+  readonly annualOperatingMargin: number;
   readonly knownRepairCosts?: number;
   readonly closingCash?: number;
   readonly operatingBufferTarget: number;
@@ -917,7 +917,7 @@ export interface ScenarioCashPath {
   readonly scenario: Scenario;
   readonly years: readonly CashPathYear[];
   readonly initialCash: number;
-  readonly annualRepairCollection: number;
+  readonly annualOperatingMargin: number;
   readonly operatingBufferTarget: number;
   /** Summed over covered years only; uncovered years contribute unknowns. */
   readonly knownRepairCostsTotal: number;
@@ -989,7 +989,7 @@ export interface RequiredCollectionResult {
   readonly scenario: Scenario;
   /** Minimum flat annual collection for known numeric costs only. */
   readonly knownCostRequiredAnnualCollection: number;
-  readonly currentAnnualRepairCollection: number;
+  readonly currentAnnualOperatingMargin: number;
   readonly additionalAnnualCollection: number;
   readonly currentMonthlyCollection: number;
   readonly requiredMonthlyCollection: number;
@@ -1061,7 +1061,7 @@ export interface SessionLiquidityOverrides {
   readonly operatingBufferTarget?: number | null;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
-  readonly annualRepairCollectionByScenario?: Partial<
+  readonly annualOperatingMarginByScenario?: Partial<
     Readonly<Record<Scenario, number>>
   >;
 }
@@ -1120,7 +1120,7 @@ export interface EffectiveSessionLiquidityAssumptions {
   readonly operatingBufferSettings: OperatingBufferSettings;
   readonly totalChargeableAreaM2?: number;
   readonly apartmentCount?: number;
-  readonly annualRepairCollectionByScenario: Readonly<Record<Scenario, number>>;
+  readonly annualOperatingMarginByScenario: Readonly<Record<Scenario, number>>;
 }
 
 export type SessionLiquidityModel =
@@ -1144,7 +1144,7 @@ export type SessionLiquidityModel =
       readonly missingFields: readonly (
         | "currentCash"
         | "trailing12mOperatingCosts"
-        | "currentAnnualRepairCollection"
+        | "currentAnnualOperatingMargin"
       )[];
     };
 

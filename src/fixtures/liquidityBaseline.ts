@@ -9,14 +9,14 @@
 export const correctedWorkbookLiquidityBaseline = {
   currentCash: 22_208.49,
   trailing12mOperatingCosts: 34_029.46,
-  currentAnnualRepairCollection: 9_680,
+  currentAnnualOperatingMargin: 9_680,
   sources: {
     currentCash: "Taloudellinen asema!C14",
     trailing12mOperatingCosts: "Kulut!B19",
-    currentAnnualRepairCollection: "Kulut!L14",
+    currentAnnualOperatingMargin: "Kulut!L14",
   },
   notes: {
-    currentAnnualRepairCollection:
+    currentAnnualOperatingMargin:
       "Proxy from the 2026 repair budget, not a separately earmarked charge.",
   },
 } as const;
