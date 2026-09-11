@@ -48,6 +48,8 @@ export interface CalculationFinancialEntry {
   readonly accountCode: string;
   readonly year: number;
   readonly actualAmount?: number;
+  /** Admin-only: a publication never carries a budget figure. */
+  readonly budgetAmount?: number;
 }
 
 export interface CalculationGroupActual {
@@ -58,11 +60,32 @@ export interface CalculationGroupActual {
   readonly active: boolean;
 }
 
+export interface CalculationGroupBudget {
+  readonly group: string;
+  readonly kind: FinancialAccountKind;
+  readonly year: number;
+  readonly budgetAmount: number;
+  readonly active: boolean;
+}
+
 export interface FinancialActualsSource {
   readonly financialAccounts: readonly CalculationFinancialAccount[];
   readonly financialEntries: readonly CalculationFinancialEntry[];
   readonly groupActuals: readonly CalculationGroupActual[];
 }
+
+/**
+ * The actuals source plus the budget side of the same account data. The
+ * budget collections are optional so a FinancialActualsSource (a publication,
+ * say) still satisfies it: a missing budget side yields an empty budget
+ * series, never a zero.
+ */
+export interface FinancialFiguresSource extends FinancialActualsSource {
+  readonly groupBudgets?: readonly CalculationGroupBudget[];
+}
+
+/** Which of an entry's two figures a series is built from. */
+export type FigureSide = "actual" | "budget";
 
 /** Group whose costs are repairs; matched by name as the account data spells it. */
 const REPAIR_GROUP_NAME = "KORJAUKSET";
@@ -158,6 +181,65 @@ export function computeOperatingMarginFigures(
   };
 }
 
+/** One year's hoitokate and the parts it was made from. */
+export interface OperatingMarginYear {
+  readonly year: number;
+  readonly income: number;
+  /** Magnitude, like OperatingCostFigures.costsExcludingRepairs. */
+  readonly costsExcludingRepairs: number;
+  /** The repair group's figure for the year, as a magnitude. */
+  readonly repairs: number;
+  /** income - costsExcludingRepairs. */
+  readonly operatingMargin: number;
+}
+
+/**
+ * Hoitokate for every year the account data can state one, on either side
+ * of the entries (feature/cashpath-rebuild §1). This is the per-year form of
+ * computeOperatingMarginFigures - the same formula, the same group-level
+ * precedence, the same repair-group detection - and the cash path table
+ * reads its history from here rather than repeating the latest year's
+ * figure down every row, which is what the old table did.
+ *
+ * A year is stated only when all three parts report: income, expenses and
+ * the repair group. A year with expenses but no repair row would otherwise
+ * read as "zero repairs", and a year with costs but no income as a deficit
+ * the size of the costs. Both are the DATA GAP principle in reverse, so such
+ * a year is simply absent from the series and the caller shows no row.
+ *
+ * The budget side reads FinancialEntry.budgetAmount and GroupBudget rows
+ * (group wins, spec §6.4). A year without a group budget falls back to the
+ * account sum for every group - verified against production 2026, where
+ * only account budgets exist: 42 714,26 - (43 470,09 - 9 680,00) = 8 924,17.
+ */
+export function computeOperatingMarginSeries(
+  source: FinancialFiguresSource,
+  side: FigureSide,
+): readonly OperatingMarginYear[] {
+  const expenses = buildFigureSeries(source, "expense", side);
+  const income = buildFigureSeries(source, "income", side);
+  const repairGroups = expenses.groups.filter((group) => group.isRepair);
+  const result: OperatingMarginYear[] = [];
+  for (const year of expenses.years) {
+    const repairs = sumPresent(repairGroups, year);
+    const expenseTotal = sumPresent(expenses.groups, year);
+    const yearIncome = sumPresent(income.groups, year);
+    if (repairs === undefined || expenseTotal === undefined ||
+        yearIncome === undefined) {
+      continue;
+    }
+    const costsExcludingRepairs = round2(Math.abs(expenseTotal - repairs));
+    result.push({
+      year,
+      income: round2(yearIncome),
+      costsExcludingRepairs,
+      repairs: round2(Math.abs(repairs)),
+      operatingMargin: round2(yearIncome - costsExcludingRepairs),
+    });
+  }
+  return result;
+}
+
 interface ActualGroup {
   readonly group: string;
   readonly isRepair: boolean;
@@ -185,6 +267,22 @@ function buildActualSeries(
   source: FinancialActualsSource,
   kind: FinancialAccountKind,
 ): ActualSeries {
+  return buildFigureSeries(source, kind, "actual");
+}
+
+/**
+ * The same series for either side of the entries. The budget side follows the
+ * precedence rule Budjetti vs. toteuma states in its own column (spec §6.4):
+ * an active group-level budget wins over the sum of the group's accounts,
+ * row by row - the mirror image of the group-actual rule above, and kept in
+ * the same function so the two sides cannot drift apart in how they read a
+ * group.
+ */
+function buildFigureSeries(
+  source: FinancialFiguresSource,
+  kind: FinancialAccountKind,
+  side: FigureSide,
+): ActualSeries {
   const accounts = source.financialAccounts.filter(
     (account) => account.kind === kind,
   );
@@ -201,15 +299,13 @@ function buildActualSeries(
   for (const entry of source.financialEntries) {
     const account = accountsByCode.get(entry.accountCode);
     if (account === undefined) continue;
-    if (typeof entry.actualAmount !== "number" ||
-        !Number.isFinite(entry.actualAmount)) {
-      continue;
-    }
+    const amount = side === "actual" ? entry.actualAmount : entry.budgetAmount;
+    if (typeof amount !== "number" || !Number.isFinite(amount)) continue;
     if (!Number.isInteger(entry.year)) continue;
 
     years.add(entry.year);
     const byYear = accountTotals.get(account.group) ?? new Map<number, number>();
-    byYear.set(entry.year, (byYear.get(entry.year) ?? 0) + entry.actualAmount);
+    byYear.set(entry.year, (byYear.get(entry.year) ?? 0) + amount);
     accountTotals.set(account.group, byYear);
 
     const reporting = reportingAccounts.get(account.group) ?? [];
@@ -217,19 +313,22 @@ function buildActualSeries(
     reportingAccounts.set(account.group, reporting);
   }
 
-  /** group -> year -> group-level actual, which overrides the account sum */
+  /** group -> year -> group-level figure, which overrides the account sum */
   const groupLevel = new Map<string, Map<number, number>>();
-  for (const actual of source.groupActuals) {
-    if (!actual.active || actual.kind !== kind) continue;
-    if (!Number.isInteger(actual.year)) continue;
-    if (typeof actual.actualAmount !== "number" ||
-        !Number.isFinite(actual.actualAmount)) {
+  const groupFigures: readonly { group: string; kind: FinancialAccountKind; year: number; amount: number; active: boolean }[] =
+    side === "actual"
+      ? source.groupActuals.map((row) => ({ ...row, amount: row.actualAmount }))
+      : (source.groupBudgets ?? []).map((row) => ({ ...row, amount: row.budgetAmount }));
+  for (const figure of groupFigures) {
+    if (!figure.active || figure.kind !== kind) continue;
+    if (!Number.isInteger(figure.year)) continue;
+    if (typeof figure.amount !== "number" || !Number.isFinite(figure.amount)) {
       continue;
     }
-    years.add(actual.year);
-    const byYear = groupLevel.get(actual.group) ?? new Map<number, number>();
-    byYear.set(actual.year, actual.actualAmount);
-    groupLevel.set(actual.group, byYear);
+    years.add(figure.year);
+    const byYear = groupLevel.get(figure.group) ?? new Map<number, number>();
+    byYear.set(figure.year, figure.amount);
+    groupLevel.set(figure.group, byYear);
   }
 
   const groupNames = new Set([...accountTotals.keys(), ...groupLevel.keys()]);

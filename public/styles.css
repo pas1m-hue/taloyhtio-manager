@@ -374,6 +374,16 @@ tfoot tr.is-partial td { color: var(--muted); font-style: italic; }
 
 /* Cash-path years past the maintenance plan's coverage: visible rows whose
    figures are unknown, not zero. */
-tr.beyond-coverage td { color: var(--muted); background: var(--soft); }
-tr.beyond-coverage td:first-child { font-style: italic; }
+/* Cash path (feature/cashpath-rebuild): a budget row must not look like an
+   actual row. The class comes from the view model's rowKind, never from the
+   renderer guessing. */
+tr.row-budget td { font-style: italic; background: var(--soft); }
+.cashpath-table .col-compare { border-left: 2px solid var(--line); }
+.cashpath-legend { margin: .75rem 0 0; padding-left: 1.1rem; font-size: .85rem; }
+.cashpath-banner { margin-top: 1.5rem; }
+.cashpath-banner h3 { margin-bottom: .5rem; }
+.cashpath-banner tr.is-data-gap td { background: #fff7e6; }
+.cashpath-banner tr.total-row td { border-top: 2px solid var(--line); }
+.cashpath-completed { margin-top: 1rem; }
+.cashpath-completed summary { cursor: pointer; font-weight: 650; color: var(--accent); }
 .state-block + .table-wrap { margin-top: 1rem; }

@@ -15,6 +15,7 @@ import {
   buildFinancialImportOperations,
   buildGroupBudgetImportOperations,
   buildForecastCompletenessLines,
+  buildCashPathViewModel,
   buildGroupActualImportOperations,
   buildGroupActualSeries,
   buildGroupBudgetVsActualViewModel,
@@ -2024,7 +2025,7 @@ function openEventEditor(mode, eventId, prefill) {
         <div class="form-grid">
           ${numberField("event-actual-year", "Toteumavuosi", event?.actual?.year ?? "", { required: true, step: 1 })}
           ${dateField("event-actual-occurred-at", "Toteutumispäivä", event?.actual?.occurredAt ?? "", { hint: "Milloin työ valmistui; vapaaehtoinen." })}
-          ${numberField("event-actual-amount", "Summa €", event?.actual?.amount ?? "", { min: 0, step: "0.01" })}
+          ${numberField("event-actual-amount", "Toteutunut hinta €", event?.actual?.amount ?? "", { min: 0, step: "0.01", hint: "Laskun loppusumma. Näkyy Kassapolun toteutuneissa; arviota ei näytetä sen rinnalla." })}
           ${numberField("event-actual-quantity", "Määrä", event?.actual?.quantity ?? "", { min: 1, step: 1 })}
           ${selectField("event-actual-cost-evidence", "Kustannusnäyttö", costEvidenceOptions(model), event?.actual?.costEvidenceId ?? "")}
         </div>
@@ -3413,80 +3414,81 @@ function renderScenarios() {
 }
 
 function renderCashpath() {
-  const liquidity = state.admin.calculations?.liquidity;
   const host = $("#cashpath-body");
-  if (liquidity?.status !== "available") { host.innerHTML = liquidityUnavailableBlock(liquidity); return; }
   const scenario = state.cashpathScenario;
-  const cashPath = liquidity.forecast.scenarios[scenario].cashPath;
+  const vm = buildCashPathViewModel(state.admin.cashPathTable, scenario);
   const tabs = SCENARIOS.map((s) =>
     `<button type="button" class="mode-tab${s === scenario ? " active" : ""}" data-cashpath="${s}">${s}</button>`).join("");
-  const rows = cashPath.years.map((year) => `<tr${year.costsKnown ? "" : " class=\"beyond-coverage\""}>
-    <td>${year.year}</td>
-    <td class="num">${unknownOr(year.openingCash)}</td>
-    <td class="num">${money(year.annualRepairCollection)}</td>
-    <td class="num">${unknownOr(year.knownRepairCosts)}</td>
-    <td class="num">${unknownOr(year.closingCash)}</td>
-    <td class="num">${money(year.operatingBufferTarget)}</td>
-    <td class="num">${year.bufferShortfall === undefined
-      ? unknownCell()
-      : year.bufferShortfall > 0
-        ? `<span class="warning">${money(year.bufferShortfall)}</span>`
-        : money(0)}</td>
-    <td class="num">${year.dataGaps === undefined ? unknownCell() : year.dataGaps.length}</td>
-  </tr>`).join("");
   host.innerHTML = `
     <div class="mode-switch" style="margin-bottom:1rem">${tabs}</div>
-    ${cashpathCoverageNote(cashPath)}
-    <div class="table-wrap"><table>
-      <thead><tr><th>Vuosi</th><th class="num">Avaava kassa</th><th class="num">Hoitokate</th><th class="num">Tunnetut kulut</th><th class="num">Päättävä kassa</th><th class="num">Puskuritavoite</th><th class="num">Puskurivaje</th><th class="num">DATA GAP</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>`;
+    ${vm.isEmpty
+      ? stateBlock({ kind: "empty", title: "Ei kassapolkua", body: vm.emptyMessage })
+      : `<div class="table-wrap"><table class="cashpath-table">
+      <thead><tr>
+        <th>Vuosi</th>
+        <th class="num">Avaava kassa</th><th class="num">Hoitokate</th><th class="num">Korjaukset</th><th class="num">Päättävä kassa</th>
+        <th class="num col-compare">Korjausbudjetti</th><th class="num">vs. budjetti</th>
+      </tr></thead>
+      <tbody>${vm.rows.map(cashpathRow).join("")}</tbody>
+    </table></div>
+    <ul class="cashpath-legend muted">
+      <li>Avaava + hoitokate − korjaukset = päättävä. Kaksi viimeistä saraketta ovat vertailua budjettiin.</li>
+      <li>Päättävä kassa on taseesta. Se poikkeaa laskennallisesta hieman, koska osa laskuista on maksamatta vuodenvaihteessa. Ilman tasetta kassa on "—".</li>
+      ${vm.hasBudgetRow ? "<li><em>Kursiivi</em> = budjettivuosi: hoitokate talousarviosta, korjaukset hyväksytyistä tapahtumista valitussa skenaariossa, päättävä kassa laskettu.</li>" : ""}
+      <li>${escapeHtml(vm.coverageLine)}</li>
+    </ul>`}
+    <section class="cashpath-banner">
+      <h3>Tiedossa olevat korjaukset <span class="muted">(${escapeHtml(scenario)})</span></h3>
+      ${vm.knownRepairs.isEmpty
+        ? `<p class="muted">Ei hyväksyttyjä korjaustapahtumia tässä skenaariossa.</p>`
+        : `<div class="table-wrap"><table>
+        <thead><tr><th>Vuosi</th><th>Korjaus</th><th class="num">Summa</th><th>Hinta</th></tr></thead>
+        <tbody>${vm.knownRepairs.rows.map((row) => `<tr${row.priceQuality === "data_gap" ? ' class="is-data-gap"' : ""}>
+          <td>${row.year}</td>
+          <td>${escapeHtml(row.title)}${row.quantity !== undefined ? ` <span class="muted">· ${row.quantity} kpl</span>` : ""}</td>
+          <td class="num">${row.amount === undefined ? unknownCell() : money(row.amount)}</td>
+          <td>${row.priceQuality === "data_gap" ? `<span class="warning">${escapeHtml(row.qualityLabel)}</span>` : escapeHtml(row.qualityLabel)}</td>
+        </tr>`).join("")}
+        <tr class="total-row"><td><strong>Yhteensä</strong></td><td>${vm.knownRepairs.dataGapCount > 0 ? `<span class="warning">${vm.knownRepairs.dataGapCount} DATA GAP ei sisälly summaan</span>` : ""}</td><td class="num"><strong>${money(vm.knownRepairs.total)}</strong></td><td></td></tr>
+        </tbody></table></div>`}
+      <details class="cashpath-completed">
+        <summary>Näytä toteutuneet (${vm.completedRepairs.rows.length})</summary>
+        ${vm.completedRepairs.isEmpty
+          ? `<p class="muted">Ei toteutuneita korjaustapahtumia.</p>`
+          : `<div class="table-wrap"><table>
+          <thead><tr><th>Vuosi</th><th>Korjaus</th><th class="num">Toteutunut hinta</th></tr></thead>
+          <tbody>${vm.completedRepairs.rows.map((row) => `<tr>
+            <td>${row.year}${row.occurredAt ? ` <span class="muted">· ${escapeHtml(row.occurredAt)}</span>` : ""}</td>
+            <td>${escapeHtml(row.title)}</td>
+            <td class="num">${row.amount === undefined ? `<span class="muted">hinta puuttuu</span>` : money(row.amount)}</td>
+          </tr>`).join("")}</tbody></table></div>`}
+      </details>
+    </section>`;
   for (const button of $$("#cashpath-body [data-cashpath]")) {
     button.addEventListener("click", () => { state.cashpathScenario = button.dataset.cashpath; renderCashpath(); });
   }
 }
 
 /**
- * The legend is the only thing separating "the plan covers every year" from
- * "nobody has said what the plan covers", because both render every row as a
- * computed number. It is deliberately the same state-block in both cases, not
- * a footnote in the unset one.
+ * One table row. The class is `row.rowClass`, attached by the view model
+ * from `rowKind` - this function never looks at which cells are filled to
+ * decide how a row looks. Repairs are shown negative because the header row
+ * reads as an equation, and the model carries them as magnitudes.
  */
-function cashpathCoverageNote(cashPath) {
-  const coverage = cashPath.maintenancePlanCoverageThroughYear;
-  if (coverage === undefined) {
-    return stateBlock({
-      kind: "warning",
-      title: "Kunnossapitosuunnitelman katetta ei ole asetettu",
-      body: "Kaikki horisontin vuodet näytetään laskettuina. Se ei ole väite " +
-        "siitä että suunnitelma kattaisi ne — asettamaton kate on tuntematon, " +
-        "ei koko horisontti. Aseta kate Taloyhtiön perustiedoissa.",
-    });
-  }
-  const beyond = cashPath.beyondCoverage;
-  const items = [];
-  if (beyond !== undefined) {
-    items.push(
-      `${beyond.firstYear}–${beyond.firstYear + beyond.yearCount - 1}: ` +
-        `${beyond.yearCount} vuotta ilman suunnitelmaa.`,
-    );
-    if (beyond.scheduledCostTotal > 0) {
-      items.push(
-        `Näille vuosille on jo aikataulutettu ${money(beyond.scheduledCostTotal)} ` +
-          "korjauksia. Niitä ei lasketa kassapolkuun, koska vuoden kokonaiskulu " +
-          "on silti tuntematon — luvut näkyvät Skenaariot-näkymässä.",
-      );
-    }
-  }
-  return stateBlock({
-    kind: beyond === undefined ? "unavailable" : "warning",
-    title: `Kunnossapitosuunnitelma kattaa vuoteen ${coverage} asti`,
-    body: beyond === undefined
-      ? "Suunnitelma kattaa koko horisontin, joten jokainen vuosi on laskettu."
-      : "Katteen jälkeisiä vuosia ei ole suunniteltu. Rivit näkyvät, mutta " +
-        "kuluja, päättävää kassaa ja puskurivajetta ei esitetä laskettuina.",
-    items,
-  });
+function cashpathRow(row) {
+  const repairs = row.repairs === undefined ? unknownCell() : money(-row.repairs);
+  const gapNote = row.rowKind === "budget" && row.repairDataGapCount > 0
+    ? ` <span class="warning">+ ${row.repairDataGapCount} DATA GAP</span>`
+    : "";
+  return `<tr class="${row.rowClass}">
+    <td>${escapeHtml(row.yearLabel)}</td>
+    <td class="num">${unknownOr(row.openingCash)}</td>
+    <td class="num">${money(row.operatingMargin)}</td>
+    <td class="num">${repairs}${gapNote}</td>
+    <td class="num">${unknownOr(row.closingCash)}</td>
+    <td class="num col-compare">${unknownOr(row.repairBudget)}</td>
+    <td class="num">${row.rowKind === "actual" && row.marginVsBudget !== undefined ? moneyChange(row.marginVsBudget) : unknownCell()}</td>
+  </tr>`;
 }
 
 function renderRequiredCollection() {

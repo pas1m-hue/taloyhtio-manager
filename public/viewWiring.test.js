@@ -287,6 +287,30 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
   });
 });
 
+describe("static cash path cross-check (feature/cashpath-rebuild)", () => {
+  it("renders the cash path from the ledger read model, not from the forecast", () => {
+    // The forecast (liquidity.forecast.scenarios[s].cashPath) is what
+    // Vastiketarve and the visitor cards read. The table is a ledger built
+    // server-side; app.js must not go back to drawing horizon rows from
+    // projectCashPath.
+    expect(js).toContain("buildCashPathViewModel(state.admin.cashPathTable, scenario)");
+    expect(js).not.toContain("liquidity.forecast.scenarios[scenario].cashPath;");
+    expect(js).not.toContain("beyond-coverage");
+  });
+
+  it("takes the row class from the view model's rowClass, never from the cells", () => {
+    expect(js).toContain('<tr class="${row.rowClass}">');
+    expect(js).not.toMatch(/costsKnown \? ""/);
+  });
+
+  it("keeps the completed repairs closed by default and shows the realised price only", () => {
+    expect(js).toContain('<details class="cashpath-completed">');
+    expect(js).not.toContain('<details class="cashpath-completed" open>');
+    expect(js).toContain("Toteutunut hinta");
+    expect(js).toContain('numberField("event-actual-amount", "Toteutunut hinta €"');
+  });
+});
+
 // A guard against a branch that can never run. The editor-open functions take
 // a `mode`, and callers only ever pass "new" or "edit" — but nothing stops a
 // new branch from testing a value nobody passes. `if (mode === "create")`

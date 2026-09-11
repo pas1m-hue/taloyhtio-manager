@@ -3465,8 +3465,15 @@ export function computeBalanceReconciliation(snapshot) {
   };
 }
 
-/** Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio. */
-function isCashEntry(entry) {
+/**
+ * Entries matched as "Rahat ja pankkisaamiset" for the kassa-kuukausina ratio.
+ *
+ * A DELIBERATE DUPLICATE of isBalanceCashEntry in src/finance/balanceCash.ts,
+ * which picks the cash path table's cash columns server-side. The two must
+ * agree, and adminOperationPayloads.test.js pins them against each other -
+ * that is why this is exported. Change both, or neither.
+ */
+export function isCashEntry(entry) {
   if (entry.key === "rahat") return true;
   return entry.name.toLowerCase().startsWith("rahat ja pankki");
 }
@@ -4377,6 +4384,87 @@ export function buildGroupBudgetVsActualViewModel(accounts, entries, groupBudget
       expense: kpisForKind("expense"),
     },
     emptyMessage: FINANCE_VIEW_EMPTY_MESSAGE,
+  };
+}
+
+/* -------- Cash path table (feature/cashpath-rebuild) -------- */
+
+/** How a cost evidence status reads on a banner row. */
+const PRICE_QUALITY_LABELS = {
+  actual: "toteutunut",
+  quote: "tarjous",
+  estimate: "arvio",
+  estimate_from_actual: "arvio toteumasta",
+  data_gap: "DATA GAP",
+};
+
+/** The row class each rowKind renders with; nothing else decides it. */
+const CASH_PATH_ROW_CLASSES = {
+  actual: "row-actual",
+  budget: "row-budget",
+};
+
+/**
+ * One scenario's cash path table, ready to render (handoff
+ * feature/cashpath-rebuild §1-§2). All arithmetic is done server-side in
+ * src/readModels/cashPathTable.ts; this picks the scenario, attaches the
+ * row class and the labels, and says when a section is empty.
+ *
+ * THE ROW CLASS COMES FROM rowKind AND FROM NOTHING ELSE. A budget row with
+ * every cell filled looks exactly like an actual row in its numbers, so the
+ * renderer must not be the one deciding which is which. The class is
+ * attached here from the discriminant, and the test pins that a budget row
+ * gets it and an actual row does not.
+ *
+ * @param {{ scenarios?: Record<string, { rows?: ReadonlyArray<any>, knownRepairs?: { rows?: ReadonlyArray<any>, total?: number, dataGapCount?: number } }>, completedRepairs?: ReadonlyArray<any>, latestActualYear?: number, maintenancePlanCoverageThroughYear?: number } | null | undefined} model
+ * @param {string} scenario
+ * @returns {{
+ *   isEmpty: boolean,
+ *   emptyMessage: string,
+ *   scenario: string,
+ *   rows: Array<any & { rowClass: string, yearLabel: string }>,
+ *   hasBudgetRow: boolean,
+ *   coverageLine: string,
+ *   knownRepairs: { isEmpty: boolean, rows: Array<any & { qualityLabel: string }>, total: number, dataGapCount: number },
+ *   completedRepairs: { isEmpty: boolean, rows: ReadonlyArray<any> },
+ * }}
+ */
+export function buildCashPathViewModel(model, scenario) {
+  const source = model && typeof model === "object" ? model : {};
+  const table = source.scenarios?.[scenario] ?? {};
+  const rows = (Array.isArray(table.rows) ? table.rows : []).map((row) => ({
+    ...row,
+    rowClass: CASH_PATH_ROW_CLASSES[row.rowKind] ?? "",
+    yearLabel: row.rowKind === "budget" ? `${row.year} (budjetti)` : String(row.year),
+  }));
+  const known = table.knownRepairs ?? {};
+  const knownRows = (Array.isArray(known.rows) ? known.rows : []).map((row) => ({
+    ...row,
+    qualityLabel: PRICE_QUALITY_LABELS[row.priceQuality] ?? String(row.priceQuality ?? ""),
+  }));
+  const completedRows = Array.isArray(source.completedRepairs) ? source.completedRepairs : [];
+  const coverage = source.maintenancePlanCoverageThroughYear;
+
+  return {
+    isEmpty: rows.length === 0,
+    emptyMessage: "Ei tilinpäätös- eikä budjettidataa. Taulukko täyttyy kun tilidata " +
+      "(Liitä tilidataa) ja tase (Liitä tasedata) on tuotu.",
+    scenario,
+    rows,
+    hasBudgetRow: rows.some((row) => row.rowKind === "budget"),
+    coverageLine: coverage === undefined
+      ? "Kunnossapitosuunnitelman katetta ei ole asetettu — taulukossa ovat kaikki vuodet joilta on tilinpäätös tai talousarvio."
+      : `Kunnossapitosuunnitelma kattaa vuoteen ${coverage} asti. Sen jälkeisiä vuosia ei ennusteta; tiedossa olevat korjaukset ovat alla luettelona.`,
+    knownRepairs: {
+      isEmpty: knownRows.length === 0,
+      rows: knownRows,
+      total: typeof known.total === "number" ? known.total : 0,
+      dataGapCount: typeof known.dataGapCount === "number" ? known.dataGapCount : 0,
+    },
+    completedRepairs: {
+      isEmpty: completedRows.length === 0,
+      rows: completedRows,
+    },
   };
 }
 
