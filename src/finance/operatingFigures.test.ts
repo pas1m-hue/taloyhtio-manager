@@ -346,8 +346,12 @@ describe("computeOperatingMarginSeries", () => {
 
   it("builds the budget side with the group budget winning over the account", () => {
     // 4600's own budget row says 9 000,00; the approved group budget says
-    // 9 680,00. 42 714,26 - (42 935,71 - 9 680,00) = 9 458,55 - the handoff's
-    // worked figure - is only reached if the group budget wins.
+    // 9 680,00. The hoitokate is the same either way - a group-level figure
+    // replaces the group's total, so costs-ex-repairs do not move - which is
+    // why the parts are asserted and not just the margin: `repairs` is
+    // 9 680,00 only if the group budget won. All figures here are the
+    // fixture's own parts, not production's: the real 2026 has no group
+    // budget and a cost budget of 43 470,09, giving 8 924,17.
     const series = computeOperatingMarginSeries(source, "budget");
     const budget2026 = series.find((row) => row.year === 2026);
 

@@ -208,7 +208,9 @@ export interface OperatingMarginYear {
  * a year is simply absent from the series and the caller shows no row.
  *
  * The budget side reads FinancialEntry.budgetAmount and GroupBudget rows
- * (group wins, spec §6.4). 2026: 42 714,26 - (42 935,71 - 9 680,00) = 9 458,55.
+ * (group wins, spec §6.4). A year without a group budget falls back to the
+ * account sum for every group - verified against production 2026, where
+ * only account budgets exist: 42 714,26 - (43 470,09 - 9 680,00) = 8 924,17.
  */
 export function computeOperatingMarginSeries(
   source: FinancialFiguresSource,
