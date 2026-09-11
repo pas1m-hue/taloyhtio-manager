@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdminDataBatchCommand,
+  AdminDataSnapshot,
   CreateVisitorSessionCommand,
   Horizon,
   PublishAdminDataCommand,
@@ -11,6 +12,7 @@ import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { publishAdminRevision } from "../application/publishingApplicationService.js";
 import { buildVisitorPublishedView } from "../publishing/visitorPublishedView.js";
+import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 import {
   applyVisitorSessionChanges,
   createVisitorSession,
@@ -494,6 +496,41 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
       .toBe(baseline.currentAnnualOperatingMargin);
     expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualRepairCollection");
+  });
+
+  it("keeps a publication's stored fingerprint valid across the rename", async () => {
+    // The version of the test above that matches production: the fingerprint
+    // was computed over the OLD key when the publication was made, and
+    // validatePublishedDataSnapshot recomputes it on every load. A hash taken
+    // over the renamed content fails that check for every publication that
+    // exists (INVALID_PUBLISHED_DATA on the public overview - found live).
+    // The legacy-key content is built from the raw JSON, so this fingerprint
+    // is what an old deployment would have written, not what the current
+    // code computes.
+    await publications.initializeAdminData(adminBaselineSnapshot);
+    await publishAdminRevision(publications, publishCommand(0, 0));
+    const legacyAdmin = JSON.parse(
+      JSON.stringify(adminBaselineSnapshot)
+        .replaceAll("currentAnnualOperatingMargin", "currentAnnualRepairCollection"),
+    ) as AdminDataSnapshot;
+    const legacyFingerprint = fingerprintAdminPublishableContent(legacyAdmin);
+    await pool.query(
+      `UPDATE tm_publications
+       SET payload = jsonb_set(
+             replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb,
+             '{contentFingerprint}', to_jsonb($2::text)),
+           content_fingerprint = $2
+       WHERE company_id = $1`,
+      [COMPANY_ID, legacyFingerprint],
+    );
+
+    const published = await publications.loadCurrent(COMPANY_ID);
+    expect(published?.contentFingerprint).toBe(legacyFingerprint);
+    expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
+      .toBe(adminBaselineSnapshot.liquidityBaselines[0]!.currentAnnualOperatingMargin);
+    // And the workspace does not report a phantom change to publish.
+    const loaded = await publications.load(COMPANY_ID);
+    expect(fingerprintAdminPublishableContent(loaded!)).toBe(legacyFingerprint);
   });
 
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {

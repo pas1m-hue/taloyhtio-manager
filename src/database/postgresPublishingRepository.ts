@@ -10,7 +10,7 @@ import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
 import { postgresErrorCode } from "./postgresErrors.js";
 import { instantMillis, integer } from "./postgresValues.js";
-import { withRenamedBaselineField } from "./legacyFieldNames.js";
+import { withRenamedBaselineField } from "../domain/legacyFieldNames.js";
 
 interface AdminRow extends Record<string, unknown> {
   company_id: string;

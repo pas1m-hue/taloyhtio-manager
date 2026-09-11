@@ -9,7 +9,7 @@ import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
 import { postgresErrorCode } from "./postgresErrors.js";
 import { instantIso, instantMillis, integer } from "./postgresValues.js";
-import { withRenamedOverrideField } from "./legacyFieldNames.js";
+import { withRenamedOverrideField } from "../domain/legacyFieldNames.js";
 
 interface SessionRow extends Record<string, unknown> {
   session_id: string;

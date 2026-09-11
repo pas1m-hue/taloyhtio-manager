@@ -1,7 +1,7 @@
 import type {
   LiquidityBaselineRecord,
   SessionLiquidityOverrides,
-} from "../domain/types.js";
+} from "./types.js";
 
 /**
  * Stored JSONB written under a field name the code no longer uses
@@ -16,6 +16,16 @@ import type {
  * A row that already carries the new key is left alone, so a re-saved
  * snapshot is not touched twice. A row with neither key is left alone too:
  * validation, not this function, is where a missing figure is reported.
+ *
+ * THE FINGERPRINT HASHES THE LEGACY NAME. Every publication ever written
+ * carries a contentFingerprint computed over the old key, and
+ * validatePublishedDataSnapshot recomputes the hash on every load. Hashing
+ * the renamed content would fail that check for every existing publication
+ * (INVALID_PUBLISHED_DATA - found in the live check, not the unit tests,
+ * whose fixture had been published after the rename). So the hash is taken
+ * over the content with the key mapped back (withLegacyBaselineKey): the
+ * name in the hash is a storage detail, and identical content keeps an
+ * identical fingerprint across the rename.
  */
 const LEGACY_BASELINE_KEY = "currentAnnualRepairCollection";
 const LEGACY_OVERRIDE_KEY = "annualRepairCollectionByScenario";
@@ -44,4 +54,14 @@ export function withRenamedOverrideField(
   }
   const { [LEGACY_OVERRIDE_KEY]: legacy, ...rest } = raw;
   return { ...rest, annualOperatingMarginByScenario: legacy };
+}
+
+/** The inverse, for hashing: the stored name, whichever the record carries. */
+export function withLegacyBaselineKey(
+  record: LiquidityBaselineRecord,
+): Record<string, unknown> {
+  const { currentAnnualOperatingMargin, ...rest } = record;
+  return currentAnnualOperatingMargin === undefined
+    ? { ...rest }
+    : { ...rest, [LEGACY_BASELINE_KEY]: currentAnnualOperatingMargin };
 }
