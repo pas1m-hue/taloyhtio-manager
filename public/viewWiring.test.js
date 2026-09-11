@@ -311,6 +311,38 @@ describe("static cash path cross-check (feature/cashpath-rebuild)", () => {
   });
 });
 
+describe("static Selvitykset cross-check (feature/selvitykset)", () => {
+  it("regenerates the statement's source id from the period fields through resolveGeneratedField", () => {
+    // The PR #24 trap with a different trigger: the period fields drive the
+    // generated source id, and a hand-typed one must survive a period change.
+    // The regenerate path must go through resolveGeneratedField with the
+    // touched flag, and both period fields must call it.
+    const wiring = js.slice(js.indexOf("function wireMaintenanceDocumentForms"), js.indexOf("function renderMaintenanceDocuments"));
+    expect(wiring).toContain("sourceField.value = resolveGeneratedField({");
+    expect(wiring).toContain("touched: sourceTouched,");
+    expect(wiring).toContain('sourceField.addEventListener("input", () => { sourceTouched = true; });');
+    expect(wiring).toContain('["md-maintenance-need-period-start", "md-maintenance-need-period-end"]');
+    expect(wiring).toContain("addEventListener(\"input\", regenerateSource)");
+  });
+
+  it("prefills the statement's header from the stored document, so a re-paste keeps the dates", () => {
+    expect(js).toContain('if (kind === "maintenance_need") prefillMaintenanceNeedHeader(vm.current);');
+    expect(js).toContain('fill("md-maintenance-need-board-handled-at", current?.boardHandledAt);');
+    expect(js).toContain('fill("md-maintenance-need-meeting-presented-at", current?.meetingPresentedAt);');
+  });
+
+  it("renders the documents from state.admin.maintenanceDocuments and nothing from the calculations", () => {
+    const section = js.slice(js.indexOf("function renderMaintenanceDocuments"), js.indexOf("function updateMaintenanceDocumentPreview"));
+    expect(section).toContain("state.admin?.maintenanceDocuments");
+    expect(section).not.toContain("calculations");
+  });
+
+  it("lists Selvitykset under Kunnossapito in the sidebar", () => {
+    const kunnossapito = html.slice(html.indexOf("Kunnossapito</p>"), html.indexOf("Skenaariot ja likviditeetti"));
+    expect(kunnossapito).toContain('data-view="maintenance-documents">Selvitykset');
+  });
+});
+
 // A guard against a branch that can never run. The editor-open functions take
 // a `mode`, and callers only ever pass "new" or "edit" — but nothing stops a
 // new branch from testing a value nobody passes. `if (mode === "create")`

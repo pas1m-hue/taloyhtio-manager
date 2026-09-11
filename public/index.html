@@ -76,6 +76,7 @@
             <li><a class="nav-link" href="#/observations" data-view="observations">Havainnot</a></li>
             <li><a class="nav-link" href="#/events" data-view="events">Korjaustapahtumat</a></li>
             <li><a class="nav-link" href="#/cost-evidence" data-view="cost-evidence">Kustannusnäyttö</a></li>
+            <li><a class="nav-link" href="#/maintenance-documents" data-view="maintenance-documents">Selvitykset</a></li>
           </ul>
         </li>
         <li class="nav-group">
@@ -474,6 +475,123 @@
           </section>
 
           <!-- Skenaariot ja likviditeetti (oikea read-only) -->
+          <section class="view" data-view="maintenance-documents" aria-labelledby="maintenance-documents-title" hidden>
+            <header class="view-head">
+              <div>
+                <h2 id="maintenance-documents-title">Kunnossapito · Selvitykset</h2>
+                <p class="view-lead muted">Hallituksen selvitykset yhtiökokoukselle ja viitteellinen käyttöikätaulukko. Nämä ovat dokumentteja: ne eivät osallistu laskentaan eivätkä vaikuta kassapolkuun tai vastiketarpeeseen. Liitos korvaa taulukon kokonaan.</p>
+              </div>
+            </header>
+            <article class="card md-card">
+              <h3>Tehdyt toimenpiteet</h3>
+              <p class="muted">Hallituksen kirjallinen selvitys yhtiössä suoritetuista huomattavista kunnossapito- ja muutostöistä. Järjestetään vuoden mukaan.</p>
+              <div id="md-completed-works-table"></div>
+              <details class="md-editor">
+                <summary>Muokkaa liittämällä</summary>
+                <form id="md-completed-works-form" class="form-card" novalidate>
+                  <label for="md-completed-works-text">Liitettävä data (tab-eroteltu, kaksi saraketta)
+                    <textarea id="md-completed-works-text" rows="8" spellcheck="false" placeholder="vuosi&#9;toimenpide"></textarea>
+                  </label>
+                  <fieldset class="form-grid">
+                    <legend class="form-hint">Muutoksen metatiedot</legend>
+                    <label for="md-completed-works-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                      <input id="md-completed-works-source-ids" required aria-describedby="md-completed-works-source-ids-error" autocomplete="off">
+                      <span class="field-error" id="md-completed-works-source-ids-error"></span>
+                    </label>
+                    <label for="md-completed-works-explanation">Muutoksen selitys (vapaaehtoinen)
+                      <input id="md-completed-works-explanation" aria-describedby="md-completed-works-explanation-error" autocomplete="off">
+                      <span class="field-error" id="md-completed-works-explanation-error"></span>
+                    </label>
+                  </fieldset>
+                  <div id="md-completed-works-preview"></div>
+                  <p id="md-completed-works-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+                  <div class="button-row">
+                    <button id="md-completed-works-submit" type="submit" disabled>Korvaa taulukko</button>
+                    <button id="md-completed-works-delete" type="button" class="secondary" hidden>Tyhjennä taulukko</button>
+                  </div>
+                </form>
+              </details>
+            </article>
+            <article class="card md-card">
+              <h3>Kunnossapitotarveselvitys</h3>
+              <p class="muted">Asunto-osakeyhtiölain 6 luvun 3 §:n tarkoittama selvitys seuraavan viiden vuoden kunnossapitotarpeesta. Tavoiteajankohta on vapaamuotoinen ja usein tyhjä — se on normaalia. Erillinen dokumentti: ei kytketä korjaustapahtumiin.</p>
+              <div id="md-maintenance-need-table"></div>
+              <details class="md-editor">
+                <summary>Muokkaa liittämällä</summary>
+                <form id="md-maintenance-need-form" class="form-card" novalidate>
+                  <fieldset class="form-grid">
+                    <legend class="form-hint">Selvityksen otsikkotiedot</legend>
+                    <label for="md-maintenance-need-period-start">Kausi, alkuvuosi
+                      <input id="md-maintenance-need-period-start" type="number" step="1" required aria-describedby="md-maintenance-need-period-start-error" autocomplete="off">
+                      <span class="field-error" id="md-maintenance-need-period-start-error"></span>
+                    </label>
+                    <label for="md-maintenance-need-period-end">Kausi, loppuvuosi
+                      <input id="md-maintenance-need-period-end" type="number" step="1" required aria-describedby="md-maintenance-need-period-end-error" autocomplete="off">
+                      <span class="field-error" id="md-maintenance-need-period-end-error"></span>
+                    </label>
+                    <label for="md-maintenance-need-board-handled-at">Hallituksen käsittelypäivä
+                      <input id="md-maintenance-need-board-handled-at" type="date" aria-describedby="md-maintenance-need-board-handled-at-error">
+                      <span class="field-error" id="md-maintenance-need-board-handled-at-error"></span>
+                    </label>
+                    <label for="md-maintenance-need-meeting-presented-at">Yhtiökokouksen esittelypäivä
+                      <input id="md-maintenance-need-meeting-presented-at" type="date" aria-describedby="md-maintenance-need-meeting-presented-at-error">
+                      <span class="field-error" id="md-maintenance-need-meeting-presented-at-error"></span>
+                    </label>
+                  </fieldset>
+                  <label for="md-maintenance-need-text">Liitettävä data (tab-eroteltu, kaksi saraketta)
+                    <textarea id="md-maintenance-need-text" rows="8" spellcheck="false" placeholder="toimenpide&#9;tavoiteajankohta"></textarea>
+                  </label>
+                  <fieldset class="form-grid">
+                    <legend class="form-hint">Muutoksen metatiedot</legend>
+                    <label for="md-maintenance-need-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                      <input id="md-maintenance-need-source-ids" required aria-describedby="md-maintenance-need-source-ids-error" autocomplete="off">
+                      <span class="field-error" id="md-maintenance-need-source-ids-error"></span>
+                    </label>
+                    <label for="md-maintenance-need-explanation">Muutoksen selitys (vapaaehtoinen)
+                      <input id="md-maintenance-need-explanation" aria-describedby="md-maintenance-need-explanation-error" autocomplete="off">
+                      <span class="field-error" id="md-maintenance-need-explanation-error"></span>
+                    </label>
+                  </fieldset>
+                  <div id="md-maintenance-need-preview"></div>
+                  <p id="md-maintenance-need-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+                  <div class="button-row">
+                    <button id="md-maintenance-need-submit" type="submit" disabled>Korvaa taulukko</button>
+                    <button id="md-maintenance-need-delete" type="button" class="secondary" hidden>Tyhjennä taulukko</button>
+                  </div>
+                </form>
+              </details>
+            </article>
+            <article class="card md-card">
+              <h3>Tekninen käyttöikä</h3>
+              <p class="muted">Viitteelliset kunnossapitojaksot rakennusosille. Yleistä tietoa, ei yhtiökohtaista. Säilyy liitetyssä järjestyksessä.</p>
+              <div id="md-technical-lifespan-table"></div>
+              <details class="md-editor">
+                <summary>Muokkaa liittämällä</summary>
+                <form id="md-technical-lifespan-form" class="form-card" novalidate>
+                  <label for="md-technical-lifespan-text">Liitettävä data (tab-eroteltu, kaksi saraketta)
+                    <textarea id="md-technical-lifespan-text" rows="8" spellcheck="false" placeholder="kohde&#9;kunnossapitojakso"></textarea>
+                  </label>
+                  <fieldset class="form-grid">
+                    <legend class="form-hint">Muutoksen metatiedot</legend>
+                    <label for="md-technical-lifespan-source-ids">Lähdetunnisteet (pilkuin eroteltu)
+                      <input id="md-technical-lifespan-source-ids" required aria-describedby="md-technical-lifespan-source-ids-error" autocomplete="off">
+                      <span class="field-error" id="md-technical-lifespan-source-ids-error"></span>
+                    </label>
+                    <label for="md-technical-lifespan-explanation">Muutoksen selitys (vapaaehtoinen)
+                      <input id="md-technical-lifespan-explanation" aria-describedby="md-technical-lifespan-explanation-error" autocomplete="off">
+                      <span class="field-error" id="md-technical-lifespan-explanation-error"></span>
+                    </label>
+                  </fieldset>
+                  <div id="md-technical-lifespan-preview"></div>
+                  <p id="md-technical-lifespan-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+                  <div class="button-row">
+                    <button id="md-technical-lifespan-submit" type="submit" disabled>Korvaa taulukko</button>
+                    <button id="md-technical-lifespan-delete" type="button" class="secondary" hidden>Tyhjennä taulukko</button>
+                  </div>
+                </form>
+              </details>
+            </article>
+          </section>
           <section class="view" data-view="scenarios" aria-labelledby="scenarios-title" hidden>
             <header class="view-head">
               <div>

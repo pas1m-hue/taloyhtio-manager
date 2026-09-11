@@ -16,6 +16,12 @@ import {
   buildGroupBudgetImportOperations,
   buildForecastCompletenessLines,
   buildCashPathViewModel,
+  parseMaintenanceDocumentPasteInput,
+  validateMaintenanceNeedHeaderInput,
+  buildMaintenanceDocumentSourceId,
+  buildMaintenanceDocumentOperation,
+  buildMaintenanceDocumentViewModel,
+  describeMaintenanceDocumentReplace,
   buildGroupActualImportOperations,
   buildGroupActualSeries,
   buildGroupBudgetVsActualViewModel,
@@ -66,6 +72,7 @@ import {
 
 const KNOWN_VIEWS = new Set([
   "overview", "company", "assets", "observations", "events", "cost-evidence",
+  "maintenance-documents",
   "finance-summary", "finance-import", "finance-income", "finance-costs-group",
   "finance-costs-account", "group-budget-import", "group-actual-import", "finance-budget",
   "balance-import", "finance-position",
@@ -255,6 +262,7 @@ function wireStaticControls() {
   $("#group-actual-import-form").addEventListener("submit", submitGroupActualImport);
   $("#group-actual-import-text").addEventListener("input", updateGroupActualImportPreview);
   $("#balance-import-form").addEventListener("submit", submitBalanceImport);
+  wireMaintenanceDocumentForms();
   $("#balance-import-text").addEventListener("input", updateBalanceImportPreview);
   $("#balance-import-id").addEventListener("input", updateBalanceImportPreview);
   $("#balance-import-as-of-date").addEventListener("input", updateBalanceImportPreview);
@@ -614,6 +622,7 @@ function renderWorkspace() {
   renderObservations();
   renderEvents();
   renderCostEvidence();
+  renderMaintenanceDocuments();
   renderFinancePlaceholders();
   renderIncome();
   renderExpenseGroups();
@@ -3390,6 +3399,210 @@ function renderBalancePosition() {
     ${reconciliationBlock}
     ${groupBlocks}
   `;
+}
+
+/* -------- Selvitykset: the three board documents (feature/selvitykset) -------- */
+
+/**
+ * kind -> element id stem, plus the submit toggle spelled out per form so
+ * the static wiring check can see that each disabled button has a path to
+ * becoming enabled.
+ */
+const MAINTENANCE_DOCUMENT_FORMS = {
+  completed_works: {
+    stem: "md-completed-works",
+    setSubmitDisabled: (value) => { $("#md-completed-works-submit").disabled = value; },
+  },
+  maintenance_need: {
+    stem: "md-maintenance-need",
+    setSubmitDisabled: (value) => { $("#md-maintenance-need-submit").disabled = value; },
+  },
+  technical_lifespan: {
+    stem: "md-technical-lifespan",
+    setSubmitDisabled: (value) => { $("#md-technical-lifespan-submit").disabled = value; },
+  },
+};
+
+/** The header fields of the statement, as the header validator reads them. */
+function maintenanceNeedHeaderRaw() {
+  return {
+    periodStartYear: fieldValue("md-maintenance-need-period-start"),
+    periodEndYear: fieldValue("md-maintenance-need-period-end"),
+    boardHandledAt: fieldValue("md-maintenance-need-board-handled-at"),
+    meetingPresentedAt: fieldValue("md-maintenance-need-meeting-presented-at"),
+  };
+}
+
+/**
+ * Wires the three paste forms once. The forms are static markup, so text a
+ * user is still pasting survives a re-render of the tables above them.
+ *
+ * The source-id field is generated from the document's identity through
+ * resolveGeneratedField, exactly as the create forms generate an identifier:
+ * once the user has typed into it, nothing regenerates it - not a later
+ * change to the period, which is what regenerates it otherwise.
+ */
+function wireMaintenanceDocumentForms() {
+  for (const [kind, { stem }] of Object.entries(MAINTENANCE_DOCUMENT_FORMS)) {
+    const sourceField = $(`#${stem}-source-ids`);
+    let sourceTouched = false;
+    const regenerateSource = () => {
+      sourceField.value = resolveGeneratedField({
+        touched: sourceTouched,
+        current: sourceField.value,
+        generated: buildMaintenanceDocumentSourceId(
+          kind,
+          kind === "maintenance_need" ? maintenanceNeedHeaderRaw() : undefined,
+        ),
+      });
+    };
+    sourceField.addEventListener("input", () => { sourceTouched = true; });
+    $(`#${stem}-text`).addEventListener("input", () => updateMaintenanceDocumentPreview(kind));
+    $(`#${stem}-form`).addEventListener("submit", (event) => submitMaintenanceDocument(event, kind));
+    $(`#${stem}-delete`).addEventListener("click", () => {
+      openDeleteConfirmation("maintenance_document", kind);
+    });
+    if (kind === "maintenance_need") {
+      for (const id of ["md-maintenance-need-period-start", "md-maintenance-need-period-end"]) {
+        $(`#${id}`).addEventListener("input", regenerateSource);
+        $(`#${id}`).addEventListener("change", regenerateSource);
+      }
+    }
+    regenerateSource();
+  }
+}
+
+function renderMaintenanceDocuments() {
+  const documents = state.admin?.maintenanceDocuments;
+  for (const [kind, { stem }] of Object.entries(MAINTENANCE_DOCUMENT_FORMS)) {
+    const vm = buildMaintenanceDocumentViewModel(documents, kind);
+    $(`#${stem}-table`).innerHTML = maintenanceDocumentTable(vm);
+    $(`#${stem}-delete`).hidden = vm.current === null;
+    $(`#${stem}-submit`).textContent = vm.current === null ? "Tallenna taulukko" : "Korvaa taulukko";
+    if (kind === "maintenance_need") prefillMaintenanceNeedHeader(vm.current);
+    updateMaintenanceDocumentPreview(kind);
+  }
+}
+
+/**
+ * "Replace the whole table" must not mean "forget the dates": the header
+ * fields are filled from the stored statement, so a re-paste of the rows
+ * alone keeps the period and the handling dates. Fields the user has
+ * already edited are left alone.
+ */
+function prefillMaintenanceNeedHeader(current) {
+  const fill = (id, value) => {
+    const field = $(`#${id}`);
+    if (field.dataset.userEdited === "true") return;
+    field.value = value ?? "";
+  };
+  fill("md-maintenance-need-period-start", current?.period?.startYear);
+  fill("md-maintenance-need-period-end", current?.period?.endYear);
+  fill("md-maintenance-need-board-handled-at", current?.boardHandledAt);
+  fill("md-maintenance-need-meeting-presented-at", current?.meetingPresentedAt);
+  for (const id of [
+    "md-maintenance-need-period-start", "md-maintenance-need-period-end",
+    "md-maintenance-need-board-handled-at", "md-maintenance-need-meeting-presented-at",
+  ]) {
+    const field = $(`#${id}`);
+    if (!field.dataset.wired) {
+      field.dataset.wired = "true";
+      field.addEventListener("input", () => { field.dataset.userEdited = "true"; });
+    }
+  }
+  // The source id follows the period the fields now show.
+  $("#md-maintenance-need-period-start").dispatchEvent(new Event("change"));
+}
+
+function maintenanceDocumentTable(vm) {
+  const header = vm.header === null ? "" : `<dl class="md-header">
+    <dt>Kausi</dt><dd>${escapeHtml(vm.header.periodLabel || "—")}</dd>
+    <dt>Hallitus käsitellyt</dt><dd>${escapeHtml(vm.header.boardHandledAt || "—")}</dd>
+    <dt>Esitelty yhtiökokoukselle</dt><dd>${escapeHtml(vm.header.meetingPresentedAt || "—")}</dd>
+  </dl>`;
+  const standing = vm.standingText === "" ? "" : `<p class="md-standing">${escapeHtml(vm.standingText)}</p>`;
+  const table = vm.isEmpty
+    ? stateBlock({ kind: "empty", title: "Ei sisältöä", body: "Liitä taulukko alla olevasta lomakkeesta." })
+    : `<div class="table-wrap"><table>
+      <thead><tr><th>${escapeHtml(capitalize(vm.headers[0]))}</th><th>${escapeHtml(capitalize(vm.headers[1]))}</th></tr></thead>
+      <tbody>${vm.rows.map((row) => `<tr><td>${escapeHtml(row.first)}</td><td>${row.second === "" ? "" : escapeHtml(row.second)}</td></tr>`).join("")}</tbody>
+    </table></div>`;
+  const notes = vm.notes.length === 0 ? "" : `<ul class="md-notes">${vm.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>`;
+  return `${header}${standing}${table}${notes}`;
+}
+
+function capitalize(text) {
+  return text === "" ? "" : text[0].toUpperCase() + text.slice(1);
+}
+
+function updateMaintenanceDocumentPreview(kind) {
+  const { stem, setSubmitDisabled } = MAINTENANCE_DOCUMENT_FORMS[kind];
+  const text = $(`#${stem}-text`).value;
+  const host = $(`#${stem}-preview`);
+  if (text.trim() === "") {
+    host.innerHTML = "";
+    setSubmitDisabled(true);
+    return;
+  }
+  const parsed = parseMaintenanceDocumentPasteInput(kind, text);
+  const replace = describeMaintenanceDocumentReplace(parsed, state.admin?.maintenanceDocuments, kind);
+  host.innerHTML = parsed.errors.length > 0
+    ? stateBlock({
+      kind: "error",
+      title: replace.summary,
+      body: `${parsed.errors.length} virhettä. Tallennus on estetty, kunnes virheet on korjattu.`,
+      items: parsed.errors.map((error) => error.message),
+    })
+    : `<article class="card"><p>${escapeHtml(replace.summary)} Ei virheitä.</p></article>`;
+  setSubmitDisabled(!replace.canSubmit);
+}
+
+async function submitMaintenanceDocument(event, kind) {
+  event.preventDefault();
+  const { stem } = MAINTENANCE_DOCUMENT_FORMS[kind];
+  const formSelector = `#${stem}-form`;
+  clearFieldErrors(formSelector);
+  const parsed = parseMaintenanceDocumentPasteInput(kind, $(`#${stem}-text`).value);
+  const replace = describeMaintenanceDocumentReplace(parsed, state.admin?.maintenanceDocuments, kind);
+  if (!replace.canSubmit) {
+    setFeedback(`#${stem}-feedback`, "Korjaa virheet ennen tallennusta.", "error");
+    return;
+  }
+  let header;
+  if (kind === "maintenance_need") {
+    const validated = validateMaintenanceNeedHeaderInput(maintenanceNeedHeaderRaw());
+    if (!validated.ok) {
+      applyFieldErrors(formSelector, {
+        periodStartYear: "md-maintenance-need-period-start",
+        periodEndYear: "md-maintenance-need-period-end",
+        boardHandledAt: "md-maintenance-need-board-handled-at",
+        meetingPresentedAt: "md-maintenance-need-meeting-presented-at",
+      }, validated.errors);
+      setFeedback(`#${stem}-feedback`, "Korjaa merkityt kentät.", "error");
+      return;
+    }
+    header = validated.value;
+  }
+  const meta = validateOperationMeta({
+    sourceIds: fieldValue(`${stem}-source-ids`),
+    explanation: fieldValue(`${stem}-explanation`),
+  });
+  if (!meta.ok) {
+    applyFieldErrors(formSelector, { sourceIds: `${stem}-source-ids`, explanation: `${stem}-explanation` }, meta.errors);
+    setFeedback(`#${stem}-feedback`, "Korjaa merkityt kentät.", "error");
+    return;
+  }
+  const operation = buildMaintenanceDocumentOperation(parsed, header, meta.value);
+  const sent = await sendAdminOperations([operation], {
+    successMessage: `${replace.parsedCount} riviä tallennettu.`,
+  });
+  if (sent.ok) {
+    setFeedback(`#${stem}-feedback`, "Tallennettu.", "ok");
+    $(`#${stem}-text`).value = "";
+    updateMaintenanceDocumentPreview(kind);
+  } else if (sent.conflict) {
+    setFeedback(`#${stem}-feedback`, "Tiedot muuttuivat — lataa työtila uudelleen.", "error");
+  }
 }
 
 /* -------- Scenarios / cashpath / required collection (decision 3.3) -------- */
