@@ -130,6 +130,15 @@ const SCENARIO_LABELS = {
   stress: "Stressi",
 };
 
+/**
+ * Display name of a stored scenario key. The stored form stays
+ * optimistic/base/stress; only the presentation is Finnish.
+ * @param {string} scenario
+ */
+function scenarioLabel(scenario) {
+  return SCENARIO_LABELS[scenario] ?? scenario;
+}
+
 const state = {
   mode: "admin",
   view: "overview",
@@ -725,7 +734,7 @@ function renderOverviewNotes() {
     const needs = SCENARIOS.map((scenario) => {
       const signal = liquidity.forecast.scenarios[scenario]?.fundingNeed;
       const year = signal?.firstFundingNeedYear;
-      return `<li><strong>${scenario}:</strong> ${year ? `ensimmäinen puskurivaje ${year}` : "ei puskurivajetta tunnetuilla kustannuksilla"}</li>`;
+      return `<li><strong>${scenarioLabel(scenario)}:</strong> ${year ? `ensimmäinen puskurivaje ${year}` : "ei puskurivajetta tunnetuilla kustannuksilla"}</li>`;
     }).join("");
     notes.push(infoCard("Puskurivaje skenaarioittain", `<ul>${needs}</ul>`));
   } else {
@@ -778,7 +787,7 @@ function renderCompanyForm() {
       ${numberField("company-buffer-override", "Puskurin override (€)", buffer.userOverride ?? "", { min: 0, step: "0.01" })}
       ${numberField("company-plan-coverage", "Kunnossapitosuunnitelma kattaa vuoteen", company.maintenancePlanCoverageThroughYear ?? "", { step: 1 })}
     </div>
-    <p class="form-hint">Kunnossapitosuunnitelman kate rajaa kassapolun: sen jälkeisiä vuosia ei esitetä laskettuina. Tyhjä kenttä tarkoittaa ettei katetta ole asetettu — ei sitä että suunnitelma kattaisi koko horisontin.</p>
+    <p class="form-hint">Kunnossapitosuunnitelman kate rajaa kassan kehityksen: sen jälkeisiä vuosia ei esitetä laskettuina. Tyhjä kenttä tarkoittaa ettei katetta ole asetettu — ei sitä että suunnitelma kattaisi koko horisontin.</p>
     <fieldset class="form-grid">
       <legend class="form-hint">Muutoksen metatiedot</legend>
       ${textField("company-source-ids", "Lähdetunnisteet (pilkuin eroteltu)", "", { required: true })}
@@ -1910,7 +1919,7 @@ function renderEventDetail() {
       ] : [], "Ei toteumatietoja.")
     : SCENARIOS.map((scenario) => {
         const rows = groupScheduleByScenario(event.schedule ?? [])[scenario] ?? [];
-        return detailGroup(SCENARIO_LABELS[scenario], rows.map((entry) => {
+        return detailGroup(scenarioLabel(scenario), rows.map((entry) => {
           const evidence = evidenceById.get(entry.costEvidenceId);
           return `<li>${entry.year}${entry.amount !== undefined ? ` · ${money(entry.amount)}` : ""}${entry.quantity !== undefined ? ` · ${entry.quantity} kpl` : ""} · ${escapeHtml(costEvidenceLabel(evidence, entry.costEvidenceId))}</li>`;
         }), "Ei rivejä.");
@@ -2007,7 +2016,7 @@ function openEventEditor(mode, eventId, prefill) {
         ${selectField("event-asset", "Rakennusosa", assetOptions, assetId)}
         ${textField("event-title", "Otsikko", event?.title ?? "", { required: true })}
         ${selectField("event-type", "Tyyppi", typeOptions, event?.type ?? "", { hint: "Työn luonne: tarkastus, huolto, korjaus vai uusiminen." })}
-        ${selectField("event-status", "Tila", statusOptions, event?.status ?? "suggested", { hint: "Vain Hyväksytty osallistuu kassapolkuun ja vastiketarpeeseen. Ehdotettu = ei päätöstä, Toteutunut = tehty, Peruttu = ei toteuteta." })}
+        ${selectField("event-status", "Tila", statusOptions, event?.status ?? "suggested", { hint: "Vain Hyväksytty osallistuu kassan kehitykseen ja vastiketarpeeseen. Ehdotettu = ei päätöstä, Toteutunut = tehty, Peruttu = ei toteuteta." })}
         ${textareaField("event-notes", "Huomio", event?.notes ?? "", { hint: "Vapaa muistiinpano; ei vaikuta laskentaan." })}
         ${textField("event-observation-ids", "Linkitetyt havainnot (tunnisteet)", observationIds, { hint: "Havainnot jotka perustelevat korjauksen — näkyvät detaljissa, eivät vaikuta laskentaan." })}
         ${textField("event-source-ids", "Tapahtuman lähdetunnisteet", entitySources, { required: true, hint: "Päätös tai asiakirja josta tapahtuma on, esim. hallitus-2026-01." })}
@@ -2022,7 +2031,7 @@ function openEventEditor(mode, eventId, prefill) {
         <div class="schedule-scenario-columns">
           ${SCENARIOS.map((scenario) => `
             <div class="subsection schedule-scenario-column" data-scenario-column="${scenario}">
-              <h5>${escapeHtml(SCENARIO_LABELS[scenario])}</h5>
+              <h5>${escapeHtml(scenarioLabel(scenario))}</h5>
               <div id="event-schedule-rows-${scenario}" class="schedule-rows"></div>
               <button type="button" class="secondary schedule-add-row" data-scenario="${scenario}">+ Lisää rivi</button>
             </div>
@@ -2035,7 +2044,7 @@ function openEventEditor(mode, eventId, prefill) {
         <div class="form-grid">
           ${numberField("event-actual-year", "Toteumavuosi", event?.actual?.year ?? "", { required: true, step: 1 })}
           ${dateField("event-actual-occurred-at", "Toteutumispäivä", event?.actual?.occurredAt ?? "", { hint: "Milloin työ valmistui; vapaaehtoinen." })}
-          ${numberField("event-actual-amount", "Toteutunut hinta €", event?.actual?.amount ?? "", { min: 0, step: "0.01", hint: "Laskun loppusumma. Näkyy Kassapolun toteutuneissa; arviota ei näytetä sen rinnalla." })}
+          ${numberField("event-actual-amount", "Toteutunut hinta €", event?.actual?.amount ?? "", { min: 0, step: "0.01", hint: "Laskun loppusumma. Näkyy Kassan kehityksen toteutuneissa; arviota ei näytetä sen rinnalla." })}
           ${numberField("event-actual-quantity", "Määrä", event?.actual?.quantity ?? "", { min: 1, step: 1 })}
           ${selectField("event-actual-cost-evidence", "Kustannusnäyttö", costEvidenceOptions(model), event?.actual?.costEvidenceId ?? "")}
         </div>
@@ -3615,7 +3624,7 @@ function renderScenarios() {
   host.innerHTML = `<div class="scenario-grid">${SCENARIOS.map((scenario) => {
     const p = projection.scenarios[scenario];
     return `<article class="card scenario-card">
-      <h4>${scenario}</h4>
+      <h4>${escapeHtml(scenarioLabel(scenario))}</h4>
       <div class="metric">${money(p.horizonAmount)}</div>
       <div class="metric-label">tunnetut kustannukset horisontissa</div>
       <ul>
@@ -3632,11 +3641,11 @@ function renderCashpath() {
   const scenario = state.cashpathScenario;
   const vm = buildCashPathViewModel(state.admin.cashPathTable, scenario);
   const tabs = SCENARIOS.map((s) =>
-    `<button type="button" class="mode-tab${s === scenario ? " active" : ""}" data-cashpath="${s}">${s}</button>`).join("");
+    `<button type="button" class="mode-tab${s === scenario ? " active" : ""}" data-cashpath="${s}">${escapeHtml(scenarioLabel(s))}</button>`).join("");
   host.innerHTML = `
     <div class="mode-switch" style="margin-bottom:1rem">${tabs}</div>
     ${vm.isEmpty
-      ? stateBlock({ kind: "empty", title: "Ei kassapolkua", body: vm.emptyMessage })
+      ? stateBlock({ kind: "empty", title: "Ei kassan kehitystä", body: vm.emptyMessage })
       : `<div class="table-wrap"><table class="cashpath-table">
       <thead><tr>
         <th>Vuosi</th>
@@ -3652,7 +3661,7 @@ function renderCashpath() {
       <li>${escapeHtml(vm.coverageLine)}</li>
     </ul>`}
     <section class="cashpath-banner">
-      <h3>Tiedossa olevat korjaukset <span class="muted">(${escapeHtml(scenario)})</span></h3>
+      <h3>Tiedossa olevat korjaukset <span class="muted">(${escapeHtml(scenarioLabel(scenario))})</span></h3>
       ${vm.knownRepairs.isEmpty
         ? `<p class="muted">Ei hyväksyttyjä korjaustapahtumia tässä skenaariossa.</p>`
         : `<div class="table-wrap"><table>
@@ -3729,7 +3738,7 @@ function renderRequiredCollection() {
     const perApartment = rc.additionalMonthlyPerApartment;
     const perM2 = rc.additionalMonthlyPerM2;
     return `<article class="card scenario-card">
-      <h4>${scenario}</h4>
+      <h4>${escapeHtml(scenarioLabel(scenario))}</h4>
       <div class="metric">${money(rc.knownCostRequiredAnnualCollection)}</div>
       <div class="metric-label">vaadittu hoitokate tunnetuille kustannuksille</div>
       <ul>
@@ -3750,7 +3759,7 @@ function liquidityUnavailableBlock(liquidity) {
   return stateBlock({
     kind: "unavailable",
     title: "Likviditeettilaskentaa ei voi tehdä",
-    body: "Kassapolku ja vastiketarve vaativat likviditeetin lähtötiedot. Puuttuvat kentät:",
+    body: "Kassan kehitys ja vastiketarve vaativat likviditeetin lähtötiedot. Puuttuvat kentät:",
     items: missing.map((field) => LIQUIDITY_FIELD_LABELS[field] ?? field),
   });
 }
@@ -3957,7 +3966,7 @@ function renderVisitor() {
     event.schedule.map((entry) => `
       <tr data-event-id="${escapeHtml(event.id)}" data-entry-id="${escapeHtml(entry.id)}">
         <td><strong>${escapeHtml(event.title)}</strong><br><span class="muted">${escapeHtml(event.assetId)}</span></td>
-        <td>${escapeHtml(entry.scenario)}</td>
+        <td>${escapeHtml(scenarioLabel(entry.scenario))}</td>
         <td><input data-field="year" type="number" value="${entry.year}"></td>
         <td><input data-field="amount" type="number" step="0.01" value="${entry.amount ?? ""}" placeholder="DATA GAP"></td>
         <td><input data-field="quantity" type="number" step="0.01" value="${entry.quantity ?? ""}"></td>
@@ -3975,7 +3984,7 @@ function renderVisitorScenarios(projection, liquidity) {
     const p = projection.scenarios[scenario];
     const liq = liquidity.status === "available" ? liquidity.forecast.scenarios[scenario] : null;
     return `<article class="card scenario-card">
-      <h4>${scenario}</h4>
+      <h4>${escapeHtml(scenarioLabel(scenario))}</h4>
       <div class="metric">${money(p.horizonAmount)}</div>
       <div class="metric-label">tunnetut kustannukset horisontissa</div>
       <ul>

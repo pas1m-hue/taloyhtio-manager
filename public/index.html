@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Taloyhtiö Manager - korjaustapahtumien, skenaarioiden ja kassapolun hallinta">
+  <meta name="description" content="Taloyhtiö Manager - korjaustapahtumien, skenaarioiden ja kassan kehityksen hallinta">
   <title>Taloyhtiö Manager</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -67,6 +67,7 @@
             <li><a class="nav-link" href="#/finance-budget" data-view="finance-budget">Budjetti vs. toteuma</a></li>
             <li><a class="nav-link" href="#/balance-import" data-view="balance-import">Liitä tasedata</a></li>
             <li><a class="nav-link" href="#/finance-position" data-view="finance-position">Taloudellinen asema</a></li>
+            <li><a class="nav-link" href="#/cashpath" data-view="cashpath">Kassan kehitys</a></li>
           </ul>
         </li>
         <li class="nav-group">
@@ -83,7 +84,6 @@
           <p class="nav-group-title">Skenaariot ja likviditeetti</p>
           <ul>
             <li><a class="nav-link" href="#/scenarios" data-view="scenarios">Skenaariot</a></li>
-            <li><a class="nav-link" href="#/cashpath" data-view="cashpath">Kassapolku</a></li>
             <li><a class="nav-link" href="#/required-collection" data-view="required-collection">Vastiketarve</a></li>
           </ul>
         </li>
@@ -479,7 +479,7 @@
             <header class="view-head">
               <div>
                 <h2 id="maintenance-documents-title">Kunnossapito · Selvitykset</h2>
-                <p class="view-lead muted">Hallituksen selvitykset yhtiökokoukselle ja viitteellinen käyttöikätaulukko. Nämä ovat dokumentteja: ne eivät osallistu laskentaan eivätkä vaikuta kassapolkuun tai vastiketarpeeseen. Liitos korvaa taulukon kokonaan.</p>
+                <p class="view-lead muted">Hallituksen selvitykset yhtiökokoukselle ja viitteellinen käyttöikätaulukko. Nämä ovat dokumentteja: ne eivät osallistu laskentaan eivätkä vaikuta kassan kehitykseen tai vastiketarpeeseen. Liitos korvaa taulukon kokonaan.</p>
               </div>
             </header>
             <article class="card md-card">
@@ -604,7 +604,7 @@
           <section class="view" data-view="cashpath" aria-labelledby="cashpath-title" hidden>
             <header class="view-head">
               <div>
-                <h2 id="cashpath-title">Kassapolku</h2>
+                <h2 id="cashpath-title">Kassan kehitys</h2>
                 <p class="view-lead muted">Toteutuneet vuodet tilinpäätöksistä, kuluva vuosi talousarviosta. Skenaario vaikuttaa vain budjettivuoden korjauksiin ja alla olevaan luetteloon.</p>
               </div>
             </header>
@@ -715,9 +715,9 @@
                 <label>Kassa €<input name="currentCash" type="number" step="0.01"></label>
                 <label>12 kk hoitokulut €<input name="trailing12mOperatingCosts" type="number" step="0.01"></label>
                 <label>Puskurikuukaudet<input name="bufferMonths" type="number" step="0.1" min="0.1"></label>
-                <label>Optimistic hoitokate €/v<input name="optimistic" type="number" step="0.01"></label>
-                <label>Base hoitokate €/v<input name="base" type="number" step="0.01"></label>
-                <label>Stress hoitokate €/v<input name="stress" type="number" step="0.01"></label>
+                <label>Optimistinen hoitokate €/v<input name="optimistic" type="number" step="0.01"></label>
+                <label>Perusura hoitokate €/v<input name="base" type="number" step="0.01"></label>
+                <label>Stressi hoitokate €/v<input name="stress" type="number" step="0.01"></label>
               </div>
               <p class="muted" id="visitor-liquidity-note"></p>
               <button type="submit">Päivitä oletukset</button>
@@ -729,7 +729,7 @@
                 <label>Rakennusosa<select name="assetId" id="custom-asset"></select></label>
                 <label>Nimi<input name="title" required></label>
                 <label>Tyyppi<select name="type"><option>maintenance</option><option>repair</option><option>replacement</option><option>renewal</option><option>inspection</option><option>study</option><option>other</option></select></label>
-                <label>Skenaario<select name="scenario"><option>optimistic</option><option selected>base</option><option>stress</option></select></label>
+                <label>Skenaario<select name="scenario"><option value="optimistic">Optimistinen</option><option value="base" selected>Perusura</option><option value="stress">Stressi</option></select></label>
                 <label>Vuosi<input name="year" type="number" required></label>
                 <label>Summa €<input name="amount" type="number" step="0.01"></label>
               </div>

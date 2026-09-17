@@ -2713,7 +2713,7 @@ describe("buildOperatingMarginNote", () => {
 
   it("says repairs are already out of it", () => {
     expect(buildOperatingMarginNote(AVAILABLE, undefined, euro))
-      .toContain("kassapolku laskuttaa ne erikseen");
+      .toContain("kassan kehitys laskuttaa ne erikseen");
   });
 
   it("names the superseded hand-entered figure when one is stored", () => {
