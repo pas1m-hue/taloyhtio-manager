@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdminDataBatchCommand,
-  AdminDataSnapshot,
   CreateVisitorSessionCommand,
   Horizon,
   PublishAdminDataCommand,
@@ -466,71 +465,102 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.maintenanceDocuments).toEqual([]);
   });
 
-  it("reads a liquidity baseline stored under the old field name (refactor/hoitokate-naming)", async () => {
+  // Three generations of liquidity baseline rows exist in storage
+  // (legacyFieldNames.ts). Each is built from the raw JSON text with the
+  // fingerprint that generation's code would have written - a fixture made
+  // by the current builders cannot represent a row the old code wrote.
+  const LEGACY_BASELINE_ROWS = [
+    {
+      name: "pre refactor/hoitokate-naming (currentAnnualRepairCollection)",
+      // Written and hashed with the legacy key.
+      inject: (baseline: Record<string, unknown>) => ({
+        ...baseline,
+        trailing12mOperatingCosts: 34_029.46,
+        currentAnnualRepairCollection: 9_680,
+      }),
+      hashed: (baseline: Record<string, unknown>) => baseline,
+    },
+    {
+      name: "refactor/hoitokate-naming (currentAnnualOperatingMargin, hashed under the legacy key)",
+      // That code wrote the new key but hashed the content with the key
+      // mapped back to the legacy name, so the stored fingerprint does not
+      // match the stored text. Easy to miss: it exists only because the
+      // previous PR did it that way.
+      inject: (baseline: Record<string, unknown>) => ({
+        ...baseline,
+        trailing12mOperatingCosts: 34_029.46,
+        currentAnnualOperatingMargin: 9_680,
+      }),
+      hashed: ({ currentAnnualOperatingMargin, ...rest }: Record<string, unknown>) => ({
+        ...rest,
+        currentAnnualRepairCollection: currentAnnualOperatingMargin,
+      }),
+    },
+  ] as const;
+
+  for (const generation of LEGACY_BASELINE_ROWS) {
+    it(`loads a publication written ${generation.name} and drops the stored figures`, async () => {
+      await publications.initializeAdminData(adminBaselineSnapshot);
+      await publishAdminRevision(publications, publishCommand(0, 0));
+      const current = (await publications.loadCurrent(COMPANY_ID))!;
+
+      // The legacy row: the current baseline with that generation's fields
+      // spliced in, and the fingerprint computed the way that generation
+      // computed it - from the content it hashed, not from the current
+      // builders.
+      const baseline = current.liquidityBaselines[0] as unknown as Record<string, unknown>;
+      const storedBaseline = generation.inject(baseline);
+      const legacyFingerprint = fingerprintAdminPublishableContent({
+        ...adminBaselineSnapshot,
+        liquidityBaselines: [generation.hashed(storedBaseline) as never],
+      });
+      const storedPayload = {
+        ...current,
+        liquidityBaselines: [storedBaseline],
+        contentFingerprint: legacyFingerprint,
+      };
+      await pool.query(
+        `UPDATE tm_publications
+         SET payload = $2::jsonb, content_fingerprint = $3
+         WHERE company_id = $1`,
+        [COMPANY_ID, JSON.stringify(storedPayload), legacyFingerprint],
+      );
+      await pool.query(
+        `UPDATE tm_admin_snapshots
+         SET payload = jsonb_set(payload, '{liquidityBaselines}', $2::jsonb)
+         WHERE company_id = $1`,
+        [COMPANY_ID, JSON.stringify([storedBaseline])],
+      );
+
+      const published = await publications.loadCurrent(COMPANY_ID);
+      expect(published?.liquidityBaselines[0]).toEqual(current.liquidityBaselines[0]);
+      expect(published?.liquidityBaselines[0]).not.toHaveProperty("trailing12mOperatingCosts");
+      expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualOperatingMargin");
+      expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualRepairCollection");
+      // The fingerprint is normalised to the current shape on read, so every
+      // in-memory recomputation agrees and the workspace reports no phantom
+      // change to publish.
+      expect(published?.contentFingerprint).toBe(current.contentFingerprint);
+      expect(published?.contentFingerprint).not.toBe(legacyFingerprint);
+      const loaded = await publications.load(COMPANY_ID);
+      expect(loaded?.liquidityBaselines[0]).toEqual(current.liquidityBaselines[0]);
+      expect(fingerprintAdminPublishableContent(loaded!)).toBe(published?.contentFingerprint);
+      await expect(publishAdminRevision(publications, publishCommand(0, 1)))
+        .rejects.toMatchObject({ code: "NO_PUBLICATION_CHANGES" });
+    });
+  }
+
+  it("still rejects a publication whose stored fingerprint matches neither the raw row nor its legacy hash", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
     await publishAdminRevision(publications, publishCommand(0, 0));
-    // Every admin snapshot and publication written before the rename carries
-    // `currentAnnualRepairCollection`. Without the read-side rename the loaded
-    // record has no `currentAnnualOperatingMargin`, validateLiquidityBaseline
-    // fails on nonNegative(undefined), and the workspace cannot be loaded.
     await pool.query(
-      `UPDATE tm_admin_snapshots
-       SET payload = replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb
+      `UPDATE tm_publications
+       SET payload = jsonb_set(payload, '{housingCompany,name}', '"tampered"')
        WHERE company_id = $1`,
       [COMPANY_ID],
     );
-    await pool.query(
-      `UPDATE tm_publications
-       SET payload = replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb
-       WHERE company_id = $1`,
-      [COMPANY_ID],
-    );
-
-    const loaded = await publications.load(COMPANY_ID);
-    const baseline = loaded!.liquidityBaselines[0]!;
-    expect(baseline.currentAnnualOperatingMargin)
-      .toBe(adminBaselineSnapshot.liquidityBaselines[0]!.currentAnnualOperatingMargin);
-    expect(baseline).not.toHaveProperty("currentAnnualRepairCollection");
-
-    const published = await publications.loadCurrent(COMPANY_ID);
-    expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
-      .toBe(baseline.currentAnnualOperatingMargin);
-    expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualRepairCollection");
-  });
-
-  it("keeps a publication's stored fingerprint valid across the rename", async () => {
-    // The version of the test above that matches production: the fingerprint
-    // was computed over the OLD key when the publication was made, and
-    // validatePublishedDataSnapshot recomputes it on every load. A hash taken
-    // over the renamed content fails that check for every publication that
-    // exists (INVALID_PUBLISHED_DATA on the public overview - found live).
-    // The legacy-key content is built from the raw JSON, so this fingerprint
-    // is what an old deployment would have written, not what the current
-    // code computes.
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-    const legacyAdmin = JSON.parse(
-      JSON.stringify(adminBaselineSnapshot)
-        .replaceAll("currentAnnualOperatingMargin", "currentAnnualRepairCollection"),
-    ) as AdminDataSnapshot;
-    const legacyFingerprint = fingerprintAdminPublishableContent(legacyAdmin);
-    await pool.query(
-      `UPDATE tm_publications
-       SET payload = jsonb_set(
-             replace(payload::text, 'currentAnnualOperatingMargin', 'currentAnnualRepairCollection')::jsonb,
-             '{contentFingerprint}', to_jsonb($2::text)),
-           content_fingerprint = $2
-       WHERE company_id = $1`,
-      [COMPANY_ID, legacyFingerprint],
-    );
-
-    const published = await publications.loadCurrent(COMPANY_ID);
-    expect(published?.contentFingerprint).toBe(legacyFingerprint);
-    expect(published?.liquidityBaselines[0]?.currentAnnualOperatingMargin)
-      .toBe(adminBaselineSnapshot.liquidityBaselines[0]!.currentAnnualOperatingMargin);
-    // And the workspace does not report a phantom change to publish.
-    const loaded = await publications.load(COMPANY_ID);
-    expect(fingerprintAdminPublishableContent(loaded!)).toBe(legacyFingerprint);
+    await expect(publications.loadCurrent(COMPANY_ID))
+      .rejects.toThrow(/fingerprint does not match/);
   });
 
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {

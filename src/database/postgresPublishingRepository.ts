@@ -1,6 +1,10 @@
 import { validateAdminDataSnapshot } from "../admin/adminDataValidation.js";
 import type { PublishingRepository } from "../publishing/publicationRepository.js";
-import { validatePublishedDataSnapshot } from "../publishing/publishedSnapshot.js";
+import {
+  fingerprintPublishedContent,
+  fingerprintStoredPublicationPayload,
+  validatePublishedDataSnapshot,
+} from "../publishing/publishedSnapshot.js";
 import {
   DomainValidationError,
   type AdminDataSnapshot,
@@ -10,7 +14,7 @@ import type { SqlExecutor, SqlPool } from "./sql.js";
 import { withPostgresTransaction } from "./transaction.js";
 import { postgresErrorCode } from "./postgresErrors.js";
 import { instantMillis, integer } from "./postgresValues.js";
-import { withRenamedBaselineField } from "../domain/legacyFieldNames.js";
+import { withoutLegacyBaselineFields } from "../domain/legacyFieldNames.js";
 
 interface AdminRow extends Record<string, unknown> {
   company_id: string;
@@ -311,7 +315,7 @@ function withDefaultedAdminCollections(
   return {
     ...payload,
     financialYears: payload.financialYears ?? [],
-    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withRenamedBaselineField),
+    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withoutLegacyBaselineFields),
     assets: payload.assets ?? [],
     observations: payload.observations ?? [],
     costEvidence: payload.costEvidence ?? [],
@@ -328,9 +332,29 @@ function withDefaultedAdminCollections(
 }
 
 function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
-  const payload = withDefaultedPublishedCollections(
-    parsePayload<PublishedDataSnapshot>(row.payload, "published snapshot"),
-  );
+  const stored = parsePayload<PublishedDataSnapshot>(row.payload, "published snapshot");
+  // The integrity check runs against the row as written, before any
+  // read-side normalisation: the stored fingerprint was hashed over the
+  // shape the writing generation used, and the fields that shape carried
+  // may no longer exist once the row is normalised (legacyFieldNames.ts).
+  if (stored.contentFingerprint !== row.content_fingerprint ||
+      fingerprintStoredPublicationPayload(
+        stored as unknown as Record<string, unknown>,
+      ) !== row.content_fingerprint) {
+    throw integrityError(
+      `Publication row ${row.company_id}/${String(row.publication_version)} fingerprint does not match payload.`,
+    );
+  }
+  // Normalised to the current shape and re-fingerprinted over it, the same
+  // way the field names are normalised: every in-memory recomputation
+  // (validatePublishedDataSnapshot in the session and visitor paths, the
+  // dashboard's unpublished-changes comparison) then sees one consistent
+  // hash. The column keeps the fingerprint the row was written with.
+  const normalised = withDefaultedPublishedCollections(stored);
+  const payload: PublishedDataSnapshot = {
+    ...normalised,
+    contentFingerprint: fingerprintPublishedContent(normalised),
+  };
   const publicationVersion = integer(
     row.publication_version,
     "publication version",
@@ -342,7 +366,6 @@ function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
   if (payload.companyId !== row.company_id ||
       payload.publicationVersion !== publicationVersion ||
       payload.sourceAdminRevision !== sourceAdminRevision ||
-      payload.contentFingerprint !== row.content_fingerprint ||
       payload.publishedBy !== row.published_by ||
       instantMillis(payload.publishedAt, "publication payload publishedAt") !==
         instantMillis(row.published_at, "publication row published_at")) {
@@ -380,7 +403,7 @@ function withDefaultedPublishedCollections(
 ): PublishedDataSnapshot {
   return {
     ...payload,
-    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withRenamedBaselineField),
+    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withoutLegacyBaselineFields),
     financialAccounts: payload.financialAccounts ?? [],
     financialEntries: payload.financialEntries ?? [],
     groupActuals: payload.groupActuals ?? [],

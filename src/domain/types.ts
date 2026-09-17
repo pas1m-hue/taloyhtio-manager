@@ -322,12 +322,19 @@ export type MaintenanceDocument =
   | TechnicalLifespanDocument;
 
 /** Manually entered liquidity inputs captured at one named date. */
+/**
+ * A dated, sourced cash observation: the one liquidity input that cannot be
+ * derived from the account data. The balance sheet's cash is a year-end
+ * figure; the baseline can be more recent, and it is the opening cash of
+ * every forecast. The operating figures that used to sit next to it
+ * (trailing 12-month costs, hoitokate) are computed from the accounts since
+ * PR #23 and are no longer stored - a row that still carries them is
+ * stripped on read (legacyFieldNames.ts).
+ */
 export interface LiquidityBaselineRecord {
   readonly id: string;
   readonly asOfDate: string;
   readonly currentCash: number;
-  readonly trailing12mOperatingCosts: number;
-  readonly currentAnnualOperatingMargin: number;
   readonly sourceIds: readonly string[];
   readonly notes?: string;
 }

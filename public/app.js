@@ -3718,11 +3718,10 @@ function renderRequiredCollection() {
   const liquidity = state.admin.calculations?.liquidity;
   const host = $("#required-collection-body");
   if (liquidity?.status !== "available") { host.innerHTML = liquidityUnavailableBlock(liquidity); return; }
-  // Says which year the figure is stated in, that repairs are already out of
-  // it, and that the baseline's old hand-entered number no longer drives it.
+  // Says which year the figure is stated in and that repairs are already
+  // out of it.
   const marginNote = buildOperatingMarginNote(
     state.admin.calculations.operatingFigures.margin,
-    state.admin.latestLiquidityBaseline?.currentAnnualOperatingMargin,
     money,
   );
   host.innerHTML = `<p class="muted">${escapeHtml(marginNote)}</p>
@@ -4011,7 +4010,6 @@ function fillLiquidityForm(model) {
   if (note) {
     note.textContent = buildOperatingMarginNote(
       model.liquidity.operatingFigures.margin,
-      undefined,
       money,
     );
   }

@@ -345,6 +345,34 @@ describe("static naming cross-check (refactor/kassan-kehitys)", () => {
     expect(html).not.toContain("<option>optimistic</option>");
     expect(html).not.toContain("Optimistic hoitokate");
   });
+
+  it("uses the genitive when the scenario qualifies a noun", () => {
+    // SCENARIO_LABELS is the nominative for headings; as a qualifier the
+    // noun needs the genitive (Perusuran hoitokate), except the adjective.
+    expect(html).toContain("Optimistinen hoitokate €/v");
+    expect(html).toContain("Perusuran hoitokate €/v");
+    expect(html).toContain("Stressin hoitokate €/v");
+  });
+});
+
+describe("static liquidity baseline cross-check (refactor/remove-manual-liquidity-inputs)", () => {
+  it("shows a developer-panel example the validation accepts: cash only", () => {
+    // The example is an instruction. One that still carried the removed
+    // figures would teach writing data the validation now rejects.
+    const start = html.indexOf('"type": "save_liquidity_baseline"');
+    const example = html.slice(start, html.indexOf("</textarea>", start));
+    expect(example).toContain('"currentCash"');
+    expect(example).not.toContain("trailing12mOperatingCosts");
+    expect(example).not.toContain("currentAnnualRepairCollection");
+    expect(example).not.toContain("currentAnnualOperatingMargin");
+  });
+
+  it("never reads an operating figure off the liquidity baseline record", () => {
+    // Both figures come from calculations.operatingFigures (PR #23). The
+    // superseded-figure note in Vastiketarve was the one read path left.
+    expect(js).not.toMatch(/latestLiquidityBaseline\??\.(trailing12mOperatingCosts|currentAnnualOperatingMargin)/);
+    expect(js).toContain("buildOperatingMarginNote(\n    state.admin.calculations.operatingFigures.margin,\n    money,");
+  });
 });
 
 describe("static Selvitykset cross-check (feature/selvitykset)", () => {

@@ -18,7 +18,7 @@ import {
   facadePaintingUpdateCandidate,
   facadeStudyAddCandidate,
 } from "../fixtures/annualReportUpdate.js";
-import { correctedWorkbookLiquidityBaseline } from "../fixtures/liquidityBaseline.js";
+import { correctedWorkbookLiquidityBaseline, correctedWorkbookOperatingFigures } from "../fixtures/liquidityBaseline.js";
 import { buildLiquidityForecast } from "../liquidity/buildLiquidityForecast.js";
 import { buildProjection } from "../projection/buildProjection.js";
 import { applyEventDecision } from "./applyEventDecision.js";
@@ -590,7 +590,7 @@ describe("workflow integration", () => {
       horizon,
       currentCash: correctedWorkbookLiquidityBaseline.currentCash,
       trailing12mOperatingCosts:
-        correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
+        correctedWorkbookOperatingFigures.trailing12mOperatingCosts,
       currentAnnualOperatingMargin: 0,
     } as const;
     const before = buildLiquidityForecast({

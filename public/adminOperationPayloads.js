@@ -2426,20 +2426,13 @@ export function buildTrailing12mNote(computed, formatMoney) {
  * cash path bills them separately from approved repair events; counting them
  * here too would charge them twice.
  *
- * `supersededCollection` is the liquidity baseline's stored figure, which is
- * no longer an input. It is shown rather than dropped for the same reason the
- * Budjetti vs. toteuma view names its budget source: a number that used to
- * drive the model and now does not should say so, or the next person to read
- * the record will assume it still does.
- *
  * @param {{ status: "available", latestActualYear: number, income: number,
  *           costsExcludingRepairs: number, operatingMargin: number }
  *         | { status: "unavailable", reason: string }} margin
- * @param {number|undefined} supersededCollection
  * @param {(value: number) => string} formatMoney
  * @returns {string}
  */
-export function buildOperatingMarginNote(margin, supersededCollection, formatMoney) {
+export function buildOperatingMarginNote(margin, formatMoney) {
   if (margin.status !== "available") {
     if (margin.reason === "no_income_actuals") {
       return "Hoitokate: tulototeumia ei ole tuotu, joten hoitokatetta ei voi laskea. " +
@@ -2454,16 +2447,13 @@ export function buildOperatingMarginNote(margin, supersededCollection, formatMon
       "Sama syy kuin 12 kk hoitokuluissa.";
   }
 
-  const superseded = typeof supersededCollection === "number"
-    ? ` Aiempi käsin syötetty vuosikeräys ${formatMoney(supersededCollection)}/v ei ole enää käytössä.`
-    : "";
   return `Hoitokate ${formatMoney(margin.operatingMargin)}/v = vuoden ` +
     `${margin.latestActualYear} tulot ${formatMoney(margin.income)} − saman vuoden ` +
     `hoitokulut ilman korjauksia ${formatMoney(margin.costsExcludingRepairs)}. ` +
     `Korjaukset on vähennetty, koska kassan kehitys laskuttaa ne erikseen ` +
     `hyväksytyistä korjaustapahtumista. Luku on vuoden ` +
     `${margin.latestActualYear} tasossa eikä sisällä inflaatiota — samoin kuin ` +
-    `kassan kehityksen korjauskustannukset.${superseded}`;
+    `kassan kehityksen korjauskustannukset.`;
 }
 
 /** Share of a column's width taken by its bars; the rest is the gap between columns. */
@@ -3516,7 +3506,7 @@ export function isCashEntry(entry) {
  * (`"entry"`) vai jouduttiinko käyttämään koko current_assets-summaa
  * (`"section_total"`) — handoffin sallima fallback, dokumentoitu UI:ssa.
  * @param {Parameters<typeof buildBalanceSheetViewModel>[0]} snapshot
- * @param {{ currentCash?: number, trailing12mOperatingCosts?: number, asOfDate?: string, notes?: string } | undefined} latestLiquidityBaseline
+ * @param {{ trailing12mOperatingCosts: number } | undefined} operatingCosts The computed 12-month operating costs (computeOperatingCostFigures), or undefined when they are unavailable.
  * @returns {{
  *   liquidity: number | null,
  *   monthsOfCash: number | null,
@@ -3524,7 +3514,7 @@ export function isCashEntry(entry) {
  *   cashSource: "entry" | "section_total" | null,
  * }}
  */
-export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
+export function computeBalanceRatios(snapshot, operatingCosts) {
   const vm = buildBalanceSheetViewModel(snapshot);
   if (vm.isEmpty) {
     return { liquidity: null, monthsOfCash: null, interestBearingDebt: null, cashSource: null };
@@ -3542,8 +3532,8 @@ export function computeBalanceRatios(snapshot, latestLiquidityBaseline) {
   const cashEntry = currentAssetsSection?.entries.find(isCashEntry);
   const cashAmount = cashEntry ? cashEntry.amount : currentAssetsTotal;
   const cashSource = cashEntry ? "entry" : "section_total";
-  const monthlyOperatingCosts = latestLiquidityBaseline?.trailing12mOperatingCosts
-    ? latestLiquidityBaseline.trailing12mOperatingCosts / 12
+  const monthlyOperatingCosts = operatingCosts?.trailing12mOperatingCosts
+    ? operatingCosts.trailing12mOperatingCosts / 12
     : 0;
   const monthsOfCash = monthlyOperatingCosts === 0 ? null : cashAmount / monthlyOperatingCosts;
 
