@@ -2460,10 +2460,10 @@ export function buildOperatingMarginNote(margin, supersededCollection, formatMon
   return `Hoitokate ${formatMoney(margin.operatingMargin)}/v = vuoden ` +
     `${margin.latestActualYear} tulot ${formatMoney(margin.income)} − saman vuoden ` +
     `hoitokulut ilman korjauksia ${formatMoney(margin.costsExcludingRepairs)}. ` +
-    `Korjaukset on vähennetty, koska kassapolku laskuttaa ne erikseen ` +
+    `Korjaukset on vähennetty, koska kassan kehitys laskuttaa ne erikseen ` +
     `hyväksytyistä korjaustapahtumista. Luku on vuoden ` +
     `${margin.latestActualYear} tasossa eikä sisällä inflaatiota — samoin kuin ` +
-    `kassapolun korjauskustannukset.${superseded}`;
+    `kassan kehityksen korjauskustannukset.${superseded}`;
 }
 
 /** Share of a column's width taken by its bars; the rest is the gap between columns. */

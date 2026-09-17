@@ -18,6 +18,7 @@ const htmlPath = fileURLToPath(new URL("./index.html", import.meta.url));
 const jsPath = fileURLToPath(new URL("./app.js", import.meta.url));
 const html = readFileSync(htmlPath, "utf8");
 const js = readFileSync(jsPath, "utf8");
+const payloads = readFileSync(fileURLToPath(new URL("./adminOperationPayloads.js", import.meta.url)), "utf8");
 
 /**
  * IDs referenced as CSS id selectors anywhere in app.js, e.g. from
@@ -308,6 +309,41 @@ describe("static cash path cross-check (feature/cashpath-rebuild)", () => {
     expect(js).not.toContain('<details class="cashpath-completed" open>');
     expect(js).toContain("Toteutunut hinta");
     expect(js).toContain('numberField("event-actual-amount", "Toteutunut hinta €"');
+  });
+});
+
+describe("static naming cross-check (refactor/kassan-kehitys)", () => {
+  it("calls the view Kassan kehitys and lists it last under Talous, after Taloudellinen asema", () => {
+    // The page shows realised years plus one budget year; it no longer
+    // projects a path forward, so it is finance data, not a scenario.
+    const talous = html.slice(html.indexOf("Talous</p>"), html.indexOf("Kunnossapito</p>"));
+    expect(talous).toContain('data-view="cashpath">Kassan kehitys');
+    expect(talous.indexOf('data-view="finance-position"')).toBeLessThan(talous.indexOf('data-view="cashpath"'));
+    expect(talous.indexOf('data-view="cashpath"')).toBeLessThan(talous.lastIndexOf("</ul>"));
+    const skenaariot = html.slice(html.indexOf("Skenaariot ja likviditeetti"), html.indexOf("Julkaisu</p>"));
+    expect(skenaariot).not.toContain('data-view="cashpath"');
+    expect(html).toContain('<h2 id="cashpath-title">Kassan kehitys</h2>');
+    // The #/cashpath route is kept so existing bookmarks still resolve.
+    expect(html).toContain('href="#/cashpath"');
+  });
+
+  it("no longer says kassapolku anywhere the user reads", () => {
+    for (const source of [html, js, payloads]) {
+      expect(source).not.toMatch(/kassapol/i);
+    }
+  });
+
+  it("renders every scenario key through one shared scenarioLabel, never raw", () => {
+    expect(js).toContain("function scenarioLabel(scenario)");
+    expect(js).toContain("return SCENARIO_LABELS[scenario] ?? scenario;");
+    expect(js).not.toContain("<h4>${scenario}</h4>");
+    expect(js).not.toContain('data-cashpath="${s}">${s}</button>');
+    expect(js).not.toContain("<td>${escapeHtml(entry.scenario)}</td>");
+    expect(js).not.toContain("<strong>${scenario}:</strong>");
+    // The stored form stays English; only the visitor form's option text is Finnish.
+    expect(html).toContain('<option value="optimistic">Optimistinen</option><option value="base" selected>Perusura</option><option value="stress">Stressi</option>');
+    expect(html).not.toContain("<option>optimistic</option>");
+    expect(html).not.toContain("Optimistic hoitokate");
   });
 });
 
