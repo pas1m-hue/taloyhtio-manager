@@ -2692,7 +2692,7 @@ describe("buildOperatingMarginNote", () => {
   };
 
   it("shows the subtraction rather than asserting the result", () => {
-    const note = buildOperatingMarginNote(AVAILABLE, undefined, euro);
+    const note = buildOperatingMarginNote(AVAILABLE, euro);
 
     expect(note).toContain("9877,29 €");
     expect(note).toContain("43906,75 €");
@@ -2705,30 +2705,15 @@ describe("buildOperatingMarginNote", () => {
     // year's, uninflated on purpose: the repair costs it is weighed against
     // in the cash path are in today's money too, and indexing one side alone
     // would make the cash look like it stretches further than it does.
-    const note = buildOperatingMarginNote(AVAILABLE, undefined, euro);
+    const note = buildOperatingMarginNote(AVAILABLE, euro);
 
     expect(note).toContain("eikä sisällä inflaatiota");
     expect(note).toContain("vuoden 2025 tasossa");
   });
 
   it("says repairs are already out of it", () => {
-    expect(buildOperatingMarginNote(AVAILABLE, undefined, euro))
+    expect(buildOperatingMarginNote(AVAILABLE, euro))
       .toContain("kassan kehitys laskuttaa ne erikseen");
-  });
-
-  it("names the superseded hand-entered figure when one is stored", () => {
-    // The rule this PR exists to enforce: a number that used to drive the
-    // model and no longer does has to say so, or the next reader assumes it
-    // still does. Same reasoning as the "Budjetin lähde" column.
-    const note = buildOperatingMarginNote(AVAILABLE, 9_680, euro);
-
-    expect(note).toContain("9680,00 €");
-    expect(note).toContain("ei ole enää käytössä");
-  });
-
-  it("says nothing about a superseded figure when none is stored", () => {
-    expect(buildOperatingMarginNote(AVAILABLE, undefined, euro))
-      .not.toContain("ei ole enää käytössä");
   });
 
   it("refuses to call missing income a zero hoitokate", () => {
@@ -2736,7 +2721,6 @@ describe("buildOperatingMarginNote", () => {
     // cost as a deficit and present it as a measurement.
     const note = buildOperatingMarginNote(
       { status: "unavailable", reason: "no_income_actuals" },
-      9_680,
       euro,
     );
 
@@ -2747,7 +2731,6 @@ describe("buildOperatingMarginNote", () => {
   it("explains income missing from the latest cost year specifically", () => {
     const note = buildOperatingMarginNote(
       { status: "unavailable", reason: "income_missing_for_latest_year" },
-      undefined,
       euro,
     );
 
@@ -2757,7 +2740,6 @@ describe("buildOperatingMarginNote", () => {
   it("points at the cost-side reason when that is what failed", () => {
     const note = buildOperatingMarginNote(
       { status: "unavailable", reason: "repair_group_missing" },
-      undefined,
       euro,
     );
 

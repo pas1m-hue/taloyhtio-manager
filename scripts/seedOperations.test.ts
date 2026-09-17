@@ -3,46 +3,14 @@ import { createAdminDataSnapshot } from "../src/admin/applyAdminBatch.js";
 import { applyAdminBatch } from "../src/admin/applyAdminBatch.js";
 import type { AdminDataSnapshot, CostEvidence } from "../src/domain/types.js";
 import {
-  TRAILING_12M_OPERATING_COSTS_PLACEHOLDER,
-  TrailingCostsDataGapError,
   VENTILATION_CLEANING_COST_EVIDENCE_ID,
   WATER_HEATER_ASSET_ID,
   buildSeedOperations,
-  resolveTrailingCosts,
   shouldRunSeed,
 } from "./seedOperations.js";
 
-const CONFIRMED_TRAILING_COSTS = resolveTrailingCosts({
-  TM_TRAILING_12M_OPERATING_COSTS: "36000",
-});
-
-describe("resolveTrailingCosts", () => {
-  it("throws a DATA GAP error when no value or placeholder opt-in is given", () => {
-    expect(() => resolveTrailingCosts({})).toThrow(TrailingCostsDataGapError);
-  });
-
-  it("throws on a non-numeric confirmed value", () => {
-    expect(() =>
-      resolveTrailingCosts({ TM_TRAILING_12M_OPERATING_COSTS: "not-a-number" }),
-    ).toThrow(TrailingCostsDataGapError);
-  });
-
-  it("uses the confirmed env value when provided", () => {
-    const result = resolveTrailingCosts({ TM_TRAILING_12M_OPERATING_COSTS: "36000" });
-    expect(result.value).toBe(36_000);
-    expect(result.isPlaceholder).toBe(false);
-  });
-
-  it("uses the named placeholder only with explicit opt-in", () => {
-    const result = resolveTrailingCosts({ TM_ALLOW_PLACEHOLDER: "1" });
-    expect(result.value).toBe(TRAILING_12M_OPERATING_COSTS_PLACEHOLDER);
-    expect(result.isPlaceholder).toBe(true);
-    expect(result.notes).toContain("PAIKKAMERKKI");
-  });
-});
-
 describe("buildSeedOperations", () => {
-  const { operations, summary } = buildSeedOperations(CONFIRMED_TRAILING_COSTS);
+  const { operations, summary } = buildSeedOperations();
 
   it("produces exactly six operations", () => {
     expect(operations).toHaveLength(6);
@@ -92,12 +60,16 @@ describe("buildSeedOperations", () => {
     expect(value.amount).toBeUndefined();
   });
 
-  it("marks the placeholder trailing-cost figure on the summary", () => {
-    const placeholderRun = buildSeedOperations(
-      resolveTrailingCosts({ TM_ALLOW_PLACEHOLDER: "1" }),
+  it("stores only the cash on the liquidity baseline, never an operating figure", () => {
+    // Both operating figures are computed from the account data (PR #23);
+    // a stored one would be dead data the validation now rejects.
+    const baselineOp = operations.find((op) => op.type === "save_liquidity_baseline");
+    if (baselineOp?.type !== "save_liquidity_baseline") {
+      throw new Error("expected the liquidity baseline");
+    }
+    expect(Object.keys(baselineOp.value).sort()).toEqual(
+      ["asOfDate", "currentCash", "id", "sourceIds"],
     );
-    expect(placeholderRun.summary.trailingCostsIsPlaceholder).toBe(true);
-    expect(summary.trailingCostsIsPlaceholder).toBe(false);
   });
 
   it("validates cleanly through applyAdminBatch against an empty demo snapshot", () => {

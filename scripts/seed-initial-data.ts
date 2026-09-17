@@ -9,9 +9,7 @@
  * exists there.
  */
 import {
-  TrailingCostsDataGapError,
   buildSeedOperations,
-  resolveTrailingCosts,
   shouldRunSeed,
   type SeedWorkspace,
 } from "./seedOperations.js";
@@ -37,30 +35,6 @@ async function main(): Promise<void> {
   const targetUrl = (process.argv[2] ?? process.env.TM_TARGET_URL ?? DEFAULT_TARGET_URL)
     .replace(/\/+$/, "");
 
-  let trailingCosts;
-  try {
-    const rawTrailingCosts = process.env.TM_TRAILING_12M_OPERATING_COSTS;
-    const rawAllowPlaceholder = process.env.TM_ALLOW_PLACEHOLDER;
-    trailingCosts = resolveTrailingCosts({
-      ...(rawTrailingCosts === undefined ? {} : { TM_TRAILING_12M_OPERATING_COSTS: rawTrailingCosts }),
-      ...(rawAllowPlaceholder === undefined ? {} : { TM_ALLOW_PLACEHOLDER: rawAllowPlaceholder }),
-    });
-  } catch (error) {
-    if (error instanceof TrailingCostsDataGapError) {
-      fail(error.message);
-    }
-    throw error;
-  }
-
-  if (trailingCosts.isPlaceholder) {
-    console.warn(
-      "\n⚠ VAROITUS: trailing12mOperatingCosts on PAIKKAMERKKI (34 029.46 e, " +
-        "Kulut-välilehden \"Hoito yhteensä 2025\"), ei vahvistettu 12 kk " +
-        "hoitokululuku. Tarkista tämä ennen kuin likviditeettinäkymään " +
-        "luotetaan.\n",
-    );
-  }
-
   console.log(`Kohde: ${targetUrl}, yhtiö: ${COMPANY_ID}`);
 
   const workspace = await getJson<SeedWorkspace & { readonly adminRevision: number }>(
@@ -74,7 +48,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { operations, summary } = buildSeedOperations(trailingCosts);
+  const { operations, summary } = buildSeedOperations();
 
   const response = await fetch(
     `${targetUrl}/api/v1/admin/companies/${COMPANY_ID}/changes`,
@@ -112,13 +86,7 @@ async function main(): Promise<void> {
       `base=${summary.scheduleQuantityByScenario.base}, ` +
       `stress=${summary.scheduleQuantityByScenario.stress} kpl).`,
   );
-  console.log(`Luotiin likviditeetin lähtötieto ${summary.liquidityBaselineId}.`);
-  if (summary.trailingCostsIsPlaceholder) {
-    console.log(
-      "⚠ trailing12mOperatingCosts on yhä paikkamerkki - tarkenna ja aja uusi " +
-        "save_liquidity_baseline-muutos UI:sta kun oikea luku on vahvistettu.",
-    );
-  }
+  console.log(`Luotiin kassan lähtötaso ${summary.liquidityBaselineId}.`);
 }
 
 async function getJson<T>(url: string, token: string): Promise<T> {

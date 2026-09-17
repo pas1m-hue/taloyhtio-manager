@@ -16,7 +16,7 @@ import {
   type PublishedGroupActual,
 } from "../domain/types.js";
 import { validateAdminDataSnapshot } from "../admin/adminDataValidation.js";
-import { withLegacyBaselineKey } from "../domain/legacyFieldNames.js";
+import { withStoredBaselineHashKeys } from "../domain/legacyFieldNames.js";
 
 interface PublishableContent {
   readonly housingCompany: PublishedDataSnapshot["housingCompany"];
@@ -115,20 +115,7 @@ export function validatePublishedDataSnapshot(
 
   validatePublishedFinancialData(snapshot);
 
-  const expectedFingerprint = fingerprintPublishableContent({
-    housingCompany: snapshot.housingCompany,
-    financialYears: snapshot.financialYears,
-    liquidityBaselines: snapshot.liquidityBaselines,
-    assets: snapshot.assets,
-    observations: snapshot.observations,
-    costEvidence: snapshot.costEvidence,
-    priceLevelConfirmations: snapshot.priceLevelConfirmations,
-    events: snapshot.events,
-    financialAccounts: snapshot.financialAccounts,
-    financialEntries: snapshot.financialEntries,
-    groupActuals: snapshot.groupActuals,
-  });
-  if (snapshot.contentFingerprint !== expectedFingerprint) {
+  if (snapshot.contentFingerprint !== fingerprintPublishedContent(snapshot)) {
     throw invalidPublished("Published snapshot fingerprint does not match content");
   }
 }
@@ -416,14 +403,68 @@ const ADDITIVE_CONTENT_KEYS = [
   "groupActuals",
 ] as const;
 
+const PUBLISHABLE_CONTENT_KEYS = [
+  "housingCompany",
+  "financialYears",
+  "liquidityBaselines",
+  "assets",
+  "observations",
+  "costEvidence",
+  "priceLevelConfirmations",
+  "events",
+  "financialAccounts",
+  "financialEntries",
+  "groupActuals",
+] as const satisfies readonly (keyof PublishableContent)[];
+
+/**
+ * The fingerprint a stored publication row was written with, computed from
+ * the raw parsed payload before any read-side normalisation. This is how a
+ * repository verifies a row against its content_fingerprint column: the
+ * row's own shape is hashed, whichever generation wrote it, and the
+ * liquidity baselines are hashed under the keys that generation used for
+ * the hash (withStoredBaselineHashKeys). After verification the loaded
+ * snapshot is normalised and re-fingerprinted over the current shape
+ * (fingerprintPublishedContent), so every in-memory recomputation agrees.
+ */
+export function fingerprintStoredPublicationPayload(
+  payload: Record<string, unknown>,
+): string {
+  const content: Record<string, unknown> = {};
+  for (const key of PUBLISHABLE_CONTENT_KEYS) content[key] = payload[key];
+  const baselines = Array.isArray(content.liquidityBaselines)
+    ? (content.liquidityBaselines as Record<string, unknown>[])
+    : [];
+  content.liquidityBaselines = baselines.map(withStoredBaselineHashKeys);
+  return fingerprintPublishableContent(content as unknown as PublishableContent);
+}
+
+/** The current-shape fingerprint of a loaded publication's content. */
+export function fingerprintPublishedContent(
+  snapshot: PublishedDataSnapshot,
+): string {
+  return fingerprintPublishableContent(publishableContentOf(snapshot));
+}
+
+function publishableContentOf(snapshot: PublishedDataSnapshot): PublishableContent {
+  return {
+    housingCompany: snapshot.housingCompany,
+    financialYears: snapshot.financialYears,
+    liquidityBaselines: snapshot.liquidityBaselines,
+    assets: snapshot.assets,
+    observations: snapshot.observations,
+    costEvidence: snapshot.costEvidence,
+    priceLevelConfirmations: snapshot.priceLevelConfirmations,
+    events: snapshot.events,
+    financialAccounts: snapshot.financialAccounts,
+    financialEntries: snapshot.financialEntries,
+    groupActuals: snapshot.groupActuals,
+  };
+}
+
 function fingerprintPublishableContent(content: PublishableContent): string {
-  // Hashed under the stored (legacy) baseline key - see legacyFieldNames.ts.
-  const hashed = {
-    ...content,
-    liquidityBaselines: content.liquidityBaselines.map(withLegacyBaselineKey),
-  } as unknown as PublishableContent;
   const canonical = JSON.stringify(
-    sortObjectKeysRecursively(withoutEmptyAdditiveKeys(hashed)),
+    sortObjectKeysRecursively(withoutEmptyAdditiveKeys(content)),
   );
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;

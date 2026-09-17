@@ -16,35 +16,17 @@ käsin tehtyjä muutoksia.
 |---|---|---|
 | `TM_ADMIN_TOKEN` | kyllä | Kirjautuneen adminin Supabase-sessiotoken (Bearer). **Ei service-role-avainta, ei kovakoodattu, ei committoitu.** |
 | `TM_TARGET_URL` tai 1. komentoriviargumentti | ei | Kohde-URL, esim. `http://127.0.0.1:8787` (paikallinen `wrangler dev`) tai tuotanto-osoite. Oletus: `http://127.0.0.1:8787`. |
-| `TM_TRAILING_12M_OPERATING_COSTS` | ei* | 12 kk hoitokulut vahvistettuna lukuna. Suositellaan aina kun mahdollista. |
-| `TM_ALLOW_PLACEHOLDER` | ei* | `1` sallii nimetyn paikkamerkkiarvon (ks. alla) `TM_TRAILING_12M_OPERATING_COSTS`:in sijaan. |
 | `TM_COMPANY_ID` | ei | Kohdeyhtiön id. Oletus: `housing_company_demo`. |
 
-\* Jompikumpi näistä kahdesta on annettava, muuten skripti kieltäytyy heti
-selkeällä DATA GAP -virheellä.
-
-### ⚠ DATA GAP: 12 kk hoitokulut
-
-Excelin "Kuluva kausi 2026" -välilehti ei sisällä trailing-12kk
-hoitokululukua, jota `LiquidityBaselineRecord` kuitenkin vaatii. Skripti
-**ei koskaan keksi tätä lukua hiljaa**:
-
-- Anna oikea, tilinpäätöksestä tms. vahvistettu luku
-  `TM_TRAILING_12M_OPERATING_COSTS`-muuttujassa, **tai**
-- aja `TM_ALLOW_PLACEHOLDER=1`, jolloin käytetään näkyvästi merkittyä
-  paikkamerkkiä **34 029,46 €** (sama luku kuin Kulut-välilehden "Hoito
-  yhteensä 2025", Kulut!B19 — sama luku jota `src/fixtures/liquidityBaseline.ts`
-  käyttää testifixtuurina "corrected workbook" -arvona, mutta se **ei ole
-  virallinen vahvistettu 12 kk hoitokulu**). Paikkamerkki tallentuu
-  näkyvästi liquidity-baselinen `notes`-kenttään, jotta se ei koskaan näytä
-  hiljaiselta oikealta luvulta admin-UI:ssa.
+Likviditeetin lähtötasoon tallennetaan vain kassa (31.12.2025 rahat ja
+pankkisaamiset). 12 kk hoitokulut ja hoitokate lasketaan tilidatasta
+liitettyjen tilinpäätösten perusteella, eikä niitä tallenneta tietueeseen.
 
 ## Ajo-ohje
 
 ```bash
 export TM_ADMIN_TOKEN="<kirjautuneen adminin sessiotoken>"
 export TM_TARGET_URL="http://127.0.0.1:8787"   # tai tuotanto-URL
-export TM_TRAILING_12M_OPERATING_COSTS="<vahvistettu luku>"   # tai TM_ALLOW_PLACEHOLDER=1
 
 npm run seed:initial-data
 ```

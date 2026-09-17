@@ -60,18 +60,6 @@ const WATER_HEATER_SCHEDULE_ROWS: Readonly<
   ],
 };
 
-/**
- * The 12-month operating-cost figure the source Excel does not provide
- * (sheet "Kuluva kausi 2026" has no trailing-12m operating-cost line). This
- * is a named DATA GAP, never a silent zero.
- */
-export interface TrailingCostsInput {
-  readonly value: number;
-  readonly sourceIds: readonly string[];
-  readonly notes: string;
-  readonly isPlaceholder: boolean;
-}
-
 export interface SeedOperationsSummary {
   readonly assetIds: readonly string[];
   readonly costEvidenceIds: readonly string[];
@@ -79,7 +67,6 @@ export interface SeedOperationsSummary {
   readonly scheduleRowCount: number;
   readonly scheduleQuantityByScenario: Readonly<Record<Scenario, number>>;
   readonly liquidityBaselineId: string;
-  readonly trailingCostsIsPlaceholder: boolean;
 }
 
 export interface SeedOperationsResult {
@@ -87,9 +74,7 @@ export interface SeedOperationsResult {
   readonly summary: SeedOperationsSummary;
 }
 
-export function buildSeedOperations(
-  trailingCosts: TrailingCostsInput,
-): SeedOperationsResult {
+export function buildSeedOperations(): SeedOperationsResult {
   const waterHeaterAsset: Asset = {
     id: WATER_HEATER_ASSET_ID,
     name: "Lämminvesivaraajat",
@@ -146,10 +131,7 @@ export function buildSeedOperations(
     id: LIQUIDITY_BASELINE_ID,
     asOfDate: "2025-12-31",
     currentCash: 22_208.49,
-    currentAnnualOperatingMargin: 9_680,
-    trailing12mOperatingCosts: trailingCosts.value,
-    sourceIds: [EXCEL_CURRENT_PERIOD_SOURCE_ID, ...trailingCosts.sourceIds],
-    notes: trailingCosts.notes,
+    sourceIds: [EXCEL_CURRENT_PERIOD_SOURCE_ID],
   };
 
   const operations: AdminDataOperation[] = [
@@ -188,8 +170,8 @@ export function buildSeedOperations(
     {
       type: "save_liquidity_baseline",
       value: liquidityBaseline,
-      sourceIds: [EXCEL_CURRENT_PERIOD_SOURCE_ID, ...trailingCosts.sourceIds],
-      explanation: "Seed-alkudata: kuluvan kauden 2026 likviditeetin lähtötiedot.",
+      sourceIds: [EXCEL_CURRENT_PERIOD_SOURCE_ID],
+      explanation: "Seed-alkudata: kuluvan kauden 2026 kassan lähtötaso.",
     },
   ];
 
@@ -207,7 +189,6 @@ export function buildSeedOperations(
       scheduleRowCount: schedule.length,
       scheduleQuantityByScenario,
       liquidityBaselineId: LIQUIDITY_BASELINE_ID,
-      trailingCostsIsPlaceholder: trailingCosts.isPlaceholder,
     },
   };
 }
@@ -243,69 +224,6 @@ function quantityByScenario(
     totals[entry.scenario] += entry.quantity ?? 0;
   }
   return totals;
-}
-
-/**
- * The workbook fixture value is not a guess: it is the same "Hoito
- * yhteensä 2025" figure (Kulut!B19, 34 029.46 EUR) already cited as the
- * corrected trailing-12m operating-cost source in
- * src/fixtures/liquidityBaseline.ts. Using it here still requires an
- * explicit opt-in so it can never reach a real company silently.
- */
-export const TRAILING_12M_OPERATING_COSTS_PLACEHOLDER = 34_029.46;
-export const TRAILING_12M_PLACEHOLDER_SOURCE_ID =
-  "kulut_valilehti_hoito_yhteensa_2025_PLACEHOLDER";
-
-export interface SeedEnv {
-  readonly TM_TRAILING_12M_OPERATING_COSTS?: string;
-  readonly TM_ALLOW_PLACEHOLDER?: string;
-}
-
-export class TrailingCostsDataGapError extends Error {}
-
-/**
- * Resolves the trailing-12m operating-cost DATA GAP from the environment.
- * Throws unless a confirmed value or an explicit placeholder opt-in is
- * given - the seed must never guess silently.
- */
-export function resolveTrailingCosts(env: SeedEnv): TrailingCostsInput {
-  const rawConfirmed = env.TM_TRAILING_12M_OPERATING_COSTS;
-  if (rawConfirmed !== undefined && rawConfirmed.trim() !== "") {
-    const value = Number(rawConfirmed);
-    if (!Number.isFinite(value) || value < 0) {
-      throw new TrailingCostsDataGapError(
-        `TM_TRAILING_12M_OPERATING_COSTS="${rawConfirmed}" is not a valid non-negative number.`,
-      );
-    }
-    return {
-      value,
-      sourceIds: ["manual_confirmed_trailing_12m_2026"],
-      notes: "12 kk hoitokulut vahvistettu ajohetkellä (TM_TRAILING_12M_OPERATING_COSTS).",
-      isPlaceholder: false,
-    };
-  }
-
-  if (env.TM_ALLOW_PLACEHOLDER === "1") {
-    return {
-      value: TRAILING_12M_OPERATING_COSTS_PLACEHOLDER,
-      sourceIds: [TRAILING_12M_PLACEHOLDER_SOURCE_ID],
-      notes:
-        "PAIKKAMERKKI - trailing12mOperatingCosts johdettu Kulut-valilehden " +
-        "\"Hoito yhteensa 2025\" -luvusta (34 029,46 e), koska Excelin " +
-        "\"Kuluva kausi 2026\" ei anna 12 kk hoitokuluja. VAHVISTETTAVA " +
-        "tilinpaatoksesta tai muusta luotettavasta lahteesta ennen kuin " +
-        "tata lukua kaytetaan paatoksenteossa.",
-      isPlaceholder: true,
-    };
-  }
-
-  throw new TrailingCostsDataGapError(
-    "DATA GAP: trailing12mOperatingCosts (12 kk hoitokulut) puuttuu Excelistä " +
-      "(\"Kuluva kausi 2026\" ei anna sitä). Anna oikea, vahvistettu luku " +
-      "ympäristömuuttujassa TM_TRAILING_12M_OPERATING_COSTS, tai aja " +
-      "TM_ALLOW_PLACEHOLDER=1 jos hyväksyt näkyvästi merkityn " +
-      "paikkamerkkiarvon (34 029.46, Kulut-välilehden Hoito yhteensä 2025).",
-  );
 }
 
 export interface SeedWorkspace {

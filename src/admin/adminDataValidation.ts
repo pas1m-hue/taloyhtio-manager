@@ -209,8 +209,6 @@ function validateGroupActual(value: GroupActual): void {
 function validateLiquidityBaseline(value: LiquidityBaselineRecord): void {
   if (!isNonEmpty(value.id) || !validDate(value.asOfDate) ||
       !nonNegative(value.currentCash) ||
-      !nonNegative(value.trailing12mOperatingCosts) ||
-      !nonNegative(value.currentAnnualOperatingMargin) ||
       !validSources(value.sourceIds)) {
     throw invalid(`Liquidity baseline ${value.id || "<empty>"} is invalid`);
   }

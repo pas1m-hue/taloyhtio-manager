@@ -182,10 +182,10 @@ Nykyinen `FinancialYear` tukee vain vuosittaisia kokonaissummia. Excelin mukaise
 |-|-|
 |`id`|ei tyhjä|
 |`asOfDate`|kelvollinen päivämäärä|
-|`currentCash`|numero >= 0|
-|`trailing12mOperatingCosts`|numero >= 0|
-|`currentAnnualOperatingMargin`|numero >= 0 — hoitokate (tulot − hoitokulut ilman korjauksia); nimi oli `currentAnnualRepairCollection` ennen refactor/hoitokate-naming -muutosta, tallennettu data luetaan vanhalla nimellä|
+|`currentCash`|numero >= 0 — avaava kassa; ainoa likviditeettisyöte jota ei johdeta tilidatasta (taseen kassa on tilikauden lopun luku, lähtötaso voi olla tuoreempi)|
 |`sourceIds`|vähintään yksi lähde|
+
+12 kk hoitokulut ja hoitokate lasketaan tilidatasta (`computeOperatingCostFigures`, `computeOperatingMarginFigures`) eikä niitä tallenneta tietueeseen. Vanhat tallennetut rivit voivat kantaa kenttiä `trailing12mOperatingCosts` ja `currentAnnualOperatingMargin` (tai sitä edeltänyttä `currentAnnualRepairCollection`); ne pudotetaan luettaessa (`legacyFieldNames.ts`), ja julkaisun `contentFingerprint` tarkistetaan raakaa tallennettua riviä vasten ja normalisoidaan sen jälkeen nykyiseen muotoon (refactor/remove-manual-liquidity-inputs).
 
 ### 5.4 Asset
 

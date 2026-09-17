@@ -30,16 +30,7 @@ export const adminBaselineLiquidity: LiquidityBaselineRecord = {
   id: "liquidity_2025_12_31",
   asOfDate: "2025-12-31",
   currentCash: correctedWorkbookLiquidityBaseline.currentCash,
-  trailing12mOperatingCosts:
-    correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
-  currentAnnualOperatingMargin:
-    correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
-  sourceIds: [
-    correctedWorkbookLiquidityBaseline.sources.currentCash,
-    correctedWorkbookLiquidityBaseline.sources.trailing12mOperatingCosts,
-    correctedWorkbookLiquidityBaseline.sources.currentAnnualOperatingMargin,
-  ],
-  notes: correctedWorkbookLiquidityBaseline.notes.currentAnnualOperatingMargin,
+  sourceIds: [correctedWorkbookLiquidityBaseline.sources.currentCash],
 };
 
 export const adminBaselineSnapshot = createAdminDataSnapshot({

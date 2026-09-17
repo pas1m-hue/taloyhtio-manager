@@ -158,8 +158,6 @@ describe("V2.1 admin manual entry", () => {
       id: "liquidity_2026_12_31",
       asOfDate: "2026-12-31",
       currentCash: 25_000,
-      trailing12mOperatingCosts: 36_000,
-      currentAnnualOperatingMargin: 10_000,
       sourceIds: ["financial_statement_2026"],
     };
     const next = applyAdminBatch(adminBaselineSnapshot, command([
@@ -286,8 +284,6 @@ describe("V2.1 admin manual entry", () => {
           id: "bad",
           asOfDate: "not-a-date",
           currentCash: 1,
-          trailing12mOperatingCosts: 1,
-          currentAnnualOperatingMargin: 1,
           sourceIds: ["x"],
         },
       }),
@@ -433,8 +429,8 @@ describe("V2.1 admin manual entry", () => {
     const liquidity = buildLiquidityForecast({
       projection,
       currentCash: baseline!.currentCash,
-      trailing12mOperatingCosts: baseline!.trailing12mOperatingCosts,
-      currentAnnualOperatingMargin: baseline!.currentAnnualOperatingMargin,
+      trailing12mOperatingCosts: 36_000,
+      currentAnnualOperatingMargin: 10_000,
       horizon: { startYear: 2027, endYear: 2035 },
       apartmentCount: next.housingCompany.apartmentCount,
       totalChargeableAreaM2: 1_245,

@@ -10,7 +10,7 @@ import {
   condensationCostEvidence,
   condensationEvents,
 } from "../fixtures/condensationDamage.js";
-import { correctedWorkbookLiquidityBaseline } from "../fixtures/liquidityBaseline.js";
+import { correctedWorkbookLiquidityBaseline, correctedWorkbookOperatingFigures } from "../fixtures/liquidityBaseline.js";
 import {
   waterHeaterAsset,
   waterHeaterCostEvidence,
@@ -36,7 +36,7 @@ function waterHeaterProjection(): ReturnType<typeof buildProjection> {
 function workbookBuffer(): ReturnType<typeof calculateOperatingBuffer> {
   return calculateOperatingBuffer({
     trailing12mOperatingCosts:
-      correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
+      correctedWorkbookOperatingFigures.trailing12mOperatingCosts,
   });
 }
 
@@ -185,7 +185,7 @@ describe("projectCashPath and findFundingNeed", () => {
       horizon: waterHeaterHorizon,
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       annualOperatingMargin:
-        correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
+        correctedWorkbookOperatingFigures.currentAnnualOperatingMargin,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
     });
     const signal = findFundingNeed(path, waterHeaterHorizon);
@@ -460,7 +460,7 @@ describe("calculateRequiredCollection", () => {
       initialCash: correctedWorkbookLiquidityBaseline.currentCash,
       operatingBufferTarget: workbookBuffer().operatingBufferTarget,
       currentAnnualOperatingMargin:
-        correctedWorkbookLiquidityBaseline.currentAnnualOperatingMargin,
+        correctedWorkbookOperatingFigures.currentAnnualOperatingMargin,
     });
 
     expect(result.knownCostRequiredAnnualCollection).toBe(835.2);
@@ -626,7 +626,7 @@ describe("buildLiquidityForecast", () => {
       horizon: waterHeaterHorizon,
       currentCash: correctedWorkbookLiquidityBaseline.currentCash,
       trailing12mOperatingCosts:
-        correctedWorkbookLiquidityBaseline.trailing12mOperatingCosts,
+        correctedWorkbookOperatingFigures.trailing12mOperatingCosts,
       currentAnnualOperatingMargin: 0,
       totalChargeableAreaM2: 1_000,
       apartmentCount: 20,
