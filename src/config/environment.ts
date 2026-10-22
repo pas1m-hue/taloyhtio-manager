@@ -1,8 +1,6 @@
 import type { PoolConfig } from "pg";
 
 export const DEFAULT_PRODUCTION_PORT = 3000;
-export const DEFAULT_VISITOR_SESSION_TTL_SECONDS = 24 * 60 * 60;
-export const MAX_VISITOR_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const DEFAULT_JWKS_CACHE_TTL_SECONDS = 10 * 60;
 
 export interface ProductionEnvironment {
@@ -13,7 +11,6 @@ export interface ProductionEnvironment {
   readonly databaseUrl: string;
   readonly databasePoolMax: number;
   readonly databaseConnectionTimeoutMs: number;
-  readonly visitorSessionTtlSeconds: number;
   readonly supabaseUrl: string;
   readonly supabaseJwtIssuer: string;
   readonly supabaseJwtAudience: string;
@@ -84,13 +81,6 @@ export function loadProductionEnvironment(
     databaseUrl: database.databaseUrl,
     databasePoolMax: database.databasePoolMax,
     databaseConnectionTimeoutMs: database.databaseConnectionTimeoutMs,
-    visitorSessionTtlSeconds: integerInRange(
-      env.SESSION_TTL_SECONDS,
-      DEFAULT_VISITOR_SESSION_TTL_SECONDS,
-      300,
-      MAX_VISITOR_SESSION_TTL_SECONDS,
-      "SESSION_TTL_SECONDS",
-    ),
     supabaseUrl: withoutTrailingSlash(supabaseUrl),
     supabaseJwtIssuer: withoutTrailingSlash(supabaseJwtIssuer),
     supabaseJwtAudience,

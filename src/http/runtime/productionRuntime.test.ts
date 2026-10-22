@@ -5,7 +5,6 @@ import {
   type JsonWebKey,
   type KeyObject,
 } from "node:crypto";
-import { InMemoryProtectedSessionWorkspaceRepository } from "../../auth/inMemoryProtectedSessionRepository.js";
 import type { JwksKeyProvider, SupportedSupabaseJwtAlgorithm } from "../../auth/jwksClient.js";
 import { InMemoryCompanyAccessRepository } from "../../auth/companyAccessRepository.js";
 import { loadProductionEnvironment } from "../../config/environment.js";
@@ -76,7 +75,6 @@ describe("production runtime composition", () => {
     }]);
     const server = createApplicationHttpRuntime(authentication, {
       publications,
-      sessions: new InMemoryProtectedSessionWorkspaceRepository(),
       access,
     }, { clock: new FixedServerClock(NOW) });
     const token = createToken(pair.privateKey, {
@@ -108,9 +106,7 @@ describe("production runtime composition", () => {
     expect(CONFIG.supabaseJwtAudience).toBe("authenticated");
   });
 
-  it("keeps visitor authentication capability-based rather than Supabase-account based", () => {
-    expect(CONFIG.visitorSessionTtlSeconds).toBe(86_400);
-    expect(CONFIG).not.toHaveProperty("visitorSupabaseAudience");
+  it("carries no service-role key in the production configuration", () => {
     expect(CONFIG).not.toHaveProperty("supabaseServiceRoleKey");
   });
 });

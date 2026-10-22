@@ -26,7 +26,6 @@ describe("production environment", () => {
       supabaseJwtIssuer: "https://project-ref.supabase.co/auth/v1",
       supabaseJwtAudience: "authenticated",
       supabaseJwksUrl: "https://project-ref.supabase.co/auth/v1/.well-known/jwks.json",
-      visitorSessionTtlSeconds: 86_400,
       jwksCacheTtlSeconds: 600,
     });
     expect(new URL(config.databaseUrl).searchParams.get("sslmode")).toBe("verify-full");
@@ -37,7 +36,6 @@ describe("production environment", () => {
       ...BASE,
       PORT: "8080",
       TM_HOST: "127.0.0.1",
-      SESSION_TTL_SECONDS: "3600",
       JWKS_CACHE_TTL_SECONDS: "120",
       DATABASE_POOL_MAX: "8",
       DATABASE_CONNECTION_TIMEOUT_MS: "15000",
@@ -45,7 +43,6 @@ describe("production environment", () => {
     expect(config).toMatchObject({
       port: 8080,
       host: "127.0.0.1",
-      visitorSessionTtlSeconds: 3600,
       jwksCacheTtlSeconds: 120,
       databasePoolMax: 8,
       databaseConnectionTimeoutMs: 15_000,
@@ -110,8 +107,6 @@ describe("production environment", () => {
   it("rejects invalid ports, TTLs and cache durations", () => {
     expect(() => loadProductionEnvironment({ ...BASE, PORT: "0" }))
       .toThrow(/PORT/);
-    expect(() => loadProductionEnvironment({ ...BASE, SESSION_TTL_SECONDS: "299" }))
-      .toThrow(/SESSION_TTL_SECONDS/);
     expect(() => loadProductionEnvironment({ ...BASE, JWKS_CACHE_TTL_SECONDS: "59" }))
       .toThrow(/JWKS_CACHE_TTL_SECONDS/);
   });

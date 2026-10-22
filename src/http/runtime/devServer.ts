@@ -1,12 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { publishAdminData } from "../../publishing/publishAdminData.js";
 import { adminBaselineSnapshot } from "../../fixtures/adminBaseline.js";
 import { loadPostgresMigrations, runPostgresMigrations } from "../../database/migrationRunner.js";
 import { PGliteSqlPool } from "../../database/pgliteSqlPool.js";
 import { PostgresCompanyAccessRepository } from "../../database/postgresCompanyAccessRepository.js";
 import { PostgresPublishingRepository } from "../../database/postgresPublishingRepository.js";
-import { PostgresSessionWorkspaceRepository } from "../../database/postgresSessionRepository.js";
 import { StaticBearerAuthenticationPort } from "./staticBearerAuthentication.js";
 import { createApplicationHttpRuntime } from "./createRuntime.js";
 
@@ -20,7 +18,6 @@ const STARTED_AT = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
 const pool = new PGliteSqlPool();
 await runPostgresMigrations(pool, await loadPostgresMigrations());
 const publications = new PostgresPublishingRepository(pool);
-const sessions = new PostgresSessionWorkspaceRepository(pool);
 const access = new PostgresCompanyAccessRepository(pool);
 
 await publications.initializeAdminData({
@@ -36,15 +33,6 @@ await access.save({
   grantedAt: STARTED_AT,
   grantedBy: "dev-bootstrap",
 });
-await publishAdminData(publications, {
-  companyId: COMPANY_ID,
-  expectedAdminRevision: 0,
-  expectedPublishedVersion: 0,
-  publishedAt: STARTED_AT,
-  publishedBy: SUBJECT_ID,
-  sourceIds: ["dev-bootstrap"],
-  explanation: "Initial local development publication.",
-});
 
 const authentication = new StaticBearerAuthenticationPort(ADMIN_TOKEN, {
   subjectId: SUBJECT_ID,
@@ -58,7 +46,7 @@ const publicDirectory = path.resolve(
 );
 const app = createApplicationHttpRuntime(
   authentication,
-  { publications, sessions, access },
+  { publications, access },
   { logger: true, publicDirectory },
 );
 

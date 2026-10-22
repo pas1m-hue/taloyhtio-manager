@@ -3,11 +3,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { InMemoryAuthenticationPort } from "../auth/authenticationPort.js";
 import { InMemoryCompanyAccessRepository } from "../auth/companyAccessRepository.js";
-import { InMemoryProtectedSessionWorkspaceRepository } from "../auth/inMemoryProtectedSessionRepository.js";
-import { PublicVisitorApplicationFacade } from "../application/publicVisitorFacade.js";
 import { SecuredAdminApplicationFacade } from "../application/securedAdminFacade.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
-import { publishAdminData } from "../publishing/publishAdminData.js";
 import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
 import { FixedServerClock } from "./clock.js";
 import { createHttpServer, type TaloyhtioHttpServer } from "./createHttpServer.js";
@@ -27,15 +24,6 @@ let publications: InMemoryPublishingRepository;
 
 beforeEach(async () => {
   publications = new InMemoryPublishingRepository([adminBaselineSnapshot]);
-  await publishAdminData(publications, {
-    companyId: COMPANY_ID,
-    expectedAdminRevision: 0,
-    expectedPublishedVersion: 0,
-    publishedAt: "2026-07-17T20:00:00.000Z",
-    publishedBy: "admin:pasi",
-    sourceIds: ["initial_publication"],
-    explanation: "Initial publication for HTTP tests.",
-  });
   const authentication = new InMemoryAuthenticationPort({
     [ADMIN_TOKEN]: {
       subjectId: "admin:pasi",
@@ -58,10 +46,8 @@ beforeEach(async () => {
     grantedAt: "2026-01-01T00:00:00.000Z",
     grantedBy: "system",
   }]);
-  const sessions = new InMemoryProtectedSessionWorkspaceRepository();
   server = createHttpServer({
     admin: new SecuredAdminApplicationFacade(authentication, access, publications),
-    visitor: new PublicVisitorApplicationFacade(publications, sessions),
     clock: new FixedServerClock(NOW),
     publicDirectory: PUBLIC_DIR,
   });
@@ -95,105 +81,16 @@ describe("V2.7 HTTP API boundary", () => {
     expect(response.body).not.toContain("<script>");
   });
 
-  it("loads the published visitor overview without authentication", async () => {
-    const response = await server.inject({
-      url: `/api/v1/public/companies/${COMPANY_ID}/overview${HORIZON}`,
-    });
-    expect(response.statusCode).toBe(200);
-    const body = response.json<{ publicationVersion: number; data: { approvedEvents: unknown[] } }>();
-    expect(body.publicationVersion).toBe(1);
-    expect(body.data.approvedEvents.length).toBeGreaterThan(0);
-  });
-
-  it("creates a protected session and never returns the token from later reads", async () => {
-    const created = await createSession();
-    expect(created.statusCode).toBe(201);
-    const handle = created.json<{
-      credential: { sessionId: string; accessToken: string };
-      view: { sessionRevision: number };
-    }>();
-    expect(handle.credential.accessToken.length).toBeGreaterThanOrEqual(32);
-
-    const loaded = await server.inject({
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-      headers: { "x-tm-session-token": handle.credential.accessToken },
-    });
-    expect(loaded.statusCode).toBe(200);
-    expect(loaded.body).not.toContain(handle.credential.accessToken);
-    expect(loaded.json<{ sessionRevision: number }>().sessionRevision).toBe(0);
-  });
-
-  it("rejects a missing or wrong visitor capability", async () => {
-    const handle = (await createSession()).json<{
-      credential: { sessionId: string; accessToken: string };
-    }>();
-    const missing = await server.inject({
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-    });
-    expect(missing.statusCode).toBe(401);
-    expect(missing.json<{ error: { code: string } }>().error.code)
-      .toBe("INVALID_SESSION_CREDENTIAL");
-
-    const wrong = await server.inject({
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-      headers: { "x-tm-session-token": "wrong_token_value_that_is_long_enough_123456" },
-    });
-    expect(wrong.statusCode).toBe(401);
-  });
-
-  it("applies and resets visitor deltas with optimistic locking", async () => {
-    const handle = (await createSession()).json<{
-      credential: { sessionId: string; accessToken: string };
-    }>();
-    const changed = await server.inject({
-      method: "PATCH",
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-      headers: { "x-tm-session-token": handle.credential.accessToken },
-      payload: {
-        expectedRevision: 0,
-        operations: [{ type: "set_horizon", value: { startYear: 2028, endYear: 2040 } }],
-      },
-    });
-    expect(changed.statusCode).toBe(200);
-    expect(changed.json<{ sessionRevision: number; horizon: { startYear: number } }>()
-      .sessionRevision).toBe(1);
-
-    const stale = await server.inject({
-      method: "PATCH",
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-      headers: { "x-tm-session-token": handle.credential.accessToken },
-      payload: {
-        expectedRevision: 0,
-        operations: [{ type: "set_horizon", value: { startYear: 2029, endYear: 2040 } }],
-      },
-    });
-    expect(stale.statusCode).toBe(409);
-    expect(stale.json<{ error: { code: string } }>().error.code)
-      .toBe("SESSION_REVISION_CONFLICT");
-
-    const reset = await server.inject({
-      method: "POST",
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}/reset`,
-      headers: { "x-tm-session-token": handle.credential.accessToken },
-      payload: { expectedRevision: 1 },
-    });
-    expect(reset.statusCode).toBe(200);
-    expect(reset.json<{ changes: { modificationCount: number } }>()
-      .changes.modificationCount).toBe(0);
-  });
-
   it("rejects browser-supplied trusted timestamps", async () => {
-    const handle = (await createSession()).json<{
-      credential: { sessionId: string; accessToken: string };
-    }>();
     const response = await server.inject({
-      method: "PATCH",
-      url: `/api/v1/public/sessions/${handle.credential.sessionId}`,
-      headers: { "x-tm-session-token": handle.credential.accessToken },
+      method: "POST",
+      url: `/api/v1/admin/companies/${COMPANY_ID}/changes`,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
       payload: {
         expectedRevision: 0,
         occurredAt: "2000-01-01T00:00:00.000Z",
-        operations: [{ type: "reset_workspace" }],
+        horizon: { startYear: 2026, endYear: 2057 },
+        operations: [{ type: "save_housing_company", value: adminBaselineSnapshot.housingCompany }],
       },
     });
     expect(response.statusCode).toBe(400);
@@ -255,7 +152,7 @@ describe("V2.7 HTTP API boundary", () => {
     });
   });
 
-  it("rejects actor and publication metadata supplied by the browser", async () => {
+  it("rejects actor metadata supplied by the browser", async () => {
     const actor = await server.inject({
       method: "POST",
       url: `/api/v1/admin/companies/${COMPANY_ID}/changes`,
@@ -268,20 +165,6 @@ describe("V2.7 HTTP API boundary", () => {
       },
     });
     expect(actor.statusCode).toBe(400);
-
-    const publisher = await server.inject({
-      method: "POST",
-      url: `/api/v1/admin/companies/${COMPANY_ID}/publish`,
-      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
-      payload: {
-        expectedAdminRevision: 0,
-        expectedPublishedVersion: 1,
-        publishedBy: "attacker",
-        sourceIds: ["manual"],
-        explanation: "Invalid metadata.",
-      },
-    });
-    expect(publisher.statusCode).toBe(400);
   });
 
   it("maps stale admin writes to HTTP 409", async () => {
@@ -330,15 +213,54 @@ describe("V2.7 HTTP API boundary", () => {
     expect(response.json<{ error: { code: string } }>().error.code)
       .toBe("HTTP_ROUTE_NOT_FOUND");
   });
-});
 
-async function createSession() {
-  return server.inject({
-    method: "POST",
-    url: `/api/v1/public/companies/${COMPANY_ID}/sessions`,
-    payload: {
-      publicationVersion: 1,
-      horizon: { startYear: 2026, endYear: 2057 },
-    },
+  it("answers every removed publication and visitor route with a JSON 404", async () => {
+    // The publication pipeline and the visitor side are gone. Their routes
+    // must fall through to the stable 404, not to a 500 from a missing
+    // dependency - with and without a valid admin token, so the admin
+    // routes cannot be mistaken for an authentication failure either.
+    const removed = [
+      { method: "GET", url: `/api/v1/public/companies/${COMPANY_ID}/overview${HORIZON}` },
+      { method: "POST", url: `/api/v1/public/companies/${COMPANY_ID}/sessions` },
+      { method: "GET", url: "/api/v1/public/sessions/session_1" },
+      { method: "PATCH", url: "/api/v1/public/sessions/session_1" },
+      { method: "POST", url: "/api/v1/public/sessions/session_1/reset" },
+      { method: "POST", url: `/api/v1/admin/companies/${COMPANY_ID}/publish` },
+      { method: "GET", url: `/api/v1/admin/companies/${COMPANY_ID}/publications` },
+    ];
+    for (const route of removed) {
+      for (const headers of [{}, { authorization: `Bearer ${ADMIN_TOKEN}` }]) {
+        const response = await server.inject({
+          method: route.method,
+          url: route.url,
+          headers,
+          ...(route.method === "GET" ? {} : { payload: {} }),
+        });
+        expect(response.statusCode, `${route.method} ${route.url}`).toBe(404);
+        expect(response.json<{ error: { code: string } }>().error.code)
+          .toBe("HTTP_ROUTE_NOT_FOUND");
+      }
+    }
   });
-}
+
+  it("requires a bearer token on every remaining API route except health", async () => {
+    const health = await server.inject({ url: "/api/v1/health" });
+    expect(health.statusCode).toBe(200);
+
+    const protectedRoutes = [
+      { method: "GET", url: `/api/v1/admin/companies/${COMPANY_ID}/workspace${HORIZON}` },
+      { method: "GET", url: `/api/v1/admin/companies/${COMPANY_ID}/preview${HORIZON}` },
+      { method: "POST", url: `/api/v1/admin/companies/${COMPANY_ID}/changes` },
+    ];
+    for (const route of protectedRoutes) {
+      const response = await server.inject({
+        method: route.method,
+        url: route.url,
+        ...(route.method === "GET" ? {} : { payload: {} }),
+      });
+      expect(response.statusCode, `${route.method} ${route.url}`).toBe(401);
+      expect(response.json<{ error: { code: string } }>().error.code)
+        .toBe("UNAUTHENTICATED");
+    }
+  });
+});

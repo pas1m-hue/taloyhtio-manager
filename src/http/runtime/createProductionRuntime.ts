@@ -52,7 +52,6 @@ export async function createProductionRuntime(
     {
       publicDirectory,
       logger: options.logger ?? true,
-      sessionTtlMs: config.visitorSessionTtlSeconds * 1000,
       ...(options.clock === undefined ? {} : { clock: options.clock }),
     },
   );
