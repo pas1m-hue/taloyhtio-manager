@@ -12,10 +12,6 @@ import {
   technicalLifespanFixture,
 } from "../fixtures/maintenanceDocuments.js";
 import { buildAdminDashboardReadModel } from "../readModels/adminDashboard.js";
-import {
-  createPublishedDataSnapshot,
-  fingerprintAdminPublishableContent,
-} from "../publishing/publishedSnapshot.js";
 import { applyAdminBatch } from "./applyAdminBatch.js";
 
 const NOW = "2026-09-11T12:00:00.123+03:00";
@@ -151,31 +147,8 @@ describe("maintenance documents (feature/selvitykset)", () => {
     // The trap from PR #19: adminDashboard lists its collections one by one,
     // and a missing line leaves the new one undefined without a warning.
     const next = applyAdminBatch(adminBaselineSnapshot, command([save(technicalLifespanFixture)]));
-    const model = buildAdminDashboardReadModel(next, undefined, { startYear: 2026, endYear: 2040 });
+    const model = buildAdminDashboardReadModel(next, { startYear: 2026, endYear: 2040 });
 
     expect(model.maintenanceDocuments).toEqual([technicalLifespanFixture]);
-  });
-
-  it("never reaches a publication: no fingerprint change, no published field", () => {
-    const next = applyAdminBatch(adminBaselineSnapshot, command([
-      save(completedWorksFixture),
-      save(maintenanceNeedFixture),
-      save(technicalLifespanFixture),
-    ]));
-
-    expect(fingerprintAdminPublishableContent(next))
-      .toBe(fingerprintAdminPublishableContent(adminBaselineSnapshot));
-
-    const published = createPublishedDataSnapshot(next, {
-      companyId: next.companyId,
-      expectedAdminRevision: next.revision,
-      expectedPublishedVersion: 0,
-      publishedAt: NOW,
-      publishedBy: "admin:test",
-      sourceIds: ["julkaisu"],
-      explanation: "Julkaisu",
-    });
-    expect(published).not.toHaveProperty("maintenanceDocuments");
-    expect(JSON.stringify(published)).not.toContain("Vesikatto, tiili");
   });
 });

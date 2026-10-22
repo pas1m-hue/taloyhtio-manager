@@ -77,7 +77,7 @@ const KNOWN_VIEWS = new Set([
   "finance-summary", "finance-import", "finance-income", "finance-costs-group",
   "finance-costs-account", "group-budget-import", "group-actual-import", "finance-budget",
   "balance-import", "finance-position",
-  "scenarios", "cashpath", "required-collection", "publish", "developer",
+  "scenarios", "cashpath", "required-collection", "developer",
 ]);
 
 // Views that own the right-hand detail panel; navigating to any other view
@@ -140,7 +140,6 @@ function scenarioLabel(scenario) {
 }
 
 const state = {
-  mode: "admin",
   view: "overview",
   admin: null,
   /**
@@ -152,9 +151,6 @@ const state = {
   selection: null,
   selectedFiscalYear: null,
   cashpathScenario: "base",
-  published: null,
-  visitor: null,
-  visitorCredential: readCredential(),
   auth: readAuthSession(),
   staleWorkspace: false,
   /** Set once per admin load so the year filter defaults to the current year without fighting user edits. */
@@ -213,17 +209,10 @@ const horizon = () => ({
 function boot() {
   wireStaticControls();
   wireNavigation();
-  wireModeSwitch();
   renderFinancePlaceholders();
   renderAuthStatus();
   applyRoute();
   checkHealth();
-  if (state.visitorCredential) {
-    loadVisitor().catch(() => {
-      state.visitorCredential = null;
-      sessionStorage.removeItem("tmVisitorCredential");
-    });
-  }
 }
 
 function wireStaticControls() {
@@ -232,7 +221,6 @@ function wireStaticControls() {
   $("#admin-sign-out").addEventListener("click", signOutAdmin);
   $("#admin-load").addEventListener("click", () => loadAdmin());
   $("#admin-preview").addEventListener("click", () => loadAdmin());
-  $("#admin-publish").addEventListener("click", publishAdmin);
   $("#admin-batch-form").addEventListener("submit", saveAdminBatch);
   $("#assets-new").addEventListener("click", () => openAssetEditor("new"));
   $("#assets-filter-category").addEventListener("change", renderAssets);
@@ -278,13 +266,6 @@ function wireStaticControls() {
   $("#balance-import-as-of-date").addEventListener("input", updateBalanceImportPreview);
   $("#finance-position-snapshot").addEventListener("change", renderBalancePosition);
   $("#finance-position-compare").addEventListener("change", renderBalancePosition);
-
-  // Visitor
-  $("#visitor-load-overview").addEventListener("click", loadPublished);
-  $("#visitor-create-session").addEventListener("click", createSession);
-  $("#visitor-reset").addEventListener("click", resetSession);
-  $("#visitor-liquidity-form").addEventListener("submit", saveLiquidity);
-  $("#visitor-custom-event-form").addEventListener("submit", saveCustomEvent);
 
   // Sidebar drawer (mobile)
   $("#sidebar-toggle").addEventListener("click", () => toggleSidebar());
@@ -350,26 +331,6 @@ function applyRoute() {
 
 function navigate(view) {
   window.location.hash = `#/${view}`;
-}
-
-function wireModeSwitch() {
-  for (const tab of $$(".mode-tab")) {
-    tab.addEventListener("click", () => setMode(tab.dataset.mode));
-  }
-}
-
-function setMode(mode) {
-  state.mode = mode;
-  document.body.dataset.appMode = mode;
-  $("#admin-mode").hidden = mode !== "admin";
-  $("#visitor-mode").hidden = mode !== "visitor";
-  $("#sidebar").hidden = mode !== "admin";
-  if (mode !== "admin") closeDetailPanel();
-  for (const tab of $$(".mode-tab")) {
-    const active = tab.dataset.mode === mode;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
-  }
 }
 
 function toggleSidebar(force) {
@@ -529,7 +490,7 @@ function renderAuthStatus() {
   $("#admin-auth-gate").hidden = signedIn;
   $("#admin-workspace").hidden = !signedIn;
   $("#admin-sign-out").disabled = !signedIn;
-  for (const selector of ["#admin-load", "#admin-preview", "#admin-publish", "#assets-new", "#observations-new", "#events-new", "#cost-evidence-new"]) {
+  for (const selector of ["#admin-load", "#admin-preview", "#assets-new", "#observations-new", "#events-new", "#cost-evidence-new"]) {
     $(selector).disabled = !signedIn;
   }
   $("#admin-batch-form button[type=submit]").disabled = !signedIn;
@@ -645,7 +606,6 @@ function renderWorkspace() {
   renderScenarios();
   renderCashpath();
   renderRequiredCollection();
-  renderPublish();
 }
 
 function renderLoadPrompts() {
@@ -664,7 +624,7 @@ function renderLoadPrompts() {
     "#assets-list", "#observations-list", "#events-list", "#cost-evidence-list",
     "#finance-income-body", "#finance-costs-group-body", "#finance-costs-account-body",
     "#finance-budget-body",
-    "#scenarios-body", "#cashpath-body", "#required-collection-body", "#publish-summary",
+    "#scenarios-body", "#cashpath-body", "#required-collection-body",
   ]) {
     $(id).innerHTML = prompt;
   }
@@ -676,19 +636,16 @@ function renderLoadPrompts() {
 function renderOverview() {
   const model = state.admin;
   if (!model) return;
-  const publication = model.publication ?? {};
   const dataGaps = deriveDataGapAssets(model.costEvidence);
   const projectionBase = model.calculations?.projection?.scenarios?.base;
 
   const kpis = [
     ["Työrevisio", model.adminRevision],
-    ["Julkaisuversio", publication.latestPublicationVersion ?? 0],
     ["Aktiiviset rakennusosat", countActiveAssets(model.assets)],
     ["Kirjatut havainnot", model.observations.length],
     ["DATA GAP -rakennusosat", dataGaps.count],
     ["Hyväksytyt tapahtumat", model.counts?.approvedEvents ?? 0],
     ["Tunnetut kustannukset (perusura)", projectionBase ? money(projectionBase.horizonAmount) : "—"],
-    ["Julkaisua odottavat muutokset", publication.publishableChanges ? "Kyllä" : "Ei"],
   ];
 
   const liquidity = model.calculations?.liquidity;
@@ -726,7 +683,6 @@ function renderOverviewFiscal() {
 
 function renderOverviewNotes() {
   const model = state.admin;
-  const publication = model.publication ?? {};
   const notes = [];
 
   const liquidity = model.calculations?.liquidity;
@@ -744,12 +700,6 @@ function renderOverviewNotes() {
     ));
   }
 
-  notes.push(infoCard(
-    "Julkaisu",
-    publication.publishableChanges
-      ? `Työversiossa on julkaistavia muutoksia (${publication.unpublishedAuditEntryCount ?? 0} julkaisematonta audit-merkintää).`
-      : "Ei julkaistavia muutoksia; työversio vastaa viimeisintä julkaisua.",
-  ));
   $("#overview-notes").innerHTML = notes.join("");
 }
 
@@ -3311,7 +3261,7 @@ function renderBalancePosition() {
 
   const reconciliation = computeBalanceReconciliation(snapshot);
   // The divisor arrives computed, from the same module that builds the
-  // liquidity forecast for admin and visitor alike. It used to be computed
+  // liquidity forecast. It used to be computed
   // here in the browser while the buffer target and cash path read the
   // baseline record's hand-entered figure, so one company had two 12-month
   // operating costs: 37 567,84 on this card and 34 029,46 in the cash path.
@@ -3771,43 +3721,6 @@ const LIQUIDITY_FIELD_LABELS = {
   operatingMargin: "Hoitokate (lasketaan tilidatasta)",
 };
 
-/* -------- Publish -------- */
-
-function renderPublish() {
-  const model = state.admin;
-  const publication = model.publication ?? {};
-  $("#publish-summary").innerHTML = [
-    ["Viimeisin julkaisu", publication.latestPublicationVersion ?? 0],
-    ["Julkaistavia muutoksia", publication.publishableChanges ? "Kyllä" : "Ei"],
-    ["Julkaisemattomia merkintöjä", publication.unpublishedAuditEntryCount ?? 0],
-    ["Admin-revisio", model.adminRevision],
-  ].map(kpiCard).join("");
-}
-
-async function publishAdmin() {
-  try {
-    if (!state.admin) await loadAdmin();
-    const form = new FormData($("#admin-publish-form"));
-    setStatus("Julkaistaan…", "busy");
-    const item = await api(`/api/v1/admin/companies/${encodeURIComponent(companyId())}/publish`, {
-      method: "POST",
-      adminToken: await getAdminAccessToken(),
-      body: {
-        expectedAdminRevision: state.admin.adminRevision,
-        expectedPublishedVersion: state.admin.publication.latestPublicationVersion,
-        sourceIds: [String(form.get("sourceId"))],
-        explanation: String(form.get("explanation")),
-      },
-    });
-    setStatus(`Julkaisu ${item.publicationVersion} luotu`);
-    toast(`Julkaisuversio ${item.publicationVersion} luotu.`);
-    await loadAdmin();
-  } catch (error) {
-    setStatus("Julkaisu epäonnistui", "error");
-    showError(error);
-  }
-}
-
 /* -------- Developer batch -------- */
 
 async function saveAdminBatch(event) {
@@ -3818,207 +3731,6 @@ async function saveAdminBatch(event) {
     catch { toast("Virheellinen JSON.", true); return; }
     await sendAdminOperations(operations, { successMessage: "Admin-batch tallennettu." });
   } catch (error) { showError(error); }
-}
-
-/* ---------------------------------------------------------------- visitor (preserved) */
-
-async function loadPublished() {
-  try {
-    state.published = await api(`/api/v1/public/companies/${encodeURIComponent(companyId())}/overview${horizonQuery()}`);
-    renderPublishedSummary(state.published);
-    toast(`Julkaisu ${state.published.publicationVersion} ladattu.`);
-  } catch (error) { showError(error); }
-}
-
-async function createSession() {
-  try {
-    if (!state.published) await loadPublished();
-    const handle = await api(`/api/v1/public/companies/${encodeURIComponent(companyId())}/sessions`, {
-      method: "POST",
-      body: { publicationVersion: state.published.publicationVersion, horizon: horizon() },
-    });
-    state.visitorCredential = handle.credential;
-    sessionStorage.setItem("tmVisitorCredential", JSON.stringify(handle.credential));
-    state.visitor = handle.view;
-    renderVisitor();
-    toast("Visitor-sessio luotu.");
-  } catch (error) { showError(error); }
-}
-
-async function loadVisitor() {
-  if (!state.visitorCredential) throw new Error("Luo ensin visitor-sessio.");
-  state.visitor = await api(`/api/v1/public/sessions/${encodeURIComponent(state.visitorCredential.sessionId)}`, {
-    visitorToken: state.visitorCredential.accessToken,
-  });
-  renderVisitor();
-}
-
-async function applyVisitorOperations(operations) {
-  if (!state.visitorCredential || !state.visitor) throw new Error("Visitor-sessiota ei ole.");
-  state.visitor = await api(`/api/v1/public/sessions/${encodeURIComponent(state.visitorCredential.sessionId)}`, {
-    method: "PATCH",
-    visitorToken: state.visitorCredential.accessToken,
-    body: { expectedRevision: state.visitor.sessionRevision, operations },
-  });
-  renderVisitor();
-}
-
-async function resetSession() {
-  try {
-    if (!state.visitorCredential || !state.visitor) throw new Error("Visitor-sessiota ei ole.");
-    state.visitor = await api(`/api/v1/public/sessions/${encodeURIComponent(state.visitorCredential.sessionId)}/reset`, {
-      method: "POST",
-      visitorToken: state.visitorCredential.accessToken,
-      body: { expectedRevision: state.visitor.sessionRevision },
-    });
-    renderVisitor();
-    toast("Sessio palautettu julkaistuun lähtötilaan.");
-  } catch (error) { showError(error); }
-}
-
-async function saveEventRow(button) {
-  try {
-    const row = button.closest("tr");
-    const amountText = row.querySelector("[data-field=amount]").value.trim();
-    const quantityText = row.querySelector("[data-field=quantity]").value.trim();
-    const operation = {
-      type: "save_event_override",
-      value: {
-        id: `ui_${row.dataset.eventId}_${row.dataset.entryId}`,
-        eventId: row.dataset.eventId,
-        scheduleEntryId: row.dataset.entryId,
-        year: Number(row.querySelector("[data-field=year]").value),
-        amount: amountText === "" ? null : Number(amountText),
-        quantity: quantityText === "" ? null : Number(quantityText),
-        excluded: row.querySelector("[data-field=excluded]").checked,
-        explanation: "Visitorin selainmallinnus",
-      },
-    };
-    await applyVisitorOperations([operation]);
-    toast("Tapahtumarivi päivitetty sessioon.");
-  } catch (error) { showError(error); }
-}
-
-async function saveLiquidity(event) {
-  event.preventDefault();
-  try {
-    const data = new FormData(event.currentTarget);
-    const value = compact({
-      currentCash: optionalNumber(data.get("currentCash")),
-      trailing12mOperatingCosts: optionalNumber(data.get("trailing12mOperatingCosts")),
-      bufferMonths: optionalNumber(data.get("bufferMonths")),
-      annualOperatingMarginByScenario: compact({
-        optimistic: optionalNumber(data.get("optimistic")),
-        base: optionalNumber(data.get("base")),
-        stress: optionalNumber(data.get("stress")),
-      }),
-    });
-    await applyVisitorOperations([{ type: "set_liquidity_overrides", value }]);
-    toast("Likviditeettioletukset päivitetty.");
-  } catch (error) { showError(error); }
-}
-
-async function saveCustomEvent(event) {
-  event.preventDefault();
-  try {
-    const data = new FormData(event.currentTarget);
-    const amount = optionalNumber(data.get("amount"));
-    const id = `custom_${crypto.randomUUID()}`;
-    const row = compact({
-      id: `${id}_row`,
-      scenario: String(data.get("scenario")),
-      year: Number(data.get("year")),
-      amount,
-      explanation: "Visitorin väliaikainen tapahtuma",
-    });
-    await applyVisitorOperations([{
-      type: "save_custom_event",
-      value: {
-        id,
-        assetId: String(data.get("assetId")),
-        title: String(data.get("title")),
-        type: String(data.get("type")),
-        schedule: [row],
-        notes: "Luotu visitor-session aikana",
-      },
-    }]);
-    event.currentTarget.reset();
-    toast("Väliaikainen tapahtuma lisätty sessioon.");
-  } catch (error) { showError(error); }
-}
-
-function renderPublishedSummary(model) {
-  $("#visitor-summary").innerHTML = [
-    ["Julkaisu", model.publicationVersion],
-    ["Rakennusosat", model.data.assets.length],
-    ["Suunnitellut tapahtumat", model.data.approvedEvents.length],
-    ["Toteutunut historia", model.data.actualHistory.length],
-  ].map(kpiCard).join("");
-}
-
-function renderVisitor() {
-  const model = state.visitor;
-  $("#visitor-session-status").textContent = `Sessio ${model.sessionId} · revisio ${model.sessionRevision} · julkaisu ${model.publicationVersion} · muutoksia ${model.changes.modificationCount}`;
-  renderPublishedSummary({ publicationVersion: model.publicationVersion, data: model.publishedData });
-  $("#custom-asset").innerHTML = model.publishedData.assets.map((asset) => `<option value="${escapeHtml(asset.id)}">${escapeHtml(asset.name)}</option>`).join("");
-  $("#visitor-event-rows").innerHTML = model.effectiveApprovedEvents.flatMap((event) =>
-    event.schedule.map((entry) => `
-      <tr data-event-id="${escapeHtml(event.id)}" data-entry-id="${escapeHtml(entry.id)}">
-        <td><strong>${escapeHtml(event.title)}</strong><br><span class="muted">${escapeHtml(event.assetId)}</span></td>
-        <td>${escapeHtml(scenarioLabel(entry.scenario))}</td>
-        <td><input data-field="year" type="number" value="${entry.year}"></td>
-        <td><input data-field="amount" type="number" step="0.01" value="${entry.amount ?? ""}" placeholder="DATA GAP"></td>
-        <td><input data-field="quantity" type="number" step="0.01" value="${entry.quantity ?? ""}"></td>
-        <td><input data-field="excluded" type="checkbox"></td>
-        <td><button class="row-save secondary">Tallenna</button></td>
-      </tr>`)
-  ).join("") || `<tr><td colspan="7" class="muted">Ei tapahtumia.</td></tr>`;
-  for (const button of $$("#visitor-event-rows .row-save")) button.addEventListener("click", () => saveEventRow(button));
-  renderVisitorScenarios(model.projection, model.liquidity);
-  fillLiquidityForm(model);
-}
-
-function renderVisitorScenarios(projection, liquidity) {
-  $("#visitor-scenarios").innerHTML = SCENARIOS.map((scenario) => {
-    const p = projection.scenarios[scenario];
-    const liq = liquidity.status === "available" ? liquidity.forecast.scenarios[scenario] : null;
-    return `<article class="card scenario-card">
-      <h4>${escapeHtml(scenarioLabel(scenario))}</h4>
-      <div class="metric">${money(p.horizonAmount)}</div>
-      <div class="metric-label">tunnetut kustannukset horisontissa</div>
-      <ul>
-        <li>${p.horizonEventCount} tapahtumariviä</li>
-        <li>${p.dataGaps.withinHorizon.length} DATA GAPia</li>
-        ${liq ? `<li>Vaadittu hoitokate ${money(liq.requiredCollection.knownCostRequiredAnnualCollection)}/v</li><li>${liq.fundingNeed.firstFundingNeedYear ? `Ensimmäinen puskurivaje ${liq.fundingNeed.firstFundingNeedYear}` : "Ei puskurivajetta tunnetuilla kustannuksilla"}</li>` : "<li>Likviditeettitiedot puuttuvat</li>"}
-        ${liq ? buildForecastCompletenessLines(liq.requiredCollection.forecastIncompleteReasons, liq.cashPath).map((line) => `<li><span class="${line.tone}">${escapeHtml(line.text)}</span></li>`).join("") : ""}
-      </ul>
-    </article>`;
-  }).join("");
-}
-
-function fillLiquidityForm(model) {
-  const note = $("#visitor-liquidity-note");
-  if (model.liquidity.status !== "available") {
-    if (note) note.textContent = "";
-    return;
-  }
-  const form = $("#visitor-liquidity-form");
-  const a = model.liquidity.assumptions;
-  // The fields are prefilled with figures derived from the publication's
-  // account data, not with next year's forecast. A visitor changing them is
-  // the point of a session; assuming they already include inflation is not.
-  if (note) {
-    note.textContent = buildOperatingMarginNote(
-      model.liquidity.operatingFigures.margin,
-      money,
-    );
-  }
-  form.elements.currentCash.value = a.currentCash;
-  form.elements.trailing12mOperatingCosts.value = a.trailing12mOperatingCosts;
-  form.elements.bufferMonths.value = a.operatingBufferSettings.bufferMonths ?? "";
-  for (const scenario of SCENARIOS) {
-    form.elements[scenario].value = a.annualOperatingMarginByScenario[scenario];
-  }
 }
 
 /* ---------------------------------------------------------------- shared api + view helpers */
@@ -4037,7 +3749,6 @@ async function api(url, options = {}) {
   const headers = { accept: "application/json" };
   if (options.body !== undefined) headers["content-type"] = "application/json";
   if (options.adminToken) headers.authorization = `Bearer ${options.adminToken}`;
-  if (options.visitorToken) headers["x-tm-session-token"] = options.visitorToken;
   const response = await fetch(url, {
     method: options.method ?? "GET",
     headers,
@@ -4197,10 +3908,6 @@ function stateBlock({ kind, title, body, items }) {
   return `<div class="state-block is-${kind}"><h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>${list}</div>`;
 }
 
-function optionalNumber(value) {
-  const text = String(value ?? "").trim();
-  return text === "" ? undefined : Number(text);
-}
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
@@ -4219,9 +3926,6 @@ function percent(value) {
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
-}
-function readCredential() {
-  try { return JSON.parse(sessionStorage.getItem("tmVisitorCredential")); } catch { return null; }
 }
 function toast(message, isError = false) {
   const element = $("#toast");

@@ -19,9 +19,9 @@ export function postgresErrorCode(error: unknown): string | undefined {
  * errors, and passes everything else through untouched.
  *
  * Only 42501 is translated here. The constraint violations (23505, 23503) stay
- * where they are: those mean different things per table — a duplicate
- * publication version is a conflict, a duplicate session id is another — and
- * only the calling repository knows which.
+ * where they are: those mean different things per table — a grant for an
+ * unknown company is ADMIN_DATA_NOT_FOUND, not a broken database — and only
+ * the calling repository knows which.
  *
  * WHY THIS EXISTS. A row-level-security rejection fell through every catch in
  * the repositories, because each one matched only the constraint code it cared

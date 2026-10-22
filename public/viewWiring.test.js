@@ -263,13 +263,11 @@ describe("static finance detail-panel cross-check (vaihe 3B)", () => {
     }
   });
 
-  it("explains why a forecast is incomplete in both the admin and visitor cards", () => {
-    // The visitor card used to show only "N DATA GAPia", which reads as "all
-    // is well" at zero — the same false reassurance in different words. Both
-    // cards build their lines from their own scenario's cash path, so the
-    // years quoted are the ones that card is about.
+  it("explains why a forecast is incomplete in the required-collection card", () => {
+    // A bare "N DATA GAPia" reads as "all is well" at zero. The card builds
+    // its lines from its own scenario's cash path, so the years quoted are
+    // the ones that card is about.
     expect(js).toContain("buildForecastCompletenessLines(\n      rc.forecastIncompleteReasons,");
-    expect(js).toContain("buildForecastCompletenessLines(liq.requiredCollection.forecastIncompleteReasons, liq.cashPath)");
     expect(js).not.toContain("Ennuste puutteellinen (DATA GAP)");
   });
 
@@ -320,7 +318,7 @@ describe("static naming cross-check (refactor/kassan-kehitys)", () => {
     expect(talous).toContain('data-view="cashpath">Kassan kehitys');
     expect(talous.indexOf('data-view="finance-position"')).toBeLessThan(talous.indexOf('data-view="cashpath"'));
     expect(talous.indexOf('data-view="cashpath"')).toBeLessThan(talous.lastIndexOf("</ul>"));
-    const skenaariot = html.slice(html.indexOf("Skenaariot ja likviditeetti"), html.indexOf("Julkaisu</p>"));
+    const skenaariot = html.slice(html.indexOf("Skenaariot ja likviditeetti"), html.indexOf("Asetukset</p>"));
     expect(skenaariot).not.toContain('data-view="cashpath"');
     expect(html).toContain('<h2 id="cashpath-title">Kassan kehitys</h2>');
     // The #/cashpath route is kept so existing bookmarks still resolve.
@@ -340,18 +338,6 @@ describe("static naming cross-check (refactor/kassan-kehitys)", () => {
     expect(js).not.toContain('data-cashpath="${s}">${s}</button>');
     expect(js).not.toContain("<td>${escapeHtml(entry.scenario)}</td>");
     expect(js).not.toContain("<strong>${scenario}:</strong>");
-    // The stored form stays English; only the visitor form's option text is Finnish.
-    expect(html).toContain('<option value="optimistic">Optimistinen</option><option value="base" selected>Perusura</option><option value="stress">Stressi</option>');
-    expect(html).not.toContain("<option>optimistic</option>");
-    expect(html).not.toContain("Optimistic hoitokate");
-  });
-
-  it("uses the genitive when the scenario qualifies a noun", () => {
-    // SCENARIO_LABELS is the nominative for headings; as a qualifier the
-    // noun needs the genitive (Perusuran hoitokate), except the adjective.
-    expect(html).toContain("Optimistinen hoitokate €/v");
-    expect(html).toContain("Perusuran hoitokate €/v");
-    expect(html).toContain("Stressin hoitokate €/v");
   });
 });
 

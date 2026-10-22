@@ -9,7 +9,6 @@ import type {
 } from "../domain/types.js";
 import { createAdminDataSnapshot } from "../admin/applyAdminBatch.js";
 import { buildAdminDashboardReadModel } from "./adminDashboard.js";
-import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
 
@@ -82,7 +81,7 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
   it("exposes observations and costEvidence from the snapshot", () => {
     const admin = snapshotWithMaintenanceData();
 
-    const model = buildAdminDashboardReadModel(admin, undefined, HORIZON);
+    const model = buildAdminDashboardReadModel(admin, HORIZON);
 
     expect(model.observations).toEqual([observation]);
     expect(model.costEvidence).toEqual([dataGapEvidence]);
@@ -94,7 +93,7 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
   it("returns deep clones, not references into the snapshot", () => {
     const admin = snapshotWithMaintenanceData();
 
-    const model = buildAdminDashboardReadModel(admin, undefined, HORIZON);
+    const model = buildAdminDashboardReadModel(admin, HORIZON);
 
     expect(model.observations).not.toBe(admin.observations);
     expect(model.costEvidence).not.toBe(admin.costEvidence);
@@ -119,7 +118,7 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
       updatedBy: "admin:test",
     });
 
-    const model = buildAdminDashboardReadModel(admin, undefined, HORIZON);
+    const model = buildAdminDashboardReadModel(admin, HORIZON);
 
     expect(model.observations).toEqual([]);
     expect(model.costEvidence).toEqual([]);
@@ -129,7 +128,7 @@ describe("buildAdminDashboardReadModel additive maintenance fields", () => {
   });
 });
 
-describe("group-level actuals reach both the admin UI and the publication", () => {
+describe("group-level actuals reach the admin UI", () => {
   const groupActual = {
     id: "income::Hoitovastikkeet::2023",
     group: "Hoitovastikkeet",
@@ -148,81 +147,21 @@ describe("group-level actuals reach both the admin UI and the publication", () =
       groupActuals: [groupActual],
     });
 
-    const model = buildAdminDashboardReadModel(admin, undefined, HORIZON);
+    const model = buildAdminDashboardReadModel(admin, HORIZON);
 
     expect(model.groupActuals).toEqual([groupActual]);
     expect(model.groupActuals).not.toBe(admin.groupActuals);
   });
 
-  it("changes the publishable fingerprint, because the forecast now reads it", () => {
-    // This assertion is the inverse of the one it replaces, and deliberately
-    // so. When group actuals were admin-only display data, importing one had
-    // to leave the publication alone. The published liquidity model now
-    // computes hoitokate and the buffer divisor from account data, and a
-    // group-level actual overrides the account sum it uses — so a publication
-    // made before the import and one made after genuinely differ, and a
-    // fingerprint that hid that would let a visitor session stay pinned to a
-    // publication whose numbers had moved underneath it.
-    const base = snapshotWithMaintenanceData();
-    const withGroupActual = createAdminDataSnapshot({ ...base, groupActuals: [groupActual] });
-
-    expect(fingerprintAdminPublishableContent(withGroupActual))
-      .not.toBe(fingerprintAdminPublishableContent(base));
-  });
-
-  it("still leaves a group budget out of the publication entirely", () => {
-    // What did not change: budgets feed no published calculation, so they stay
-    // admin-only and must not make the workspace look unpublished. Keeping
-    // this beside the assertion above is the point — "publish the account data"
-    // means the minimum the forecast reads, not the finance model wholesale.
-    const base = snapshotWithMaintenanceData();
-    const withGroupBudget = createAdminDataSnapshot({
-      ...base,
-      groupBudgets: [{
-        id: "gb_income_hoitovastikkeet_2026",
-        group: "Hoitovastikkeet",
-        kind: "income" as const,
-        year: 2026,
-        budgetAmount: 44_000,
-        active: true,
-        sourceIds: ["talousarvio_2026"],
-      }],
-    });
-
-    expect(fingerprintAdminPublishableContent(withGroupBudget))
-      .toBe(fingerprintAdminPublishableContent(base));
-  });
 });
 
-describe("the cash path table is admin-only (feature/cashpath-rebuild)", () => {
+describe("the cash path table (feature/cashpath-rebuild)", () => {
   it("reaches the admin UI through the dashboard read model", () => {
-    const model = buildAdminDashboardReadModel(snapshotWithMaintenanceData(), undefined, HORIZON);
+    const model = buildAdminDashboardReadModel(snapshotWithMaintenanceData(), HORIZON);
 
     expect(model.cashPathTable.scenarios.base.rows).toEqual([]);
     expect(model.cashPathTable.completedRepairs).toEqual([]);
-    // The forecast the visitor cards and Vastiketarve read is still there,
-    // untouched, beside it.
+    // The forecast Vastiketarve reads is still there, untouched, beside it.
     expect(model.calculations.liquidity.status).toBe("unavailable");
-  });
-
-  it("does not reach the publication: balance sheets stay out of the fingerprint", () => {
-    // The table reads balance sheets and budgets. Neither feeds a published
-    // calculation, so adding a balance sheet must not make the workspace
-    // look unpublished - the same rule the group budget follows above.
-    const base = snapshotWithMaintenanceData();
-    const withBalanceSheet = createAdminDataSnapshot({
-      ...base,
-      balanceSheetSnapshots: [{
-        id: "tase_2025",
-        asOfDate: "2025-12-31",
-        sourceIds: ["tilinpaatos_2025"],
-        entries: [{ section: "current_assets" as const, key: "rahat", name: "Rahat ja pankkisaamiset", amount: 22_208 }],
-      }],
-    });
-
-    expect(fingerprintAdminPublishableContent(withBalanceSheet))
-      .toBe(fingerprintAdminPublishableContent(base));
-    expect(buildAdminDashboardReadModel(withBalanceSheet, undefined, HORIZON).cashPathTable)
-      .toEqual(buildAdminDashboardReadModel(base, undefined, HORIZON).cashPathTable);
   });
 });

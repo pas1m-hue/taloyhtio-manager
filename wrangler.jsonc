@@ -18,8 +18,7 @@
   "vars": {
     "SUPABASE_JWT_ISSUER": "https://hhbfitngbtchzhvgnevv.supabase.co/auth/v1",
     "SUPABASE_JWT_AUDIENCE": "authenticated",
-    "SUPABASE_JWKS_URL": "https://hhbfitngbtchzhvgnevv.supabase.co/auth/v1/.well-known/jwks.json",
-    "VISITOR_SESSION_TTL_SECONDS": "86400"
+    "SUPABASE_JWKS_URL": "https://hhbfitngbtchzhvgnevv.supabase.co/auth/v1/.well-known/jwks.json"
   },
   "observability": { "enabled": true }
 }

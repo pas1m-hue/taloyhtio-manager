@@ -5,12 +5,11 @@ import {
   type JsonWebKey,
   type KeyObject,
 } from "node:crypto";
-import { InMemoryProtectedSessionWorkspaceRepository } from "../../auth/inMemoryProtectedSessionRepository.js";
 import type { JwksKeyProvider, SupportedSupabaseJwtAlgorithm } from "../../auth/jwksClient.js";
 import { InMemoryCompanyAccessRepository } from "../../auth/companyAccessRepository.js";
 import { loadProductionEnvironment } from "../../config/environment.js";
 import { adminBaselineSnapshot } from "../../fixtures/adminBaseline.js";
-import { InMemoryPublishingRepository } from "../../publishing/publicationRepository.js";
+import { InMemoryAdminDataRepository } from "../../admin/adminRepository.js";
 import { FixedServerClock } from "../clock.js";
 import { createApplicationHttpRuntime } from "./createRuntime.js";
 import { createProductionAuthentication } from "./createProductionRuntime.js";
@@ -65,7 +64,7 @@ describe("production runtime composition", () => {
     const authentication = createProductionAuthentication(CONFIG, {
       getVerificationKey: async () => publicJwk,
     });
-    const publications = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+    const adminData = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
     const access = new InMemoryCompanyAccessRepository([{
       companyId: adminBaselineSnapshot.companyId,
       subjectId: SUBJECT_ID,
@@ -75,8 +74,7 @@ describe("production runtime composition", () => {
       grantedBy: "bootstrap",
     }]);
     const server = createApplicationHttpRuntime(authentication, {
-      publications,
-      sessions: new InMemoryProtectedSessionWorkspaceRepository(),
+      adminData,
       access,
     }, { clock: new FixedServerClock(NOW) });
     const token = createToken(pair.privateKey, {
@@ -108,9 +106,7 @@ describe("production runtime composition", () => {
     expect(CONFIG.supabaseJwtAudience).toBe("authenticated");
   });
 
-  it("keeps visitor authentication capability-based rather than Supabase-account based", () => {
-    expect(CONFIG.visitorSessionTtlSeconds).toBe(86_400);
-    expect(CONFIG).not.toHaveProperty("visitorSupabaseAudience");
+  it("carries no service-role key in the production configuration", () => {
     expect(CONFIG).not.toHaveProperty("supabaseServiceRoleKey");
   });
 });

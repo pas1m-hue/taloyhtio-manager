@@ -92,6 +92,5 @@ The issuer and JWKS URL are derived from `SUPABASE_URL`. A Supabase secret/servi
 - valid user token reaches the admin API
 - expired, anonymous and wrong-project tokens return 401
 - a signed-in user without a company grant receives 403
-- visitor sessions work without a Supabase account
 - production contains no local static admin token
 - database and public application connections use TLS

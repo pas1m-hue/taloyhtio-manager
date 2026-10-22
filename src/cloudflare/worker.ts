@@ -1,10 +1,8 @@
-import { PublicVisitorApplicationFacade } from "../application/publicVisitorFacade.js";
 import { SecuredAdminApplicationFacade } from "../application/securedAdminFacade.js";
 import { RemoteJwksProvider } from "../auth/jwksClient.js";
 import { SupabaseJwtAuthenticationPort } from "../auth/supabaseJwtAuthentication.js";
 import { PostgresCompanyAccessRepository } from "../database/postgresCompanyAccessRepository.js";
-import { PostgresPublishingRepository } from "../database/postgresPublishingRepository.js";
-import { PostgresSessionWorkspaceRepository } from "../database/postgresSessionRepository.js";
+import { PostgresAdminDataRepository } from "../database/postgresAdminRepository.js";
 import { NodePostgresPool } from "../database/sql.js";
 import { createHttpServer } from "../http/createHttpServer.js";
 
@@ -17,7 +15,6 @@ export interface CloudflareEnv {
   readonly SUPABASE_JWT_ISSUER: string;
   readonly SUPABASE_JWT_AUDIENCE: string;
   readonly SUPABASE_JWKS_URL: string;
-  readonly VISITOR_SESSION_TTL_SECONDS?: string;
 }
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -35,8 +32,7 @@ export default {
     });
 
     try {
-      const publications = new PostgresPublishingRepository(pool);
-      const sessions = new PostgresSessionWorkspaceRepository(pool);
+      const adminData = new PostgresAdminDataRepository(pool);
       const access = new PostgresCompanyAccessRepository(pool);
       const authentication = new SupabaseJwtAuthenticationPort({
         issuer: required(env.SUPABASE_JWT_ISSUER, "SUPABASE_JWT_ISSUER"),
@@ -45,14 +41,8 @@ export default {
           jwksUrl: required(env.SUPABASE_JWKS_URL, "SUPABASE_JWKS_URL"),
         }),
       });
-      const admin = new SecuredAdminApplicationFacade(authentication, access, publications);
-      const visitor = new PublicVisitorApplicationFacade(
-        publications,
-        sessions,
-        undefined,
-        sessionTtlMs(env.VISITOR_SESSION_TTL_SECONDS),
-      );
-      const api = createHttpServer({ admin, visitor, logger: true, publicDirectory: "/" });
+      const admin = new SecuredAdminApplicationFacade(authentication, access, adminData);
+      const api = createHttpServer({ admin, logger: true, publicDirectory: "/" });
       const payload = await readPayload(request);
       const headers = Object.fromEntries(request.headers.entries());
       const result = await api.inject({
@@ -97,12 +87,4 @@ async function readPayload(request: Request): Promise<unknown | undefined> {
 function required(value: string | undefined, name: string): string {
   if (value === undefined || value.trim() === "") throw new Error(`${name} is required.`);
   return value;
-}
-
-function sessionTtlMs(value: string | undefined): number {
-  const seconds = value === undefined ? 86_400 : Number(value);
-  if (!Number.isSafeInteger(seconds) || seconds < 300 || seconds > 604_800) {
-    throw new Error("VISITOR_SESSION_TTL_SECONDS is invalid.");
-  }
-  return seconds * 1_000;
 }

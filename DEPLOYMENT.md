@@ -12,9 +12,6 @@ Browser
 
 Admin bearer JWT
   -> local signature verification against Supabase JWKS
-
-Visitor
-  -> anonymous capability session
 ```
 
 The same Node process serves the browser assets and `/api/v1` routes. No CORS configuration is required for the intended same-origin deployment.

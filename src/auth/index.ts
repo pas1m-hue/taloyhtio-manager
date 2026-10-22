@@ -2,8 +2,5 @@ export * from "./authTypes.js";
 export * from "./authenticationPort.js";
 export * from "./authorization.js";
 export * from "./companyAccessRepository.js";
-export * from "./protectedSessionRepository.js";
-export * from "./inMemoryProtectedSessionRepository.js";
-export * from "./sessionCredential.js";
 export * from "./jwksClient.js";
 export * from "./supabaseJwtAuthentication.js";

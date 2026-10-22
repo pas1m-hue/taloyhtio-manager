@@ -6,8 +6,6 @@ The application remains deterministic and non-AI:
 
 ```text
 admin-maintained data
-→ publication
-→ visitor session overrides
 → scenario projection
 → cash path and repair-charge estimate
 ```
@@ -45,7 +43,7 @@ The token must represent a normal authenticated user. `anon`, `service_role`, an
 
 V2.8a intentionally does not accept legacy `HS256` tokens. The later hosted project must use Supabase asymmetric signing keys.
 
-Visitor access remains independent of Supabase Auth. Visitor sessions use server-generated capability tokens, and only their SHA-256 hashes are stored.
+There is no visitor or public API. Every route except `GET /api/v1/health` and the static assets requires an admin bearer token.
 
 ## Local development
 
@@ -120,7 +118,7 @@ src/database/
   runProductionMigrations.ts
 ```
 
-The existing domain, admin, publishing, visitor-session, projection and liquidity modules remain unchanged except for production composition and configurable visitor TTL wiring.
+The existing domain, admin, projection and liquidity modules remain unchanged except for production composition.
 
 ## Production dependencies
 
@@ -152,7 +150,6 @@ DATABASE_CONNECTION_TIMEOUT_MS
 SUPABASE_JWT_ISSUER
 SUPABASE_JWT_AUDIENCE
 JWKS_CACHE_TTL_SECONDS
-SESSION_TTL_SECONDS
 ```
 
 See `.env.production.example` and `DEPLOYMENT.md` for exact constraints.

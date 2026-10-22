@@ -2,7 +2,6 @@ import {
   DomainValidationError,
   type AdminDataOperation,
   type Horizon,
-  type VisitorSessionOperation,
 } from "../domain/types.js";
 import { HttpRequestValidationError } from "./httpErrors.js";
 
@@ -15,27 +14,6 @@ export interface AdminChangesBody {
   readonly expectedRevision: number;
   readonly horizon: Horizon;
   readonly operations: readonly AdminDataOperation[];
-}
-
-export interface AdminPublishBody {
-  readonly expectedAdminRevision: number;
-  readonly expectedPublishedVersion: number;
-  readonly sourceIds: readonly string[];
-  readonly explanation: string;
-}
-
-export interface CreateSessionBody {
-  readonly publicationVersion: number;
-  readonly horizon: Horizon;
-}
-
-export interface VisitorChangesBody {
-  readonly expectedRevision: number;
-  readonly operations: readonly VisitorSessionOperation[];
-}
-
-export interface VisitorResetBody {
-  readonly expectedRevision: number;
 }
 
 export function parseHorizon(query: HorizonQuery): Horizon {
@@ -65,16 +43,6 @@ export function parseAdminCredential(value: string | undefined): string {
     );
   }
   return match[1]!.trim();
-}
-
-export function parseVisitorToken(value: string | string[] | undefined): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new DomainValidationError(
-      "INVALID_SESSION_CREDENTIAL",
-      "Visitor session credential is required.",
-    );
-  }
-  return value.trim();
 }
 
 export function assertNoTrustedMetadata(value: unknown): void {

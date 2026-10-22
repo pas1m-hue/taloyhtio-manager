@@ -24,17 +24,17 @@ export type {
  * liquidity forecast read a hand-entered figure from the liquidity baseline,
  * so the same quantity existed as two numbers that disagreed: 37 567,84 on the
  * Taloudellinen asema card, 34 029,46 in the cash path and buffer target. The
- * forecast is built server-side for admin and visitor alike from one shared
- * composition (buildSnapshotCalculations), so the only place a single
- * implementation can serve both is here. The browser now renders what this
- * returns instead of computing its own.
+ * forecast is built server-side from one composition
+ * (buildSnapshotCalculations), so a single implementation belongs beside it,
+ * here. The browser renders what this returns instead of computing its own.
  *
- * INPUT TYPES ARE DELIBERATELY NARROWER than the admin domain types. A
- * published snapshot carries only a projection of the account data (no account
- * names, no notes, no source ids - see publishedFinancialData.ts), and these
- * interfaces are exactly the fields both sides can supply. The full
- * AdminDataSnapshot collections are structurally assignable to them, so admin
- * passes its rows unchanged and no cast is needed anywhere.
+ * INPUT TYPES ARE NARROWER than the admin domain types: they name only the
+ * fields the calculation reads. The narrowing was originally imposed by the
+ * publication, which carried a reduced projection of the account data; the
+ * publication no longer exists, so nothing requires it any more. It is kept
+ * as is - the AdminDataSnapshot collections are structurally assignable to
+ * these interfaces, so admin passes its rows unchanged and no cast is needed.
+ * Widening them is a separate change, not a consequence of this comment.
  */
 
 export interface CalculationFinancialAccount {
@@ -48,7 +48,7 @@ export interface CalculationFinancialEntry {
   readonly accountCode: string;
   readonly year: number;
   readonly actualAmount?: number;
-  /** Admin-only: a publication never carries a budget figure. */
+  /** Optional: an entry may carry only an actual figure. */
   readonly budgetAmount?: number;
 }
 
@@ -76,9 +76,9 @@ export interface FinancialActualsSource {
 
 /**
  * The actuals source plus the budget side of the same account data. The
- * budget collections are optional so a FinancialActualsSource (a publication,
- * say) still satisfies it: a missing budget side yields an empty budget
- * series, never a zero.
+ * budget collections are optional so a bare FinancialActualsSource still
+ * satisfies it: a missing budget side yields an empty budget series, never a
+ * zero.
  */
 export interface FinancialFiguresSource extends FinancialActualsSource {
   readonly groupBudgets?: readonly CalculationGroupBudget[];
@@ -385,9 +385,9 @@ function sumPresent(
 }
 
 /**
- * Cents. Not cosmetic: admin and visitor must agree exactly, and comparing
- * two independently accumulated float sums for equality is how a difference of
- * 1e-11 becomes a failed integrity check.
+ * Cents. The figures are money, and rounding here keeps float accumulation
+ * noise - a 1e-11 difference between two sums of the same rows - out of every
+ * comparison and display downstream.
  */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;

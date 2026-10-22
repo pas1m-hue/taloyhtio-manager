@@ -4,7 +4,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SecuredAdminApplicationFacade } from "../application/securedAdminFacade.js";
-import type { PublicVisitorApplicationFacade } from "../application/publicVisitorFacade.js";
 import { SystemServerClock, type ServerClock } from "./clock.js";
 import { mapHttpError, type HttpErrorPayload, HttpRequestValidationError } from "./httpErrors.js";
 import {
@@ -12,13 +11,8 @@ import {
   ensureObject,
   parseAdminCredential,
   parseHorizon,
-  parseVisitorToken,
   type AdminChangesBody,
-  type AdminPublishBody,
-  type CreateSessionBody,
   type HorizonQuery,
-  type VisitorChangesBody,
-  type VisitorResetBody,
 } from "./requestParsing.js";
 import { SECURITY_HEADERS } from "./securityHeaders.js";
 
@@ -26,7 +20,6 @@ const BODY_LIMIT = 1_000_000;
 
 export interface HttpServerDependencies {
   readonly admin: SecuredAdminApplicationFacade<string>;
-  readonly visitor: PublicVisitorApplicationFacade;
   readonly clock?: ServerClock;
   readonly publicDirectory?: string;
   readonly logger?: boolean;
@@ -185,19 +178,12 @@ export class TaloyhtioHttpServer {
 
     const adminWorkspace = matchPath(
       request.url.pathname,
-      /^\/api\/v1\/admin\/companies\/([^/]+)\/(workspace|preview|publications)$/,
+      /^\/api\/v1\/admin\/companies\/([^/]+)\/(workspace|preview)$/,
     );
     if (request.method === "GET" && adminWorkspace !== undefined) {
       const companyId = requiredSegment(adminWorkspace, 0);
       const action = requiredSegment(adminWorkspace, 1);
       const credential = parseAdminCredential(request.headers.authorization);
-      if (action === "publications") {
-        return jsonResponse(200, await this.#dependencies.admin.loadPublicationHistory(
-          credential,
-          companyId,
-          this.#clock.now(),
-        ));
-      }
       const horizon = parseHorizon(queryObject(request.url));
       const result = action === "workspace"
         ? await this.#dependencies.admin.loadWorkspace(
@@ -217,96 +203,23 @@ export class TaloyhtioHttpServer {
 
     const adminChange = matchPath(
       request.url.pathname,
-      /^\/api\/v1\/admin\/companies\/([^/]+)\/(changes|publish)$/,
+      /^\/api\/v1\/admin\/companies\/([^/]+)\/changes$/,
     );
     if (request.method === "POST" && adminChange !== undefined) {
       const companyId = requiredSegment(adminChange, 0);
-      const action = requiredSegment(adminChange, 1);
       const credential = parseAdminCredential(request.headers.authorization);
       assertNoTrustedMetadata(request.body);
-      if (action === "changes") {
-        const body = ensureAdminChangesBody(request.body);
-        return jsonResponse(200, await this.#dependencies.admin.applyChanges(
-          credential,
-          {
-            companyId,
-            expectedRevision: body.expectedRevision,
-            operations: body.operations,
-          },
-          body.horizon,
-          this.#clock.now(),
-        ));
-      }
-      const body = ensureAdminPublishBody(request.body);
-      return jsonResponse(200, await this.#dependencies.admin.publish(
+      const body = ensureAdminChangesBody(request.body);
+      return jsonResponse(200, await this.#dependencies.admin.applyChanges(
         credential,
-        { companyId, ...body },
-        this.#clock.now(),
-      ));
-    }
-
-    const publicOverview = matchPath(
-      request.url.pathname,
-      /^\/api\/v1\/public\/companies\/([^/]+)\/overview$/,
-    );
-    if (request.method === "GET" && publicOverview !== undefined) {
-      return jsonResponse(200, await this.#dependencies.visitor.loadPublishedOverview(
-        requiredSegment(publicOverview, 0),
-        parseHorizon(queryObject(request.url)),
-      ));
-    }
-
-    const createSession = matchPath(
-      request.url.pathname,
-      /^\/api\/v1\/public\/companies\/([^/]+)\/sessions$/,
-    );
-    if (request.method === "POST" && createSession !== undefined) {
-      assertNoTrustedMetadata(request.body);
-      const body = ensureCreateSessionBody(request.body);
-      return jsonResponse(201, await this.#dependencies.visitor.createSession(
         {
-          companyId: requiredSegment(createSession, 0),
-          publicationVersion: body.publicationVersion,
-          horizon: body.horizon,
+          companyId,
+          expectedRevision: body.expectedRevision,
+          operations: body.operations,
         },
+        body.horizon,
         this.#clock.now(),
       ));
-    }
-
-    const sessionRoute = matchPath(
-      request.url.pathname,
-      /^\/api\/v1\/public\/sessions\/([^/]+)(?:\/(reset))?$/,
-    );
-    if (sessionRoute !== undefined) {
-      const sessionId = requiredSegment(sessionRoute, 0);
-      const suffix = sessionRoute[1] ?? "";
-      const accessToken = parseVisitorToken(request.headers["x-tm-session-token"]);
-      if (request.method === "GET" && suffix === "") {
-        return jsonResponse(200, await this.#dependencies.visitor.loadScenario(
-          { sessionId, accessToken },
-          this.#clock.now(),
-        ));
-      }
-      assertNoTrustedMetadata(request.body);
-      if (request.method === "PATCH" && suffix === "") {
-        const body = ensureVisitorChangesBody(request.body);
-        return jsonResponse(200, await this.#dependencies.visitor.applyChanges(
-          {
-            sessionId,
-            accessToken,
-            expectedRevision: body.expectedRevision,
-            operations: body.operations,
-          },
-          this.#clock.now(),
-        ));
-      }
-      if (request.method === "POST" && suffix === "reset") {
-        const body = ensureVisitorResetBody(request.body);
-        return jsonResponse(200, await this.#dependencies.visitor.reset(
-          { sessionId, accessToken, expectedRevision: body.expectedRevision },
-          this.#clock.now(),
-        ));
-      }
     }
 
     const staticAsset = staticAssetFor(request.method, request.url.pathname);
@@ -350,53 +263,6 @@ function ensureAdminChangesBody(value: unknown): AdminChangesBody {
   return { expectedRevision: body.expectedRevision, horizon, operations: body.operations };
 }
 
-function ensureAdminPublishBody(value: unknown): AdminPublishBody {
-  const body = ensureObject<Partial<AdminPublishBody>>(value, "Publish body");
-  assertExactKeys(body, [
-    "expectedAdminRevision",
-    "expectedPublishedVersion",
-    "sourceIds",
-    "explanation",
-  ]);
-  if (!nonNegativeInteger(body.expectedAdminRevision) ||
-      !nonNegativeInteger(body.expectedPublishedVersion) ||
-      !nonEmptyStrings(body.sourceIds) || !nonEmptyString(body.explanation)) {
-    throw invalidRequest("Publish body is invalid.");
-  }
-  return body as AdminPublishBody;
-}
-
-function ensureCreateSessionBody(value: unknown): CreateSessionBody {
-  const body = ensureObject<Partial<CreateSessionBody>>(value, "Create session body");
-  assertExactKeys(body, ["publicationVersion", "horizon"]);
-  if (!positiveInteger(body.publicationVersion)) {
-    throw invalidRequest("Publication version must be a positive integer.");
-  }
-  return {
-    publicationVersion: body.publicationVersion,
-    horizon: ensureHorizon(body.horizon),
-  };
-}
-
-function ensureVisitorChangesBody(value: unknown): VisitorChangesBody {
-  const body = ensureObject<Partial<VisitorChangesBody>>(value, "Visitor changes body");
-  assertExactKeys(body, ["expectedRevision", "operations"]);
-  if (!nonNegativeInteger(body.expectedRevision) || !Array.isArray(body.operations) ||
-      body.operations.length === 0) {
-    throw invalidRequest("Visitor changes body is invalid.");
-  }
-  return { expectedRevision: body.expectedRevision, operations: body.operations };
-}
-
-function ensureVisitorResetBody(value: unknown): VisitorResetBody {
-  const body = ensureObject<Partial<VisitorResetBody>>(value, "Visitor reset body");
-  assertExactKeys(body, ["expectedRevision"]);
-  if (!nonNegativeInteger(body.expectedRevision)) {
-    throw invalidRequest("Visitor reset body is invalid.");
-  }
-  return { expectedRevision: body.expectedRevision };
-}
-
 function ensureHorizon(value: unknown): { readonly startYear: number; readonly endYear: number } {
   const candidate = ensureObject<HorizonQuery>(value, "Horizon");
   assertExactKeys(candidate as unknown as Readonly<Record<string, unknown>>, ["startYear", "endYear"]);
@@ -417,15 +283,6 @@ function assertExactKeys(
 
 function nonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
-}
-function positiveInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) > 0;
-}
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
-}
-function nonEmptyStrings(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmptyString);
 }
 function invalidRequest(message: string): HttpRequestValidationError {
   return new HttpRequestValidationError(message);

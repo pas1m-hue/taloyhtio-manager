@@ -240,8 +240,7 @@ export interface BalanceSheetSnapshot {
 /**
  * The three board documents of the Selvitykset view (handoff
  * feature/selvitykset). They are reference text, not calculation input:
- * nothing here reaches the projection, the cash path, the forecast or a
- * publication.
+ * nothing here reaches the projection, the cash path or the forecast.
  *
  * ONE COLLECTION, ONE DOCUMENT PER KIND. Each document is the unit the user
  * works with - a statement is replaced as a whole when it is updated, never
@@ -740,105 +739,6 @@ export interface AdminDataBatchCommand {
   readonly operations: readonly AdminDataOperation[];
 }
 
-/** Approved future events and actual history are the only event states exposed in a publication. */
-export type PublishedBuildingEvent =
-  | (Omit<FutureBuildingEvent, "status"> & { readonly status: "approved" })
-  | ActualBuildingEvent;
-
-/** Immutable public version created from one exact admin workspace revision. */
-/**
- * The account data a publication carries, and no more.
- *
- * A publication exists so the liquidity model can compute its own operating
- * figures instead of reading hand-entered ones, and these are exactly the
- * fields that computation reads (src/finance/operatingFigures.ts). Everything
- * else the admin holds about an account stays admin-side.
- *
- * THE OMISSIONS ARE THE POINT, not an optimisation. `name` and `notes` are
- * where a chart of accounts says which property manager bills what and what a
- * particular bank charge was for; `sourceIds` names internal documents. None
- * of it is needed to compute a number, and a publication is immutable - once
- * something is in one it cannot be taken out again without deleting the whole
- * publication. So the narrowest projection that still computes is also the
- * only one that stays safe to have published forever.
- *
- * These are stored in the publication; they are deliberately NOT part of
- * VisitorPublishedView, so nothing here reaches the unauthenticated public
- * endpoint. See visitorPublishedView.ts and its exclusion test.
- */
-export interface PublishedFinancialAccount {
-  readonly accountCode: string;
-  readonly name?: undefined;
-  readonly kind: FinancialAccountKind;
-  readonly group: string;
-  readonly nature?: FinancialAccountNature;
-}
-
-export interface PublishedFinancialEntry {
-  readonly accountCode: string;
-  readonly year: number;
-  /** Required here: an entry with only a budget figure is never published. */
-  readonly actualAmount: number;
-}
-
-export interface PublishedGroupActual {
-  readonly group: string;
-  readonly kind: FinancialAccountKind;
-  readonly year: number;
-  readonly actualAmount: number;
-  readonly active: boolean;
-}
-
-export interface PublishedDataSnapshot {
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly sourceAdminRevision: number;
-  readonly contentFingerprint: string;
-  readonly housingCompany: HousingCompany;
-  readonly financialYears: readonly FinancialYear[];
-  readonly liquidityBaselines: readonly LiquidityBaselineRecord[];
-  readonly assets: readonly Asset[];
-  readonly observations: readonly Observation[];
-  readonly costEvidence: readonly CostEvidence[];
-  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
-  readonly events: readonly PublishedBuildingEvent[];
-  readonly financialAccounts: readonly PublishedFinancialAccount[];
-  readonly financialEntries: readonly PublishedFinancialEntry[];
-  readonly groupActuals: readonly PublishedGroupActual[];
-  readonly publishedAt: string;
-  readonly publishedBy: string;
-  readonly sourceIds: readonly string[];
-  readonly explanation: string;
-}
-
-export interface PublishAdminDataCommand {
-  readonly companyId: string;
-  readonly expectedAdminRevision: number;
-  /** Zero when the company has never been published. */
-  readonly expectedPublishedVersion: number;
-  readonly publishedAt: string;
-  readonly publishedBy: string;
-  readonly sourceIds: readonly string[];
-  readonly explanation: string;
-}
-
-/** Read model returned to a visitor; it never contains drafts, cancellations, or admin audit data. */
-export interface VisitorPublishedView {
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly sourceAdminRevision: number;
-  readonly publishedAt: string;
-  readonly housingCompany: HousingCompany;
-  readonly financialYears: readonly FinancialYear[];
-  readonly latestLiquidityBaseline?: LiquidityBaselineRecord;
-  readonly assets: readonly Asset[];
-  readonly observations: readonly Observation[];
-  readonly costEvidence: readonly CostEvidence[];
-  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
-  readonly approvedEvents: readonly (Omit<FutureBuildingEvent, "status"> & { readonly status: "approved" })[];
-  readonly actualHistory: readonly ActualBuildingEvent[];
-}
-
 export const DEFAULT_OPERATING_BUFFER_MONTHS = 3.5 as const;
 
 export type OperatingBufferBasis = "suggested" | "user_override";
@@ -846,7 +746,7 @@ export type OperatingBufferBasis = "suggested" | "user_override";
 /**
  * Results of the shared operating-figure calculation
  * (src/finance/operatingFigures.ts). They live here rather than beside the
- * calculation because both read models and the session model carry them, and
+ * calculation because the read models carry them, and
  * a domain type importing from a calculation module would invert the
  * dependency the rest of this file keeps.
  */
@@ -1027,147 +927,6 @@ export interface LiquidityForecastResult {
 }
 
 
-/** Visitor session changes are ephemeral deltas over one immutable publication. */
-export interface SessionEventOverride {
-  readonly id: string;
-  readonly eventId: string;
-  readonly scheduleEntryId: string;
-  readonly excluded?: boolean;
-  readonly year?: number;
-  /** null explicitly changes a numeric row into a named session DATA GAP. */
-  readonly amount?: number | null;
-  /** null explicitly clears an optional quantity. */
-  readonly quantity?: number | null;
-  readonly explanation?: string;
-}
-
-export interface SessionCustomScheduleEntry {
-  readonly id: string;
-  readonly scenario: Scenario;
-  readonly year: number;
-  /** Undefined means a named session DATA GAP, never a silent zero. */
-  readonly amount?: number;
-  readonly quantity?: number;
-  readonly explanation?: string;
-}
-
-export interface SessionCustomEvent {
-  readonly id: string;
-  readonly assetId: string;
-  readonly title: string;
-  readonly type: EventType;
-  readonly schedule: readonly SessionCustomScheduleEntry[];
-  readonly notes?: string;
-}
-
-export interface SessionLiquidityOverrides {
-  readonly currentCash?: number;
-  readonly trailing12mOperatingCosts?: number;
-  readonly bufferMonths?: number;
-  /** null removes a published user override and uses the month-based buffer. */
-  readonly operatingBufferTarget?: number | null;
-  readonly totalChargeableAreaM2?: number;
-  readonly apartmentCount?: number;
-  readonly annualOperatingMarginByScenario?: Partial<
-    Readonly<Record<Scenario, number>>
-  >;
-}
-
-export interface VisitorSessionWorkspace {
-  readonly sessionId: string;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly publicationFingerprint: string;
-  readonly revision: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly expiresAt: string;
-  readonly baseHorizon: Horizon;
-  readonly horizon: Horizon;
-  readonly eventOverrides: readonly SessionEventOverride[];
-  readonly customEvents: readonly SessionCustomEvent[];
-  readonly liquidityOverrides: SessionLiquidityOverrides;
-}
-
-export interface CreateVisitorSessionCommand {
-  readonly sessionId: string;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-  readonly horizon: Horizon;
-}
-
-export type VisitorSessionOperation =
-  | { readonly type: "save_event_override"; readonly value: SessionEventOverride }
-  | { readonly type: "remove_event_override"; readonly overrideId: string }
-  | { readonly type: "save_custom_event"; readonly value: SessionCustomEvent }
-  | { readonly type: "remove_custom_event"; readonly customEventId: string }
-  | { readonly type: "set_horizon"; readonly value: Horizon }
-  | { readonly type: "set_liquidity_overrides"; readonly value: SessionLiquidityOverrides }
-  | { readonly type: "reset_workspace" };
-
-export interface VisitorSessionBatchCommand {
-  readonly sessionId: string;
-  readonly expectedRevision: number;
-  readonly occurredAt: string;
-  readonly operations: readonly VisitorSessionOperation[];
-}
-
-export interface EffectiveSessionData {
-  readonly assets: readonly Asset[];
-  readonly events: readonly BuildingEvent[];
-  readonly costEvidence: readonly CostEvidence[];
-  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
-}
-
-export interface EffectiveSessionLiquidityAssumptions {
-  readonly currentCash: number;
-  readonly trailing12mOperatingCosts: number;
-  readonly operatingBufferSettings: OperatingBufferSettings;
-  readonly totalChargeableAreaM2?: number;
-  readonly apartmentCount?: number;
-  readonly annualOperatingMarginByScenario: Readonly<Record<Scenario, number>>;
-}
-
-export type SessionLiquidityModel =
-  | {
-      readonly status: "available";
-      readonly assumptions: EffectiveSessionLiquidityAssumptions;
-      /**
-       * The derived figures behind the assumptions, so the visitor form can
-       * say which accounting year its defaults are stated in and that they
-       * carry no inflation. Without it the form shows two euro amounts a
-       * visitor would reasonably read as forecasts of next year.
-       */
-      readonly operatingFigures: {
-        readonly costs: OperatingCostFigures | OperatingFiguresUnavailable;
-        readonly margin: OperatingMarginFigures | OperatingFiguresUnavailable;
-      };
-      readonly forecast: LiquidityForecastResult;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly missingFields: readonly (
-        | "currentCash"
-        | "trailing12mOperatingCosts"
-        | "currentAnnualOperatingMargin"
-      )[];
-    };
-
-export interface VisitorSessionModel {
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly publicationFingerprint: string;
-  readonly horizon: Horizon;
-  readonly effectiveApprovedEvents: readonly FutureBuildingEvent[];
-  readonly projection: ProjectionResult;
-  readonly liquidity: SessionLiquidityModel;
-  readonly modificationCount: number;
-}
-
 export type ValidationCode =
   | "INVALID_HORIZON"
   | "DUPLICATE_ASSET_ID"
@@ -1205,24 +964,13 @@ export type ValidationCode =
   | "ADMIN_DATA_NOT_FOUND"
   | "ADMIN_DATA_ALREADY_EXISTS"
   | "ADMIN_REVISION_CONFLICT"
-  | "PUBLISHED_DATA_NOT_FOUND"
-  | "PUBLISHED_VERSION_CONFLICT"
-  | "INVALID_PUBLISHED_DATA"
-  | "NO_PUBLICATION_CHANGES"
-  | "INVALID_SESSION_DATA"
-  | "SESSION_NOT_FOUND"
-  | "SESSION_ALREADY_EXISTS"
-  | "SESSION_REVISION_CONFLICT"
-  | "SESSION_EXPIRED"
   | "DATABASE_MIGRATION_CONFLICT"
   | "DATABASE_INTEGRITY_ERROR"
   | "DATABASE_ACCESS_POLICY_ERROR"
-  | "SESSION_PUBLICATION_MISMATCH"
   | "UNAUTHENTICATED"
   | "INVALID_AUTH_CONTEXT"
   | "ACCESS_DENIED"
-  | "INVALID_ACCESS_GRANT"
-  | "INVALID_SESSION_CREDENTIAL";
+  | "INVALID_ACCESS_GRANT";
 
 export class DomainValidationError extends Error {
   public readonly code: ValidationCode;

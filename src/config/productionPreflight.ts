@@ -10,7 +10,6 @@ try {
     publicAppUrl: config.publicAppUrl,
     databaseHost: new URL(config.databaseUrl).hostname,
     databasePoolMax: config.databasePoolMax,
-    visitorSessionTtlSeconds: config.visitorSessionTtlSeconds,
     supabaseUrl: config.supabaseUrl,
     supabaseJwtIssuer: config.supabaseJwtIssuer,
     supabaseJwtAudience: config.supabaseJwtAudience,
