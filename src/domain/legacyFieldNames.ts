@@ -1,7 +1,4 @@
-import type {
-  LiquidityBaselineRecord,
-  SessionLiquidityOverrides,
-} from "./types.js";
+import type { LiquidityBaselineRecord } from "./types.js";
 
 /**
  * Stored JSONB written under a shape the code no longer uses. The
@@ -35,7 +32,6 @@ const LEGACY_BASELINE_KEYS = [
   "currentAnnualOperatingMargin",
   "currentAnnualRepairCollection",
 ] as const;
-const LEGACY_OVERRIDE_KEY = "annualRepairCollectionByScenario";
 
 export function withoutLegacyBaselineFields(
   record: LiquidityBaselineRecord,
@@ -47,20 +43,6 @@ export function withoutLegacyBaselineFields(
   const rest: Record<string, unknown> = { ...raw };
   for (const key of LEGACY_BASELINE_KEYS) delete rest[key];
   return rest as unknown as LiquidityBaselineRecord;
-}
-
-export function withRenamedOverrideField(
-  overrides: SessionLiquidityOverrides,
-): SessionLiquidityOverrides {
-  const raw = overrides as SessionLiquidityOverrides & {
-    [LEGACY_OVERRIDE_KEY]?: SessionLiquidityOverrides["annualOperatingMarginByScenario"];
-  };
-  if (raw[LEGACY_OVERRIDE_KEY] === undefined ||
-      raw.annualOperatingMarginByScenario !== undefined) {
-    return overrides;
-  }
-  const { [LEGACY_OVERRIDE_KEY]: legacy, ...rest } = raw;
-  return { ...rest, annualOperatingMarginByScenario: legacy };
 }
 
 /**

@@ -3,10 +3,8 @@ import type {
   AdminDataBatchCommand,
   BuildingEvent,
   CostEvidence,
-  CreateVisitorSessionCommand,
   Horizon,
   PublishAdminDataCommand,
-  VisitorSessionBatchCommand,
 } from "../domain/types.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
 import {
@@ -14,7 +12,6 @@ import {
   financialActualsFixture,
 } from "../fixtures/financialActuals.js";
 import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
-import { InMemorySessionWorkspaceRepository } from "../session/sessionRepository.js";
 import {
   applyAdminChanges,
   loadAdminWorkspace,
@@ -24,20 +21,9 @@ import {
   loadPublicationHistory,
   publishAdminRevision,
 } from "./publishingApplicationService.js";
-import {
-  applyVisitorSessionChanges,
-  createVisitorSession,
-  loadPublishedOverview,
-  loadVisitorScenario,
-  resetVisitorSession,
-} from "./visitorApplicationService.js";
-
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
 const PUBLISHED_AT = "2026-07-17T19:00:00+03:00";
-const SESSION_CREATED_AT = "2026-07-17T20:00:00+03:00";
-const SESSION_UPDATED_AT = "2026-07-17T20:15:00+03:00";
-const SESSION_EXPIRES_AT = "2026-07-18T20:00:00+03:00";
 
 function publishCommand(
   expectedAdminRevision: number,
@@ -155,30 +141,6 @@ function suggestedOnlyOperations(): AdminDataBatchCommand["operations"] {
       explanation: "Store suggested event draft.",
     },
   ];
-}
-
-function sessionCommand(): CreateVisitorSessionCommand {
-  return {
-    sessionId: "visitor-app-session",
-    companyId: COMPANY_ID,
-    publicationVersion: 1,
-    createdAt: SESSION_CREATED_AT,
-    expiresAt: SESSION_EXPIRES_AT,
-    horizon: HORIZON,
-  };
-}
-
-function sessionBatch(
-  expectedRevision: number,
-  operations: VisitorSessionBatchCommand["operations"],
-  occurredAt = SESSION_UPDATED_AT,
-): VisitorSessionBatchCommand {
-  return {
-    sessionId: "visitor-app-session",
-    expectedRevision,
-    occurredAt,
-    operations,
-  };
 }
 
 async function publishedRepository() {
@@ -335,107 +297,7 @@ describe("V2.4 application services and UI read models", () => {
     expect(again.versions[0]!.sourceIds).not.toContain("mutated");
   });
 
-  it("builds a visitor overview only from the latest immutable publication", async () => {
-    const repository = await publishedRepository();
-    await applyAdminChanges(repository, adminBatch(0, suggestedOnlyOperations()), HORIZON);
-    const overview = await loadPublishedOverview(repository, COMPANY_ID, HORIZON);
-    expect(overview.publicationVersion).toBe(1);
-    expect(overview.data.approvedEvents.length).toBeGreaterThan(0);
-    expect(overview.data.approvedEvents.some((event) =>
-      event.id === "event_suggested_window_study"
-    )).toBe(false);
-    expect(overview.calculations.projection.suggestions).toEqual([]);
-  });
-
-  it("fails loudly before the first publication", async () => {
-    const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
-    await expect(loadPublishedOverview(repository, COMPANY_ID, HORIZON))
-      .rejects.toMatchObject({ code: "PUBLISHED_DATA_NOT_FOUND" });
-  });
-
-  it("creates a complete session-only visitor scenario read model", async () => {
-    const publications = await publishedRepository();
-    const sessions = new InMemorySessionWorkspaceRepository();
-    const view = await createVisitorSession(publications, sessions, sessionCommand());
-    expect(view.persistenceMode).toBe("session_only");
-    expect(view.sessionRevision).toBe(0);
-    expect(view.changes.modificationCount).toBe(0);
-    expect(view.publishedData.publicationVersion).toBe(1);
-    expect(view.liquidity.status).toBe("available");
-  });
-
-  it("applies visitor changes and returns one refreshed UI model", async () => {
-    const publications = await publishedRepository();
-    const sessions = new InMemorySessionWorkspaceRepository();
-    await createVisitorSession(publications, sessions, sessionCommand());
-    const view = await applyVisitorSessionChanges(
-      publications,
-      sessions,
-      sessionBatch(0, [{
-        type: "save_event_override",
-        value: {
-          id: "override-facade",
-          eventId: "event_exterior_wall_painting",
-          scheduleEntryId: "base_2032",
-          year: 2030,
-          amount: 10_000,
-          explanation: "Visitor test scenario.",
-        },
-      }]),
-    );
-    expect(view.sessionRevision).toBe(1);
-    expect(view.changes.modificationCount).toBe(1);
-    expect(view.changes.eventOverrides).toHaveLength(1);
-    expect(view.projection.scenarios.base.years
-      .find((year) => year.year === 2030)?.amount).toBe(10_000);
-  });
-
-  it("resets all visitor deltas without changing the pinned publication", async () => {
-    const publications = await publishedRepository();
-    const sessions = new InMemorySessionWorkspaceRepository();
-    await createVisitorSession(publications, sessions, sessionCommand());
-    await applyVisitorSessionChanges(
-      publications,
-      sessions,
-      sessionBatch(0, [{
-        type: "set_horizon",
-        value: { startYear: 2030, endYear: 2040 },
-      }]),
-    );
-    const reset = await resetVisitorSession(publications, sessions, {
-      sessionId: "visitor-app-session",
-      expectedRevision: 1,
-      occurredAt: "2026-07-17T20:30:00+03:00",
-    });
-    expect(reset.sessionRevision).toBe(2);
-    expect(reset.horizon).toEqual(HORIZON);
-    expect(reset.changes.modificationCount).toBe(0);
-    expect(reset.publicationVersion).toBe(1);
-  });
-
-  it("keeps an open session pinned when a newer publication is created", async () => {
-    const publications = await publishedRepository();
-    const sessions = new InMemorySessionWorkspaceRepository();
-    await createVisitorSession(publications, sessions, sessionCommand());
-    await applyAdminChanges(publications, adminBatch(0, numericEventOperations()), HORIZON);
-    await publishAdminRevision(
-      publications,
-      publishCommand(1, 1, "2026-07-17T21:00:00+03:00"),
-    );
-    const session = await loadVisitorScenario(
-      publications,
-      sessions,
-      "visitor-app-session",
-      "2026-07-17T21:15:00+03:00",
-    );
-    const current = await loadPublishedOverview(publications, COMPANY_ID, HORIZON);
-    expect(session.publicationVersion).toBe(1);
-    expect(current.publicationVersion).toBe(2);
-    expect(session.projection.scenarios.base.horizonAmount).toBe(0);
-    expect(current.calculations.projection.scenarios.base.horizonAmount).toBe(12_500);
-  });
-
-  it("propagates stale admin and session revisions as explicit conflicts", async () => {
+  it("propagates a stale admin revision as an explicit conflict", async () => {
     const publications = await publishedRepository();
     await applyAdminChanges(publications, adminBatch(0, numericEventOperations()), HORIZON);
     await expect(applyAdminChanges(
@@ -443,40 +305,14 @@ describe("V2.4 application services and UI read models", () => {
       adminBatch(0, numericEventOperations("another_event")),
       HORIZON,
     )).rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
-
-    const sessions = new InMemorySessionWorkspaceRepository();
-    await createVisitorSession(publications, sessions, sessionCommand());
-    await applyVisitorSessionChanges(
-      publications,
-      sessions,
-      sessionBatch(0, [{ type: "set_horizon", value: { startYear: 2027, endYear: 2040 } }]),
-    );
-    await expect(applyVisitorSessionChanges(
-      publications,
-      sessions,
-      sessionBatch(0, [{ type: "set_horizon", value: { startYear: 2028, endYear: 2041 } }]),
-    )).rejects.toMatchObject({ code: "SESSION_REVISION_CONFLICT" });
   });
 
-  it("does not let read-model mutation alter stored admin, publication, or session state", async () => {
+  it("does not let read-model mutation alter stored admin state", async () => {
     const publications = await publishedRepository();
-    const sessions = new InMemorySessionWorkspaceRepository();
     const admin = await loadAdminWorkspace(publications, COMPANY_ID, HORIZON);
     ((admin.assets as unknown) as { name: string }[])[0]!.name = "mutated";
-    const overview = await loadPublishedOverview(publications, COMPANY_ID, HORIZON);
-    ((overview.data.assets as unknown) as { name: string }[])[0]!.name = "mutated";
-    const session = await createVisitorSession(publications, sessions, sessionCommand());
-    ((session.publishedData.assets as unknown) as { name: string }[])[0]!.name = "mutated";
 
     expect((await loadAdminWorkspace(publications, COMPANY_ID, HORIZON)).assets[0]!.name)
       .not.toBe("mutated");
-    expect((await loadPublishedOverview(publications, COMPANY_ID, HORIZON)).data.assets[0]!.name)
-      .not.toBe("mutated");
-    expect((await loadVisitorScenario(
-      publications,
-      sessions,
-      "visitor-app-session",
-      SESSION_UPDATED_AT,
-    )).publishedData.assets[0]!.name).not.toBe("mutated");
   });
 });

@@ -1,10 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdminDataBatchCommand,
-  CreateVisitorSessionCommand,
-  Horizon,
   PublishAdminDataCommand,
-  VisitorSessionBatchCommand,
 } from "../domain/types.js";
 import { DomainValidationError } from "../domain/types.js";
 import { applyAdminBatch } from "../admin/applyAdminBatch.js";
@@ -12,11 +9,6 @@ import { commitAdminBatch } from "../admin/adminEntryService.js";
 import { publishAdminRevision } from "../application/publishingApplicationService.js";
 import { buildVisitorPublishedView } from "../publishing/visitorPublishedView.js";
 import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
-import {
-  applyVisitorSessionChanges,
-  createVisitorSession,
-  loadVisitorScenario,
-} from "../application/visitorApplicationService.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
 import { financialActualsFixture } from "../fixtures/financialActuals.js";
 import { buildSnapshotCalculations } from "../readModels/calculationReadModel.js";
@@ -28,13 +20,9 @@ import {
 } from "./migrationRunner.js";
 import { PGliteSqlPool } from "./pgliteSqlPool.js";
 import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
-import { PostgresSessionWorkspaceRepository } from "./postgresSessionRepository.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
-const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
 const PUBLISHED_AT = "2026-07-17T19:00:00.451+03:00";
-const SESSION_CREATED_AT = "2026-07-17T20:00:00.317+03:00";
-const SESSION_EXPIRES_AT = "2026-07-18T20:00:00.884+03:00";
 
 
 function publishCommand(
@@ -71,40 +59,9 @@ function adminBatch(
   };
 }
 
-function sessionCommand(
-  sessionId = "visitor-db-session",
-  createdAt = SESSION_CREATED_AT,
-  expiresAt = SESSION_EXPIRES_AT,
-): CreateVisitorSessionCommand {
-  return {
-    sessionId,
-    companyId: COMPANY_ID,
-    publicationVersion: 1,
-    createdAt,
-    expiresAt,
-    horizon: HORIZON,
-  };
-}
-
-function sessionBatch(
-  expectedRevision: number,
-  sessionId = "visitor-db-session",
-): VisitorSessionBatchCommand {
-  return {
-    sessionId,
-    expectedRevision,
-    occurredAt: "2026-07-17T20:15:00+03:00",
-    operations: [{
-      type: "set_horizon",
-      value: { startYear: 2027, endYear: 2040 },
-    }],
-  };
-}
-
 let pool: PGliteSqlPool;
 let migrations: readonly SqlMigration[];
 let publications: PostgresPublishingRepository;
-let sessions: PostgresSessionWorkspaceRepository;
 
 beforeAll(async () => {
   pool = new PGliteSqlPool();
@@ -113,12 +70,10 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("DELETE FROM tm_visitor_sessions");
   await pool.query("DELETE FROM tm_company_access_grants");
   await pool.query("DELETE FROM tm_publications");
   await pool.query("DELETE FROM tm_admin_snapshots");
   publications = new PostgresPublishingRepository(pool);
-  sessions = new PostgresSessionWorkspaceRepository(pool);
 });
 
 afterAll(async () => {
@@ -754,122 +709,5 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     // The create entry is still there: deleting the row does not delete its history.
     expect(reloaded!.auditTrail.some((item) =>
       item.entityKey === "asset_typo_row" && item.operation === "create")).toBe(true);
-  });
-});
-
-describe("V2.5 PostgreSQL visitor-session repository", () => {
-  beforeEach(async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-  });
-
-  it("persists a visitor session and its optimistic revision", async () => {
-    const created = await createVisitorSession(
-      publications,
-      sessions,
-      sessionCommand(),
-    );
-    expect(created.sessionRevision).toBe(0);
-    const changed = await applyVisitorSessionChanges(
-      publications,
-      sessions,
-      sessionBatch(0),
-    );
-    expect(changed.sessionRevision).toBe(1);
-    expect(changed.horizon).toEqual({ startYear: 2027, endYear: 2040 });
-
-    const restarted = new PostgresSessionWorkspaceRepository(pool);
-    const reloaded = await loadVisitorScenario(
-      publications,
-      restarted,
-      "visitor-db-session",
-      "2026-07-17T20:30:00+03:00",
-    );
-    expect(reloaded.sessionRevision).toBe(1);
-  });
-
-  it("reads a session's liquidity override stored under the old field name", async () => {
-    await createVisitorSession(publications, sessions, sessionCommand());
-    await applyVisitorSessionChanges(publications, sessions, {
-      ...sessionBatch(0),
-      operations: [{
-        type: "set_liquidity_overrides",
-        value: { annualOperatingMarginByScenario: { base: 12_000 } },
-      }],
-    });
-    // A session inside its TTL, written before the rename.
-    await pool.query(
-      `UPDATE tm_visitor_sessions
-       SET payload = replace(payload::text, 'annualOperatingMarginByScenario', 'annualRepairCollectionByScenario')::jsonb
-       WHERE session_id = $1`,
-      ["visitor-db-session"],
-    );
-
-    const loaded = await sessions.load("visitor-db-session");
-    expect(loaded?.liquidityOverrides.annualOperatingMarginByScenario).toEqual({ base: 12_000 });
-    expect(loaded?.liquidityOverrides).not.toHaveProperty("annualRepairCollectionByScenario");
-  });
-
-  it("rejects duplicate sessions and stale browser revisions", async () => {
-    await createVisitorSession(publications, sessions, sessionCommand());
-    await expect(createVisitorSession(publications, sessions, sessionCommand()))
-      .rejects.toMatchObject({ code: "SESSION_ALREADY_EXISTS" });
-    await applyVisitorSessionChanges(publications, sessions, sessionBatch(0));
-    await expect(applyVisitorSessionChanges(publications, sessions, sessionBatch(0)))
-      .rejects.toMatchObject({ code: "SESSION_REVISION_CONFLICT" });
-  });
-
-  it("enforces publication foreign keys even when called below the service layer", async () => {
-    const workspace = await sessions.load("missing");
-    expect(workspace).toBeUndefined();
-    const invalid = {
-      ...(await (async () => {
-        const created = await createVisitorSession(
-          publications,
-          sessions,
-          sessionCommand("temporary-valid"),
-        );
-        return created;
-      })()),
-    };
-    await sessions.delete("temporary-valid");
-
-    const raw = {
-      sessionId: "orphan",
-      companyId: COMPANY_ID,
-      publicationVersion: 999,
-      publicationFingerprint: invalid.publicationFingerprint,
-      revision: 0,
-      createdAt: SESSION_CREATED_AT,
-      updatedAt: SESSION_CREATED_AT,
-      expiresAt: SESSION_EXPIRES_AT,
-      baseHorizon: HORIZON,
-      horizon: HORIZON,
-      eventOverrides: [],
-      customEvents: [],
-      liquidityOverrides: {},
-    } as const;
-    await expect(sessions.create(raw))
-      .rejects.toMatchObject({ code: "PUBLISHED_DATA_NOT_FOUND" });
-  });
-
-  it("deletes only expired sessions through the TTL maintenance hook", async () => {
-    await createVisitorSession(
-      publications,
-      sessions,
-      sessionCommand(
-        "expired",
-        "2026-07-17T19:10:00.062+03:00",
-        "2026-07-17T19:30:00.929+03:00",
-      ),
-    );
-    await createVisitorSession(
-      publications,
-      sessions,
-      sessionCommand("active"),
-    );
-    expect(await sessions.deleteExpired("2026-07-17T20:00:00.500+03:00")).toBe(1);
-    expect(await sessions.load("expired")).toBeUndefined();
-    expect(await sessions.load("active")).toBeDefined();
   });
 });

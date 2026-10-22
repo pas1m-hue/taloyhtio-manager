@@ -1027,147 +1027,6 @@ export interface LiquidityForecastResult {
 }
 
 
-/** Visitor session changes are ephemeral deltas over one immutable publication. */
-export interface SessionEventOverride {
-  readonly id: string;
-  readonly eventId: string;
-  readonly scheduleEntryId: string;
-  readonly excluded?: boolean;
-  readonly year?: number;
-  /** null explicitly changes a numeric row into a named session DATA GAP. */
-  readonly amount?: number | null;
-  /** null explicitly clears an optional quantity. */
-  readonly quantity?: number | null;
-  readonly explanation?: string;
-}
-
-export interface SessionCustomScheduleEntry {
-  readonly id: string;
-  readonly scenario: Scenario;
-  readonly year: number;
-  /** Undefined means a named session DATA GAP, never a silent zero. */
-  readonly amount?: number;
-  readonly quantity?: number;
-  readonly explanation?: string;
-}
-
-export interface SessionCustomEvent {
-  readonly id: string;
-  readonly assetId: string;
-  readonly title: string;
-  readonly type: EventType;
-  readonly schedule: readonly SessionCustomScheduleEntry[];
-  readonly notes?: string;
-}
-
-export interface SessionLiquidityOverrides {
-  readonly currentCash?: number;
-  readonly trailing12mOperatingCosts?: number;
-  readonly bufferMonths?: number;
-  /** null removes a published user override and uses the month-based buffer. */
-  readonly operatingBufferTarget?: number | null;
-  readonly totalChargeableAreaM2?: number;
-  readonly apartmentCount?: number;
-  readonly annualOperatingMarginByScenario?: Partial<
-    Readonly<Record<Scenario, number>>
-  >;
-}
-
-export interface VisitorSessionWorkspace {
-  readonly sessionId: string;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly publicationFingerprint: string;
-  readonly revision: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly expiresAt: string;
-  readonly baseHorizon: Horizon;
-  readonly horizon: Horizon;
-  readonly eventOverrides: readonly SessionEventOverride[];
-  readonly customEvents: readonly SessionCustomEvent[];
-  readonly liquidityOverrides: SessionLiquidityOverrides;
-}
-
-export interface CreateVisitorSessionCommand {
-  readonly sessionId: string;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-  readonly horizon: Horizon;
-}
-
-export type VisitorSessionOperation =
-  | { readonly type: "save_event_override"; readonly value: SessionEventOverride }
-  | { readonly type: "remove_event_override"; readonly overrideId: string }
-  | { readonly type: "save_custom_event"; readonly value: SessionCustomEvent }
-  | { readonly type: "remove_custom_event"; readonly customEventId: string }
-  | { readonly type: "set_horizon"; readonly value: Horizon }
-  | { readonly type: "set_liquidity_overrides"; readonly value: SessionLiquidityOverrides }
-  | { readonly type: "reset_workspace" };
-
-export interface VisitorSessionBatchCommand {
-  readonly sessionId: string;
-  readonly expectedRevision: number;
-  readonly occurredAt: string;
-  readonly operations: readonly VisitorSessionOperation[];
-}
-
-export interface EffectiveSessionData {
-  readonly assets: readonly Asset[];
-  readonly events: readonly BuildingEvent[];
-  readonly costEvidence: readonly CostEvidence[];
-  readonly priceLevelConfirmations: readonly PriceLevelConfirmation[];
-}
-
-export interface EffectiveSessionLiquidityAssumptions {
-  readonly currentCash: number;
-  readonly trailing12mOperatingCosts: number;
-  readonly operatingBufferSettings: OperatingBufferSettings;
-  readonly totalChargeableAreaM2?: number;
-  readonly apartmentCount?: number;
-  readonly annualOperatingMarginByScenario: Readonly<Record<Scenario, number>>;
-}
-
-export type SessionLiquidityModel =
-  | {
-      readonly status: "available";
-      readonly assumptions: EffectiveSessionLiquidityAssumptions;
-      /**
-       * The derived figures behind the assumptions, so the visitor form can
-       * say which accounting year its defaults are stated in and that they
-       * carry no inflation. Without it the form shows two euro amounts a
-       * visitor would reasonably read as forecasts of next year.
-       */
-      readonly operatingFigures: {
-        readonly costs: OperatingCostFigures | OperatingFiguresUnavailable;
-        readonly margin: OperatingMarginFigures | OperatingFiguresUnavailable;
-      };
-      readonly forecast: LiquidityForecastResult;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly missingFields: readonly (
-        | "currentCash"
-        | "trailing12mOperatingCosts"
-        | "currentAnnualOperatingMargin"
-      )[];
-    };
-
-export interface VisitorSessionModel {
-  readonly sessionId: string;
-  readonly sessionRevision: number;
-  readonly companyId: string;
-  readonly publicationVersion: number;
-  readonly publicationFingerprint: string;
-  readonly horizon: Horizon;
-  readonly effectiveApprovedEvents: readonly FutureBuildingEvent[];
-  readonly projection: ProjectionResult;
-  readonly liquidity: SessionLiquidityModel;
-  readonly modificationCount: number;
-}
-
 export type ValidationCode =
   | "INVALID_HORIZON"
   | "DUPLICATE_ASSET_ID"
@@ -1209,20 +1068,13 @@ export type ValidationCode =
   | "PUBLISHED_VERSION_CONFLICT"
   | "INVALID_PUBLISHED_DATA"
   | "NO_PUBLICATION_CHANGES"
-  | "INVALID_SESSION_DATA"
-  | "SESSION_NOT_FOUND"
-  | "SESSION_ALREADY_EXISTS"
-  | "SESSION_REVISION_CONFLICT"
-  | "SESSION_EXPIRED"
   | "DATABASE_MIGRATION_CONFLICT"
   | "DATABASE_INTEGRITY_ERROR"
   | "DATABASE_ACCESS_POLICY_ERROR"
-  | "SESSION_PUBLICATION_MISMATCH"
   | "UNAUTHENTICATED"
   | "INVALID_AUTH_CONTEXT"
   | "ACCESS_DENIED"
-  | "INVALID_ACCESS_GRANT"
-  | "INVALID_SESSION_CREDENTIAL";
+  | "INVALID_ACCESS_GRANT";
 
 export class DomainValidationError extends Error {
   public readonly code: ValidationCode;
