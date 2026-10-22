@@ -26,7 +26,7 @@ The Worker uses the existing `HYPERDRIVE` binding and serves `public/` as static
 - `GET /api/v1/health` must return status `ok`.
 - `/` must return the browser UI.
 - Admin requests require a real Supabase access token.
-- Visitor sessions remain anonymous and database-backed.
+- Every other `/api/` route requires a real Supabase access token; there is no public API.
 
 ## Security
 - Hyperdrive stores the database credentials; they are not placed in GitHub.
