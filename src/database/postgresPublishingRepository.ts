@@ -1,18 +1,10 @@
 import { validateAdminDataSnapshot } from "../admin/adminDataValidation.js";
-import type { PublishingRepository } from "../publishing/publicationRepository.js";
-import {
-  fingerprintPublishedContent,
-  fingerprintStoredPublicationPayload,
-  validatePublishedDataSnapshot,
-} from "../publishing/publishedSnapshot.js";
+import type { AdminDataRepository } from "../admin/adminRepository.js";
 import {
   DomainValidationError,
   type AdminDataSnapshot,
-  type PublishedDataSnapshot,
 } from "../domain/types.js";
 import type { SqlExecutor, SqlPool } from "./sql.js";
-import { withPostgresTransaction } from "./transaction.js";
-import { postgresErrorCode } from "./postgresErrors.js";
 import { instantMillis, integer } from "./postgresValues.js";
 import { withoutLegacyBaselineFields } from "../domain/legacyFieldNames.js";
 
@@ -24,18 +16,8 @@ interface AdminRow extends Record<string, unknown> {
   updated_by: string;
 }
 
-interface PublicationRow extends Record<string, unknown> {
-  company_id: string;
-  publication_version: string | number;
-  source_admin_revision: string | number;
-  content_fingerprint: string;
-  payload: unknown;
-  published_at: Date | string;
-  published_by: string;
-}
-
-/** PostgreSQL/Supabase-compatible repository for admin state and publications. */
-export class PostgresPublishingRepository implements PublishingRepository {
+/** PostgreSQL/Supabase-compatible repository for admin state. */
+export class PostgresPublishingRepository implements AdminDataRepository {
   readonly #pool: SqlPool;
 
   public constructor(pool: SqlPool) {
@@ -122,153 +104,6 @@ export class PostgresPublishingRepository implements PublishingRepository {
     }
     throw adminRevisionConflict(companyId, expectedRevision, current);
   }
-
-  public async loadCurrent(
-    companyId: string,
-  ): Promise<PublishedDataSnapshot | undefined> {
-    const result = await this.#pool.query<PublicationRow>(
-      `SELECT company_id, publication_version, source_admin_revision,
-              content_fingerprint, payload, published_at, published_by
-       FROM tm_publications
-       WHERE company_id = $1
-       ORDER BY publication_version DESC
-       LIMIT 1`,
-      [companyId],
-    );
-    const row = result.rows[0];
-    return row === undefined ? undefined : parsePublicationRow(row);
-  }
-
-  public async loadVersion(
-    companyId: string,
-    publicationVersion: number,
-  ): Promise<PublishedDataSnapshot | undefined> {
-    if (!Number.isInteger(publicationVersion) || publicationVersion <= 0) {
-      return undefined;
-    }
-    const result = await this.#pool.query<PublicationRow>(
-      `SELECT company_id, publication_version, source_admin_revision,
-              content_fingerprint, payload, published_at, published_by
-       FROM tm_publications
-       WHERE company_id = $1 AND publication_version = $2`,
-      [companyId, publicationVersion],
-    );
-    const row = result.rows[0];
-    return row === undefined ? undefined : parsePublicationRow(row);
-  }
-
-  public async listVersions(
-    companyId: string,
-  ): Promise<readonly PublishedDataSnapshot[]> {
-    const result = await this.#pool.query<PublicationRow>(
-      `SELECT company_id, publication_version, source_admin_revision,
-              content_fingerprint, payload, published_at, published_by
-       FROM tm_publications
-       WHERE company_id = $1
-       ORDER BY publication_version ASC`,
-      [companyId],
-    );
-    return result.rows.map(parsePublicationRow);
-  }
-
-  public async publish(
-    companyId: string,
-    expectedAdminRevision: number,
-    expectedPublishedVersion: number,
-    next: PublishedDataSnapshot,
-  ): Promise<PublishedDataSnapshot> {
-    validatePublishedDataSnapshot(next);
-    return withPostgresTransaction(this.#pool, async (client) => {
-      const adminResult = await client.query<AdminRow>(
-        `SELECT company_id, revision, payload, updated_at, updated_by
-         FROM tm_admin_snapshots
-         WHERE company_id = $1
-         FOR UPDATE`,
-        [companyId],
-      );
-      const adminRow = adminResult.rows[0];
-      if (adminRow === undefined) {
-        throw new DomainValidationError(
-          "ADMIN_DATA_NOT_FOUND",
-          `Admin data ${companyId} does not exist.`,
-        );
-      }
-      const admin = parseAdminRow(adminRow);
-      if (admin.revision !== expectedAdminRevision ||
-          next.sourceAdminRevision !== expectedAdminRevision ||
-          next.companyId !== companyId) {
-        throw adminRevisionConflict(
-          companyId,
-          expectedAdminRevision,
-          admin.revision,
-        );
-      }
-
-      const currentResult = await client.query<PublicationRow>(
-        `SELECT company_id, publication_version, source_admin_revision,
-                content_fingerprint, payload, published_at, published_by
-         FROM tm_publications
-         WHERE company_id = $1
-         ORDER BY publication_version DESC
-         LIMIT 1
-         FOR UPDATE`,
-        [companyId],
-      );
-      const currentRow = currentResult.rows[0];
-      const current = currentRow === undefined
-        ? undefined
-        : parsePublicationRow(currentRow);
-      const currentVersion = current?.publicationVersion ?? 0;
-      if (currentVersion !== expectedPublishedVersion ||
-          next.publicationVersion !== currentVersion + 1) {
-        throw publishedVersionConflict(
-          companyId,
-          expectedPublishedVersion,
-          currentVersion,
-        );
-      }
-      if (current?.contentFingerprint === next.contentFingerprint) {
-        throw new DomainValidationError(
-          "NO_PUBLICATION_CHANGES",
-          `Published content for ${companyId} has not changed.`,
-        );
-      }
-
-      try {
-        const inserted = await client.query<PublicationRow>(
-          `INSERT INTO tm_publications
-            (company_id, publication_version, source_admin_revision,
-             content_fingerprint, payload, published_at, published_by)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
-           RETURNING company_id, publication_version, source_admin_revision,
-                     content_fingerprint, payload, published_at, published_by`,
-          [
-            next.companyId,
-            next.publicationVersion,
-            next.sourceAdminRevision,
-            next.contentFingerprint,
-            JSON.stringify(next),
-            next.publishedAt,
-            next.publishedBy,
-          ],
-        );
-        const row = inserted.rows[0];
-        if (row === undefined) {
-          throw integrityError("Publication insert returned no row.");
-        }
-        return parsePublicationRow(row);
-      } catch (error) {
-        if (postgresErrorCode(error) === "23505") {
-          throw publishedVersionConflict(
-            companyId,
-            expectedPublishedVersion,
-            currentVersion + 1,
-          );
-        }
-        throw error;
-      }
-    });
-  }
 }
 
 async function currentAdminRevision(
@@ -331,85 +166,6 @@ function withDefaultedAdminCollections(
   };
 }
 
-function parsePublicationRow(row: PublicationRow): PublishedDataSnapshot {
-  const stored = parsePayload<PublishedDataSnapshot>(row.payload, "published snapshot");
-  // The integrity check runs against the row as written, before any
-  // read-side normalisation: the stored fingerprint was hashed over the
-  // shape the writing generation used, and the fields that shape carried
-  // may no longer exist once the row is normalised (legacyFieldNames.ts).
-  if (stored.contentFingerprint !== row.content_fingerprint ||
-      fingerprintStoredPublicationPayload(
-        stored as unknown as Record<string, unknown>,
-      ) !== row.content_fingerprint) {
-    throw integrityError(
-      `Publication row ${row.company_id}/${String(row.publication_version)} fingerprint does not match payload.`,
-    );
-  }
-  // Normalised to the current shape and re-fingerprinted over it, the same
-  // way the field names are normalised: every in-memory recomputation
-  // (validatePublishedDataSnapshot in the session and visitor paths, the
-  // dashboard's unpublished-changes comparison) then sees one consistent
-  // hash. The column keeps the fingerprint the row was written with.
-  const normalised = withDefaultedPublishedCollections(stored);
-  const payload: PublishedDataSnapshot = {
-    ...normalised,
-    contentFingerprint: fingerprintPublishedContent(normalised),
-  };
-  const publicationVersion = integer(
-    row.publication_version,
-    "publication version",
-  );
-  const sourceAdminRevision = integer(
-    row.source_admin_revision,
-    "source admin revision",
-  );
-  if (payload.companyId !== row.company_id ||
-      payload.publicationVersion !== publicationVersion ||
-      payload.sourceAdminRevision !== sourceAdminRevision ||
-      payload.publishedBy !== row.published_by ||
-      instantMillis(payload.publishedAt, "publication payload publishedAt") !==
-        instantMillis(row.published_at, "publication row published_at")) {
-    throw integrityError(
-      `Publication row ${row.company_id}/${publicationVersion} metadata does not match payload.`,
-    );
-  }
-  validatePublishedDataSnapshot(payload);
-  return clone(payload);
-}
-
-/**
- * The publication-side counterpart to withDefaultedAdminCollections, needed
- * for the same reason and one more.
- *
- * Publications are stored as a single JSONB blob with no migration path, so a
- * row written before the account collections existed simply has no such key
- * and arrives as `undefined` despite the static type.
- *
- * validatePublishedDataSnapshot tolerates that shape itself, so this is not
- * what keeps an old row loadable - it is what stops `undefined` from leaving
- * the repository under a type that promises an array. The liquidity model
- * reads these three collections straight off the loaded snapshot
- * (buildSnapshotCalculations), and an `undefined` there is the "is not
- * iterable" failure that took the admin workspace down in vaihe 3A, one layer
- * further along and on the path that serves the public overview.
- *
- * Defaulting to `[]` here is safe only because the fingerprint treats an empty
- * additive collection as absent (see withoutEmptyAdditiveKeys). Were that not
- * so, this would satisfy the type and break the hash comparison three lines
- * later.
- */
-function withDefaultedPublishedCollections(
-  payload: PublishedDataSnapshot,
-): PublishedDataSnapshot {
-  return {
-    ...payload,
-    liquidityBaselines: (payload.liquidityBaselines ?? []).map(withoutLegacyBaselineFields),
-    financialAccounts: payload.financialAccounts ?? [],
-    financialEntries: payload.financialEntries ?? [],
-    groupActuals: payload.groupActuals ?? [],
-  };
-}
-
 function parsePayload<T>(value: unknown, label: string): T {
   try {
     return clone((typeof value === "string" ? JSON.parse(value) : value) as T);
@@ -417,9 +173,6 @@ function parsePayload<T>(value: unknown, label: string): T {
     throw integrityError(`Stored ${label} payload is not valid JSON.`);
   }
 }
-
-
-
 
 function adminRevisionConflict(
   companyId: string,
@@ -429,17 +182,6 @@ function adminRevisionConflict(
   return new DomainValidationError(
     "ADMIN_REVISION_CONFLICT",
     `Admin data ${companyId} revision changed from ${expected} to ${current}.`,
-  );
-}
-
-function publishedVersionConflict(
-  companyId: string,
-  expected: number,
-  current: number,
-): DomainValidationError {
-  return new DomainValidationError(
-    "PUBLISHED_VERSION_CONFLICT",
-    `Published data ${companyId} changed from version ${expected} to ${current}.`,
   );
 }
 

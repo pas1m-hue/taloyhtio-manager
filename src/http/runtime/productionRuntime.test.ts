@@ -9,7 +9,7 @@ import type { JwksKeyProvider, SupportedSupabaseJwtAlgorithm } from "../../auth/
 import { InMemoryCompanyAccessRepository } from "../../auth/companyAccessRepository.js";
 import { loadProductionEnvironment } from "../../config/environment.js";
 import { adminBaselineSnapshot } from "../../fixtures/adminBaseline.js";
-import { InMemoryPublishingRepository } from "../../publishing/publicationRepository.js";
+import { InMemoryAdminDataRepository } from "../../admin/adminRepository.js";
 import { FixedServerClock } from "../clock.js";
 import { createApplicationHttpRuntime } from "./createRuntime.js";
 import { createProductionAuthentication } from "./createProductionRuntime.js";
@@ -64,7 +64,7 @@ describe("production runtime composition", () => {
     const authentication = createProductionAuthentication(CONFIG, {
       getVerificationKey: async () => publicJwk,
     });
-    const publications = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+    const publications = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
     const access = new InMemoryCompanyAccessRepository([{
       companyId: adminBaselineSnapshot.companyId,
       subjectId: SUBJECT_ID,

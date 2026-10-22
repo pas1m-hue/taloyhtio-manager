@@ -19,8 +19,8 @@ import { buildProjection } from "../projection/buildProjection.js";
  * columns. It is a ledger, not a forecast.
  *
  * NOT projectCashPath. That function projects a constant collection over a
- * horizon and feeds findFundingNeed, calculateRequiredCollection and the
- * visitor session; it is a forecast and stays one. This read model reads
+ * horizon and feeds findFundingNeed and calculateRequiredCollection; it is
+ * a forecast and stays one. This read model reads
  * the closed years from the account data and balance sheets, and exactly
  * one kind of future: a year that has a budget. Nothing here is carried
  * forward from the latest year - the failure the old table had, where one

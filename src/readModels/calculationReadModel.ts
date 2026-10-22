@@ -4,7 +4,6 @@ import type {
   LiquidityBaselineRecord,
   LiquidityForecastResult,
   ProjectionResult,
-  PublishedDataSnapshot,
 } from "../domain/types.js";
 import { buildLiquidityForecast } from "../liquidity/buildLiquidityForecast.js";
 import { buildProjection } from "../projection/buildProjection.js";
@@ -61,7 +60,7 @@ export interface SnapshotCalculationReadModel {
 }
 
 type CalculationSnapshot = Pick<
-  AdminDataSnapshot | PublishedDataSnapshot,
+  AdminDataSnapshot,
   | "housingCompany"
   | "liquidityBaselines"
   | "assets"
@@ -73,7 +72,7 @@ type CalculationSnapshot = Pick<
   | "groupActuals"
 >;
 
-/** Shared deterministic calculation composition for admin and publications. */
+/** Deterministic calculation composition for the admin workspace. */
 export function buildSnapshotCalculations(
   snapshot: CalculationSnapshot,
   horizon: Horizon,

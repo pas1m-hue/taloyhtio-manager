@@ -5,7 +5,7 @@ import type {
 } from "../auth/authTypes.js";
 import type { CompanyAccessRepository } from "../auth/companyAccessRepository.js";
 import { requireCompanyAdmin } from "../auth/authorization.js";
-import type { PublishingRepository } from "../publishing/publicationRepository.js";
+import type { AdminDataRepository } from "../admin/adminRepository.js";
 import type { AdminDashboardReadModel } from "../readModels/adminDashboard.js";
 import type { SnapshotCalculationReadModel } from "../readModels/calculationReadModel.js";
 import {
@@ -15,7 +15,7 @@ import {
 } from "./adminApplicationService.js";
 
 export async function loadAuthorizedAdminWorkspace(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   access: CompanyAccessRepository,
   identity: VerifiedIdentity | undefined,
   companyId: string,
@@ -27,7 +27,7 @@ export async function loadAuthorizedAdminWorkspace(
 }
 
 export async function applyAuthorizedAdminChanges(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   access: CompanyAccessRepository,
   identity: VerifiedIdentity | undefined,
   command: AuthorizedAdminDataBatchCommand,
@@ -48,7 +48,7 @@ export async function applyAuthorizedAdminChanges(
 }
 
 export async function previewAuthorizedAdminCalculations(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   access: CompanyAccessRepository,
   identity: VerifiedIdentity | undefined,
   companyId: string,

@@ -5,7 +5,7 @@ import { InMemoryAuthenticationPort } from "../auth/authenticationPort.js";
 import { InMemoryCompanyAccessRepository } from "../auth/companyAccessRepository.js";
 import { SecuredAdminApplicationFacade } from "../application/securedAdminFacade.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
-import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
+import { InMemoryAdminDataRepository } from "../admin/adminRepository.js";
 import { FixedServerClock } from "./clock.js";
 import { createHttpServer, type TaloyhtioHttpServer } from "./createHttpServer.js";
 
@@ -20,10 +20,10 @@ const PUBLIC_DIR = path.resolve(
 );
 
 let server: TaloyhtioHttpServer;
-let publications: InMemoryPublishingRepository;
+let publications: InMemoryAdminDataRepository;
 
 beforeEach(async () => {
-  publications = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+  publications = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
   const authentication = new InMemoryAuthenticationPort({
     [ADMIN_TOKEN]: {
       subjectId: "admin:pasi",

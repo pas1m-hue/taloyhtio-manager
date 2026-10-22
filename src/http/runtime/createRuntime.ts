@@ -1,12 +1,12 @@
+import type { AdminDataRepository } from "../../admin/adminRepository.js";
 import { SecuredAdminApplicationFacade } from "../../application/securedAdminFacade.js";
 import type { AuthenticationPort } from "../../auth/authenticationPort.js";
 import type { CompanyAccessRepository } from "../../auth/companyAccessRepository.js";
-import type { PublishingRepository } from "../../publishing/publicationRepository.js";
 import { createHttpServer, type TaloyhtioHttpServer } from "../createHttpServer.js";
 import type { ServerClock } from "../clock.js";
 
 export interface RuntimeRepositories {
-  readonly publications: PublishingRepository;
+  readonly publications: AdminDataRepository;
   readonly access: CompanyAccessRepository;
 }
 

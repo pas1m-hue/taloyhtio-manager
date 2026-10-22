@@ -1,14 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type {
-  AdminDataBatchCommand,
-  PublishAdminDataCommand,
-} from "../domain/types.js";
+import type { AdminDataBatchCommand } from "../domain/types.js";
 import { DomainValidationError } from "../domain/types.js";
 import { applyAdminBatch } from "../admin/applyAdminBatch.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
-import { publishAdminRevision } from "../application/publishingApplicationService.js";
-import { buildVisitorPublishedView } from "../publishing/visitorPublishedView.js";
-import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
 import { financialActualsFixture } from "../fixtures/financialActuals.js";
 import { buildSnapshotCalculations } from "../readModels/calculationReadModel.js";
@@ -22,24 +16,6 @@ import { PGliteSqlPool } from "./pgliteSqlPool.js";
 import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
-const PUBLISHED_AT = "2026-07-17T19:00:00.451+03:00";
-
-
-function publishCommand(
-  expectedAdminRevision: number,
-  expectedPublishedVersion: number,
-  publishedAt = PUBLISHED_AT,
-): PublishAdminDataCommand {
-  return {
-    companyId: COMPANY_ID,
-    expectedAdminRevision,
-    expectedPublishedVersion,
-    publishedAt,
-    publishedBy: "admin:pasi",
-    sourceIds: [`publication_${expectedPublishedVersion + 1}`],
-    explanation: `Publish version ${expectedPublishedVersion + 1}.`,
-  };
-}
 
 function adminBatch(
   expectedRevision: number,
@@ -71,7 +47,6 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pool.query("DELETE FROM tm_company_access_grants");
-  await pool.query("DELETE FROM tm_publications");
   await pool.query("DELETE FROM tm_admin_snapshots");
   publications = new PostgresPublishingRepository(pool);
 });
@@ -189,15 +164,14 @@ describe("V2.6 PostgreSQL migrations", () => {
     // table as a non-owner role against relrowsecurity = true with no policy;
     // switching to an unprivileged role reproduces exactly that, down to the
     // message PostgreSQL emitted in the live log.
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await pool.query("ALTER TABLE tm_publications ENABLE ROW LEVEL SECURITY");
+    await pool.query("ALTER TABLE tm_admin_snapshots ENABLE ROW LEVEL SECURITY");
     await pool.query("CREATE ROLE tm_rls_probe NOLOGIN");
     await pool.query(
-      "GRANT SELECT, INSERT, UPDATE ON tm_admin_snapshots, tm_publications TO tm_rls_probe",
+      "GRANT SELECT, INSERT, UPDATE ON tm_admin_snapshots TO tm_rls_probe",
     );
     await pool.query("SET ROLE tm_rls_probe");
     try {
-      const error = await publishAdminRevision(publications, publishCommand(0, 0))
+      const error = await publications.initializeAdminData(adminBaselineSnapshot)
         .then(() => undefined, (thrown: unknown) => thrown);
 
       expect(error).toBeInstanceOf(DomainValidationError);
@@ -205,24 +179,22 @@ describe("V2.6 PostgreSQL migrations", () => {
       // The message names the table and points at the fix; it reaches the
       // server log, not the client, since httpErrors withholds every 500's
       // message on purpose.
-      expect((error as DomainValidationError).message).toContain("tm_publications");
+      expect((error as DomainValidationError).message).toContain("tm_admin_snapshots");
       expect((error as DomainValidationError).message)
         .toContain("new row violates row-level security policy");
       expect((error as DomainValidationError).message).toContain("migration 004");
     } finally {
       await pool.query("RESET ROLE");
-      await pool.query("ALTER TABLE tm_publications DISABLE ROW LEVEL SECURITY");
-      await pool.query(
-        "REVOKE ALL ON tm_admin_snapshots, tm_publications FROM tm_rls_probe",
-      );
+      await pool.query("ALTER TABLE tm_admin_snapshots DISABLE ROW LEVEL SECURITY");
+      await pool.query("REVOKE ALL ON tm_admin_snapshots FROM tm_rls_probe");
       await pool.query("DROP ROLE tm_rls_probe");
     }
   });
 
   it("still maps the constraint violations each repository owns", async () => {
     // The translation must not swallow the codes the repositories match
-    // themselves: a duplicate publication version is a conflict, not a policy
-    // problem, and only the repository knows which table means what.
+    // themselves: a duplicate company is a conflict, not a policy problem,
+    // and only the repository knows which table means what.
     await publications.initializeAdminData(adminBaselineSnapshot);
     await expect(publications.initializeAdminData(adminBaselineSnapshot))
       .rejects.toMatchObject({ code: "ADMIN_DATA_ALREADY_EXISTS" });
@@ -251,7 +223,7 @@ describe("V2.6 PostgreSQL migrations", () => {
   });
 });
 
-describe("V2.6 PostgreSQL admin and publication repository", () => {
+describe("V2.6 PostgreSQL admin repository", () => {
   it("initializes, reloads and defensively copies an admin snapshot", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
     const loaded = await publications.load(COMPANY_ID);
@@ -277,36 +249,6 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
       .rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
     expect((await publications.load(COMPANY_ID))!.housingCompany.name)
       .toBe("First name");
-  });
-
-  it("persists publication history and survives repository recreation", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-    await commitAdminBatch(publications, adminBatch(0, "Published V2 name"));
-    await publishAdminRevision(
-      publications,
-      publishCommand(1, 1, "2026-07-17T21:00:00+03:00"),
-    );
-
-    const restarted = new PostgresPublishingRepository(pool);
-    expect((await restarted.loadCurrent(COMPANY_ID))!.publicationVersion).toBe(2);
-    expect((await restarted.listVersions(COMPANY_ID))
-      .map((item) => item.publicationVersion)).toEqual([1, 2]);
-    expect((await restarted.loadVersion(COMPANY_ID, 1))!.housingCompany.name)
-      .toBe(adminBaselineSnapshot.housingCompany.name);
-  });
-
-  it("checks admin and publication revisions inside the publication transaction", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await commitAdminBatch(publications, adminBatch(0, "Newer workspace"));
-    await expect(publishAdminRevision(publications, publishCommand(0, 0)))
-      .rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
-    expect(await publications.loadCurrent(COMPANY_ID)).toBeUndefined();
-
-    await publishAdminRevision(publications, publishCommand(1, 0));
-    await expect(publishAdminRevision(publications, publishCommand(1, 0)))
-      .rejects.toMatchObject({ code: "PUBLISHED_VERSION_CONFLICT" });
-    expect((await publications.listVersions(COMPANY_ID))).toHaveLength(1);
   });
 
   it("detects column/payload corruption instead of returning plausible data", async () => {
@@ -420,103 +362,49 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     expect(loaded!.maintenanceDocuments).toEqual([]);
   });
 
-  // Three generations of liquidity baseline rows exist in storage
-  // (legacyFieldNames.ts). Each is built from the raw JSON text with the
-  // fingerprint that generation's code would have written - a fixture made
-  // by the current builders cannot represent a row the old code wrote.
+  // Two generations of liquidity baseline rows exist in storage
+  // (legacyFieldNames.ts). The row is rewritten as raw JSON text, the way the
+  // old code left it: the current types no longer have these fields, so a
+  // fixture built from them and cast could not represent such a row at all.
   const LEGACY_BASELINE_ROWS = [
     {
-      name: "pre refactor/hoitokate-naming (currentAnnualRepairCollection)",
-      // Written and hashed with the legacy key.
-      inject: (baseline: Record<string, unknown>) => ({
-        ...baseline,
-        trailing12mOperatingCosts: 34_029.46,
-        currentAnnualRepairCollection: 9_680,
-      }),
-      hashed: (baseline: Record<string, unknown>) => baseline,
+      name: "pre refactor/hoitokate-naming",
+      keys: ["trailing12mOperatingCosts", "currentAnnualRepairCollection"],
+      text: '"trailing12mOperatingCosts": 34029.46, "currentAnnualRepairCollection": 9680, ',
     },
     {
-      name: "refactor/hoitokate-naming (currentAnnualOperatingMargin, hashed under the legacy key)",
-      // That code wrote the new key but hashed the content with the key
-      // mapped back to the legacy name, so the stored fingerprint does not
-      // match the stored text. Easy to miss: it exists only because the
-      // previous PR did it that way.
-      inject: (baseline: Record<string, unknown>) => ({
-        ...baseline,
-        trailing12mOperatingCosts: 34_029.46,
-        currentAnnualOperatingMargin: 9_680,
-      }),
-      hashed: ({ currentAnnualOperatingMargin, ...rest }: Record<string, unknown>) => ({
-        ...rest,
-        currentAnnualRepairCollection: currentAnnualOperatingMargin,
-      }),
+      name: "refactor/hoitokate-naming up to refactor/remove-manual-liquidity-inputs",
+      keys: ["trailing12mOperatingCosts", "currentAnnualOperatingMargin"],
+      text: '"trailing12mOperatingCosts": 34029.46, "currentAnnualOperatingMargin": 9680, ',
     },
   ] as const;
 
   for (const generation of LEGACY_BASELINE_ROWS) {
-    it(`loads a publication written ${generation.name} and drops the stored figures`, async () => {
+    it(`loads an admin snapshot written ${generation.name} without the stored figures`, async () => {
       await publications.initializeAdminData(adminBaselineSnapshot);
-      await publishAdminRevision(publications, publishCommand(0, 0));
-      const current = (await publications.loadCurrent(COMPANY_ID))!;
-
-      // The legacy row: the current baseline with that generation's fields
-      // spliced in, and the fingerprint computed the way that generation
-      // computed it - from the content it hashed, not from the current
-      // builders.
-      const baseline = current.liquidityBaselines[0] as unknown as Record<string, unknown>;
-      const storedBaseline = generation.inject(baseline);
-      const legacyFingerprint = fingerprintAdminPublishableContent({
-        ...adminBaselineSnapshot,
-        liquidityBaselines: [generation.hashed(storedBaseline) as never],
-      });
-      const storedPayload = {
-        ...current,
-        liquidityBaselines: [storedBaseline],
-        contentFingerprint: legacyFingerprint,
-      };
-      await pool.query(
-        `UPDATE tm_publications
-         SET payload = $2::jsonb, content_fingerprint = $3
-         WHERE company_id = $1`,
-        [COMPANY_ID, JSON.stringify(storedPayload), legacyFingerprint],
-      );
       await pool.query(
         `UPDATE tm_admin_snapshots
-         SET payload = jsonb_set(payload, '{liquidityBaselines}', $2::jsonb)
+         SET payload = replace(payload::text, '"currentCash": ', $2 || '"currentCash": ')::jsonb
          WHERE company_id = $1`,
-        [COMPANY_ID, JSON.stringify([storedBaseline])],
+        [COMPANY_ID, generation.text],
       );
+      // The rewrite must have landed, or everything below passes vacuously.
+      const stored = await storedBaselineKeys();
+      for (const key of generation.keys) expect(stored).toContain(key);
 
-      const published = await publications.loadCurrent(COMPANY_ID);
-      expect(published?.liquidityBaselines[0]).toEqual(current.liquidityBaselines[0]);
-      expect(published?.liquidityBaselines[0]).not.toHaveProperty("trailing12mOperatingCosts");
-      expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualOperatingMargin");
-      expect(published?.liquidityBaselines[0]).not.toHaveProperty("currentAnnualRepairCollection");
-      // The fingerprint is normalised to the current shape on read, so every
-      // in-memory recomputation agrees and the workspace reports no phantom
-      // change to publish.
-      expect(published?.contentFingerprint).toBe(current.contentFingerprint);
-      expect(published?.contentFingerprint).not.toBe(legacyFingerprint);
       const loaded = await publications.load(COMPANY_ID);
-      expect(loaded?.liquidityBaselines[0]).toEqual(current.liquidityBaselines[0]);
-      expect(fingerprintAdminPublishableContent(loaded!)).toBe(published?.contentFingerprint);
-      await expect(publishAdminRevision(publications, publishCommand(0, 1)))
-        .rejects.toMatchObject({ code: "NO_PUBLICATION_CHANGES" });
+
+      expect(loaded!.liquidityBaselines).toEqual(adminBaselineSnapshot.liquidityBaselines);
+      for (const key of generation.keys) {
+        expect(loaded!.liquidityBaselines[0]).not.toHaveProperty(key);
+      }
+
+      // And they are not written back: the next save stores the current shape.
+      await commitAdminBatch(publications, adminBatch(0, "Legacy row re-saved"));
+      const resaved = await storedBaselineKeys();
+      for (const key of generation.keys) expect(resaved).not.toContain(key);
     });
   }
-
-  it("still rejects a publication whose stored fingerprint matches neither the raw row nor its legacy hash", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-    await pool.query(
-      `UPDATE tm_publications
-       SET payload = jsonb_set(payload, '{housingCompany,name}', '"tampered"')
-       WHERE company_id = $1`,
-      [COMPANY_ID],
-    );
-    await expect(publications.loadCurrent(COMPANY_ID))
-      .rejects.toThrow(/fingerprint does not match/);
-  });
 
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
     await publications.initializeAdminData(adminBaselineSnapshot);
@@ -547,58 +435,6 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
     ]) {
       expect(collection).toEqual([]);
     }
-  });
-
-  it("loads a publication written before the account collections existed", async () => {
-    // The publication counterpart of the admin test above, and sharper: a
-    // publication is validated on every read, and that read serves the
-    // unauthenticated public overview and every visitor session. A row stored
-    // before financialAccounts/financialEntries/groupActuals existed has no
-    // such JSONB keys, so without withDefaultedPublishedCollections the first
-    // load after deploying this change takes the public site down.
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-    const before = await publications.loadCurrent(COMPANY_ID);
-    expect(before).toBeDefined();
-
-    await pool.query(
-      `UPDATE tm_publications
-       SET payload = payload
-         - 'financialAccounts' - 'financialEntries' - 'groupActuals'
-       WHERE company_id = $1`,
-      [COMPANY_ID],
-    );
-
-    const loaded = await publications.loadCurrent(COMPANY_ID);
-
-    expect(loaded).toBeDefined();
-    expect(loaded!.financialAccounts).toEqual([]);
-    expect(loaded!.financialEntries).toEqual([]);
-    expect(loaded!.groupActuals).toEqual([]);
-    // The stored fingerprint was computed without those keys. Defaulting them
-    // to [] repairs the validation only because the fingerprint treats an
-    // empty additive collection as absent; if that rule is ever dropped, the
-    // hash comparison inside validatePublishedDataSnapshot fails here.
-    expect(loaded!.contentFingerprint).toBe(before!.contentFingerprint);
-  });
-
-  it("keeps a stripped publication loadable through the visitor path too", async () => {
-    // loadCurrent is not the only reader: the public overview builds its view
-    // from the same snapshot and validates it again on the way out.
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await publishAdminRevision(publications, publishCommand(0, 0));
-    await pool.query(
-      `UPDATE tm_publications
-       SET payload = payload
-         - 'financialAccounts' - 'financialEntries' - 'groupActuals'
-       WHERE company_id = $1`,
-      [COMPANY_ID],
-    );
-
-    const view = buildVisitorPublishedView((await publications.loadCurrent(COMPANY_ID))!);
-
-    expect(view.publicationVersion).toBe(1);
-    expect(view).not.toHaveProperty("financialAccounts");
   });
 
   it("loads a snapshot written before the maintenance-plan coverage existed", async () => {
@@ -711,3 +547,13 @@ describe("V2.6 PostgreSQL admin and publication repository", () => {
       item.entityKey === "asset_typo_row" && item.operation === "create")).toBe(true);
   });
 });
+
+async function storedBaselineKeys(): Promise<readonly string[]> {
+  const result = await pool.query<{ key: string }>(
+    `SELECT jsonb_object_keys(payload->'liquidityBaselines'->0) AS key
+     FROM tm_admin_snapshots
+     WHERE company_id = $1`,
+    [COMPANY_ID],
+  );
+  return result.rows.map((row) => row.key);
+}

@@ -4,7 +4,7 @@ import {
   type Horizon,
 } from "../domain/types.js";
 import { commitAdminBatch } from "../admin/adminEntryService.js";
-import type { PublishingRepository } from "../publishing/publicationRepository.js";
+import type { AdminDataRepository } from "../admin/adminRepository.js";
 import {
   buildAdminDashboardReadModel,
   type AdminDashboardReadModel,
@@ -16,7 +16,7 @@ import {
 
 /** UI-facing admin workspace. Repository and calculation internals stay hidden. */
 export async function loadAdminWorkspace(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   companyId: string,
   horizon: Horizon,
 ): Promise<AdminDashboardReadModel> {
@@ -27,24 +27,22 @@ export async function loadAdminWorkspace(
       `Admin data ${companyId} does not exist.`,
     );
   }
-  const publication = await repository.loadCurrent(companyId);
-  return buildAdminDashboardReadModel(admin, publication, horizon);
+  return buildAdminDashboardReadModel(admin, horizon);
 }
 
 /** Commits one atomic admin batch and returns a refreshed UI read model. */
 export async function applyAdminChanges(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   command: AdminDataBatchCommand,
   horizon: Horizon,
 ): Promise<AdminDashboardReadModel> {
   const admin = await commitAdminBatch(repository, command);
-  const publication = await repository.loadCurrent(command.companyId);
-  return buildAdminDashboardReadModel(admin, publication, horizon);
+  return buildAdminDashboardReadModel(admin, horizon);
 }
 
 /** Calculation-only preview for a UI that does not need the full workspace. */
 export async function previewAdminCalculations(
-  repository: PublishingRepository,
+  repository: AdminDataRepository,
   companyId: string,
   horizon: Horizon,
 ): Promise<SnapshotCalculationReadModel> {

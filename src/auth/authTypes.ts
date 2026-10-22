@@ -1,7 +1,4 @@
-import type {
-  AdminDataBatchCommand,
-  PublishAdminDataCommand,
-} from "../domain/types.js";
+import type { AdminDataBatchCommand } from "../domain/types.js";
 
 /** Identity already verified by a trusted server-side authentication adapter. */
 export interface VerifiedIdentity {
@@ -29,9 +26,4 @@ export interface CompanyAccessGrant {
 export type AuthorizedAdminDataBatchCommand = Omit<
   AdminDataBatchCommand,
   "actorId" | "occurredAt"
->;
-
-export type AuthorizedPublishAdminDataCommand = Omit<
-  PublishAdminDataCommand,
-  "publishedBy" | "publishedAt"
 >;

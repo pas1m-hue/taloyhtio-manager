@@ -4,42 +4,20 @@ import type {
   BuildingEvent,
   CostEvidence,
   Horizon,
-  PublishAdminDataCommand,
 } from "../domain/types.js";
 import { adminBaselineSnapshot } from "../fixtures/adminBaseline.js";
 import {
   financialActualsExpected,
   financialActualsFixture,
 } from "../fixtures/financialActuals.js";
-import { InMemoryPublishingRepository } from "../publishing/publicationRepository.js";
+import { InMemoryAdminDataRepository } from "../admin/adminRepository.js";
 import {
   applyAdminChanges,
   loadAdminWorkspace,
   previewAdminCalculations,
 } from "./adminApplicationService.js";
-import {
-  loadPublicationHistory,
-  publishAdminRevision,
-} from "./publishingApplicationService.js";
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const HORIZON: Horizon = { startYear: 2026, endYear: 2057 };
-const PUBLISHED_AT = "2026-07-17T19:00:00+03:00";
-
-function publishCommand(
-  expectedAdminRevision: number,
-  expectedPublishedVersion: number,
-  publishedAt = PUBLISHED_AT,
-): PublishAdminDataCommand {
-  return {
-    companyId: COMPANY_ID,
-    expectedAdminRevision,
-    expectedPublishedVersion,
-    publishedAt,
-    publishedBy: "admin:pasi",
-    sourceIds: [`publication_${expectedPublishedVersion + 1}`],
-    explanation: `Publish reviewed version ${expectedPublishedVersion + 1}.`,
-  };
-}
 
 function adminBatch(
   expectedRevision: number,
@@ -143,25 +121,22 @@ function suggestedOnlyOperations(): AdminDataBatchCommand["operations"] {
   ];
 }
 
-async function publishedRepository() {
-  // With account data, because the published liquidity figures are derived
-  // from it: a publication without it has no forecast at all, which is the
-  // subject of its own test above rather than the setup for every other one.
-  const repository = new InMemoryPublishingRepository([{
+function accountedRepository() {
+  // With account data, because the liquidity figures are derived from it: a
+  // workspace without it has no forecast at all, which is the subject of its
+  // own test below rather than the setup for every other one.
+  return new InMemoryAdminDataRepository([{
     ...adminBaselineSnapshot,
     ...financialActualsFixture,
   }]);
-  await publishAdminRevision(repository, publishCommand(0, 0));
-  return repository;
 }
 
 describe("V2.4 application services and UI read models", () => {
-  it("loads an unpublished admin workspace without exposing repository details", async () => {
-    const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
+  it("loads the admin workspace without exposing repository details", async () => {
+    const repository = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
     const dashboard = await loadAdminWorkspace(repository, COMPANY_ID, HORIZON);
     expect(dashboard.adminRevision).toBe(0);
-    expect(dashboard.publication.latestPublicationVersion).toBe(0);
-    expect(dashboard.publication.publishableChanges).toBe(true);
+    expect(dashboard).not.toHaveProperty("publication");
     expect(dashboard.calculations.projection.scenarios.base.dataGaps.withinHorizon.length)
       .toBeGreaterThan(0);
     // The baseline fixture carries no account data, and both liquidity inputs
@@ -179,7 +154,7 @@ describe("V2.4 application services and UI read models", () => {
   });
 
   it("computes both liquidity inputs once the accounts are imported", async () => {
-    const repository = new InMemoryPublishingRepository([{
+    const repository = new InMemoryAdminDataRepository([{
       ...adminBaselineSnapshot,
       ...financialActualsFixture,
     }]);
@@ -210,47 +185,32 @@ describe("V2.4 application services and UI read models", () => {
     );
   });
 
-  it("reports no workspace or publishable changes immediately after publication", async () => {
-    const repository = await publishedRepository();
-    const dashboard = await loadAdminWorkspace(repository, COMPANY_ID, HORIZON);
-    expect(dashboard.publication).toMatchObject({
-      latestPublicationVersion: 1,
-      latestPublishedAdminRevision: 0,
-      workspaceChangedSincePublication: false,
-      publishableChanges: false,
-      unpublishedAuditEntryCount: 0,
-    });
-  });
-
   it("applies one admin batch and returns a refreshed calculated dashboard", async () => {
-    const repository = await publishedRepository();
+    const repository = accountedRepository();
     const dashboard = await applyAdminChanges(
       repository,
       adminBatch(0, numericEventOperations()),
       HORIZON,
     );
     expect(dashboard.adminRevision).toBe(1);
-    expect(dashboard.publication.workspaceChangedSincePublication).toBe(true);
-    expect(dashboard.publication.publishableChanges).toBe(true);
-    expect(dashboard.publication.unpublishedAuditEntryCount).toBe(2);
+    expect(dashboard.auditTrail).toHaveLength(2);
     expect(dashboard.calculations.projection.scenarios.base.horizonAmount).toBe(12_500);
   });
 
-  it("distinguishes draft-only workspace edits from publishable changes", async () => {
-    const repository = await publishedRepository();
+  it("counts a suggested event without putting it in the projection", async () => {
+    const repository = accountedRepository();
     const dashboard = await applyAdminChanges(
       repository,
       adminBatch(0, suggestedOnlyOperations()),
       HORIZON,
     );
-    expect(dashboard.publication.workspaceChangedSincePublication).toBe(true);
-    expect(dashboard.publication.publishableChanges).toBe(false);
     expect(dashboard.counts.suggestedEvents).toBe(1);
+    expect(dashboard.calculations.projection.scenarios.base.horizonAmount).toBe(0);
     expect(dashboard.calculations.projection.suggestions).toHaveLength(1);
   });
 
   it("returns the same deterministic calculation preview as the full dashboard", async () => {
-    const repository = await publishedRepository();
+    const repository = accountedRepository();
     await applyAdminChanges(repository, adminBatch(0, numericEventOperations()), HORIZON);
     const preview = await previewAdminCalculations(repository, COMPANY_ID, HORIZON);
     const dashboard = await loadAdminWorkspace(repository, COMPANY_ID, HORIZON);
@@ -258,47 +218,15 @@ describe("V2.4 application services and UI read models", () => {
   });
 
   it("fails loudly when the admin workspace does not exist", async () => {
-    const repository = new InMemoryPublishingRepository();
+    const repository = new InMemoryAdminDataRepository();
     await expect(loadAdminWorkspace(repository, "missing", HORIZON))
       .rejects.toMatchObject({ code: "ADMIN_DATA_NOT_FOUND" });
     await expect(previewAdminCalculations(repository, "missing", HORIZON))
       .rejects.toMatchObject({ code: "ADMIN_DATA_NOT_FOUND" });
   });
 
-  it("publishes through one application boundary and returns compact metadata", async () => {
-    const repository = new InMemoryPublishingRepository([adminBaselineSnapshot]);
-    const result = await publishAdminRevision(repository, publishCommand(0, 0));
-    expect(result).toMatchObject({
-      companyId: COMPANY_ID,
-      publicationVersion: 1,
-      sourceAdminRevision: 0,
-      publishedBy: "admin:pasi",
-    });
-    expect(result).not.toHaveProperty("events");
-  });
-
-  it("loads publication history newest first", async () => {
-    const repository = await publishedRepository();
-    await applyAdminChanges(repository, adminBatch(0, numericEventOperations()), HORIZON);
-    await publishAdminRevision(
-      repository,
-      publishCommand(1, 1, "2026-07-17T21:00:00+03:00"),
-    );
-    const history = await loadPublicationHistory(repository, COMPANY_ID);
-    expect(history.currentPublicationVersion).toBe(2);
-    expect(history.versions.map((item) => item.publicationVersion)).toEqual([2, 1]);
-  });
-
-  it("returns defensive publication-history copies", async () => {
-    const repository = await publishedRepository();
-    const history = await loadPublicationHistory(repository, COMPANY_ID);
-    (history.versions[0]!.sourceIds as string[]).push("mutated");
-    const again = await loadPublicationHistory(repository, COMPANY_ID);
-    expect(again.versions[0]!.sourceIds).not.toContain("mutated");
-  });
-
   it("propagates a stale admin revision as an explicit conflict", async () => {
-    const publications = await publishedRepository();
+    const publications = accountedRepository();
     await applyAdminChanges(publications, adminBatch(0, numericEventOperations()), HORIZON);
     await expect(applyAdminChanges(
       publications,
@@ -308,7 +236,7 @@ describe("V2.4 application services and UI read models", () => {
   });
 
   it("does not let read-model mutation alter stored admin state", async () => {
-    const publications = await publishedRepository();
+    const publications = accountedRepository();
     const admin = await loadAdminWorkspace(publications, COMPANY_ID, HORIZON);
     ((admin.assets as unknown) as { name: string }[])[0]!.name = "mutated";
 

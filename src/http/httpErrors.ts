@@ -51,12 +51,9 @@ function statusForDomainCode(code: ValidationCode): number {
     case "INVALID_ACCESS_GRANT":
       return 403;
     case "ADMIN_DATA_NOT_FOUND":
-    case "PUBLISHED_DATA_NOT_FOUND":
       return 404;
     case "ADMIN_DATA_ALREADY_EXISTS":
     case "ADMIN_REVISION_CONFLICT":
-    case "PUBLISHED_VERSION_CONFLICT":
-    case "NO_PUBLICATION_CHANGES":
     case "CHANGE_PROPOSAL_CONFLICT":
     case "CHANGE_PROPOSAL_ALREADY_DECIDED":
     case "DUPLICATE_CHANGE_PROPOSAL_ID":

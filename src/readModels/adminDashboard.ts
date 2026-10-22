@@ -3,9 +3,7 @@ import type {
   AdminDataSnapshot,
   BuildingEvent,
   Horizon,
-  PublishedDataSnapshot,
 } from "../domain/types.js";
-import { fingerprintAdminPublishableContent } from "../publishing/publishedSnapshot.js";
 import {
   buildSnapshotCalculations,
   latestLiquidityBaseline,
@@ -20,15 +18,6 @@ export interface AdminDashboardCounts {
   readonly actualEvents: number;
   readonly cancelledEvents: number;
   readonly dataGapsWithinHorizon: number;
-}
-
-export interface AdminPublicationStatus {
-  readonly latestPublicationVersion: number;
-  readonly latestPublishedAdminRevision?: number;
-  readonly latestPublishedAt?: string;
-  readonly workspaceChangedSincePublication: boolean;
-  readonly publishableChanges: boolean;
-  readonly unpublishedAuditEntryCount: number;
 }
 
 export interface AdminDashboardReadModel {
@@ -51,42 +40,19 @@ export interface AdminDashboardReadModel {
   readonly groupActuals: AdminDataSnapshot["groupActuals"];
   readonly maintenanceDocuments: AdminDataSnapshot["maintenanceDocuments"];
   readonly auditTrail: readonly AdminAuditEntry[];
-  readonly publication: AdminPublicationStatus;
   readonly counts: AdminDashboardCounts;
   readonly calculations: SnapshotCalculationReadModel;
-  /**
-   * Admin-only: it reads balance sheets and budgets, neither of which a
-   * publication carries, and the visitor view has no cash path table.
-   */
+  /** Reads balance sheets and budgets as well as the account data. */
   readonly cashPathTable: CashPathTableReadModel;
 }
 
 export function buildAdminDashboardReadModel(
   admin: AdminDataSnapshot,
-  currentPublication: PublishedDataSnapshot | undefined,
   horizon: Horizon,
 ): AdminDashboardReadModel {
   const calculations = buildSnapshotCalculations(admin, horizon);
   const latestBaseline = latestLiquidityBaseline(admin.liquidityBaselines);
-  const latestPublishedRevision = currentPublication?.sourceAdminRevision;
-  const unpublishedAudits = currentPublication === undefined
-    ? admin.auditTrail
-    : admin.auditTrail.filter((entry) => entry.revision > currentPublication.sourceAdminRevision);
   const counts = eventCounts(admin.assets.length, admin.events, calculations);
-  const publication: AdminPublicationStatus = {
-    latestPublicationVersion: currentPublication?.publicationVersion ?? 0,
-    ...(latestPublishedRevision === undefined
-      ? {}
-      : { latestPublishedAdminRevision: latestPublishedRevision }),
-    ...(currentPublication === undefined
-      ? {}
-      : { latestPublishedAt: currentPublication.publishedAt }),
-    workspaceChangedSincePublication: currentPublication === undefined ||
-      admin.revision !== currentPublication.sourceAdminRevision,
-    publishableChanges: currentPublication === undefined ||
-      fingerprintAdminPublishableContent(admin) !== currentPublication.contentFingerprint,
-    unpublishedAuditEntryCount: unpublishedAudits.length,
-  };
   return structuredClone({
     companyId: admin.companyId,
     adminRevision: admin.revision,
@@ -107,7 +73,6 @@ export function buildAdminDashboardReadModel(
     groupActuals: admin.groupActuals,
     maintenanceDocuments: admin.maintenanceDocuments,
     auditTrail: admin.auditTrail,
-    publication,
     counts,
     calculations,
     cashPathTable: buildCashPathTable(admin),

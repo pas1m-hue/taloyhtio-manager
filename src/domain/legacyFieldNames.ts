@@ -17,15 +17,11 @@ import type { LiquidityBaselineRecord } from "./types.js";
  * record keeps its cash, date, sources and notes. A row without them is
  * left alone, so a re-saved snapshot is not touched twice.
  *
- * THE STORED FINGERPRINT WAS HASHED OVER THE OLD SHAPE. Every publication
- * carries a contentFingerprint, and the current code recomputes the hash
- * over the current shape on every load (validatePublishedDataSnapshot).
- * The values needed to reproduce an old hash are gone once the fields are
- * dropped, so the reconciliation happens where the raw row is still at
- * hand: postgresPublishingRepository verifies the stored fingerprint
- * against the raw payload (fingerprintStoredPublicationPayload), then
- * normalises the loaded snapshot's fingerprint to the current shape, the
- * same way the field names are normalised. See that repository.
+ * This is hygiene, not what keeps an old snapshot loadable: the admin
+ * validation does not reject unknown keys, so without it the stale figures
+ * would simply ride along in memory and be written back on the next save.
+ * What keeps an old row loadable is withDefaultedAdminCollections in the
+ * Postgres admin repository (the "is not iterable" failure).
  */
 const LEGACY_BASELINE_KEYS = [
   "trailing12mOperatingCosts",
@@ -43,28 +39,4 @@ export function withoutLegacyBaselineFields(
   const rest: Record<string, unknown> = { ...raw };
   for (const key of LEGACY_BASELINE_KEYS) delete rest[key];
   return rest as unknown as LiquidityBaselineRecord;
-}
-
-/**
- * The shape a stored fingerprint was computed over, for verifying a raw
- * publication row. Three generations of rows exist and one rule covers all
- * of them: the hoitokate figure is hashed under its original key.
- *
- * - pre refactor/hoitokate-naming: the row carries
- *   `currentAnnualRepairCollection` and was hashed with it - unchanged;
- * - refactor/hoitokate-naming rows: the row carries
- *   `currentAnnualOperatingMargin` but was hashed with the key mapped back
- *   to `currentAnnualRepairCollection` (that code hashed the legacy name on
- *   purpose so existing publications stayed valid) - mapped back here;
- * - refactor/remove-manual-liquidity-inputs rows: neither key - unchanged.
- *
- * `trailing12mOperatingCosts` stays as stored in every generation.
- */
-export function withStoredBaselineHashKeys(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
-  const { currentAnnualOperatingMargin, ...rest } = record;
-  return currentAnnualOperatingMargin === undefined
-    ? { ...rest }
-    : { ...rest, currentAnnualRepairCollection: currentAnnualOperatingMargin };
 }
