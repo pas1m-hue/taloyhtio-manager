@@ -89,7 +89,8 @@ describe("V2.7 HTTP API boundary", () => {
     const response = await server.inject({ url: "/" });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
-    expect(response.body).toContain("Visitor-skenaario");
+    expect(response.body).toContain("<h2 id=\"overview-title\">Yleiskuva</h2>");
+    expect(response.body).not.toContain("visitor-mode");
     expect(response.body).toContain('src="/app.js"');
     expect(response.body).not.toContain("<script>");
   });

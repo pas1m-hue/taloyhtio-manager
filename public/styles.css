@@ -105,10 +105,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 
 .sidebar-scrim { display: none; }
 
-/* Visitor mode has no admin sidebar or detail panel. */
-body[data-app-mode="visitor"] .sidebar { display: none; }
-body[data-app-mode="visitor"] .app-shell { grid-template-columns: minmax(0, 1fr); }
-
 .badge-row { display: inline-flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
 fieldset { border: 1px solid var(--line); border-radius: .55rem; padding: .8rem; margin: 0; }
 legend { padding: 0 .4rem; }
@@ -232,7 +228,6 @@ tfoot tr.is-partial td { color: var(--muted); font-style: italic; }
 .scenario-card { border-top: 4px solid var(--accent); }
 .scenario-card h4 { text-transform: capitalize; }
 .scenario-card ul { padding-left: 1.1rem; margin-bottom: 0; }
-.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 
 /* ---- Korjaustapahtumat: schedule editor ---- */
 .schedule-scenario-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: .8rem; }
@@ -240,7 +235,6 @@ tfoot tr.is-partial td { color: var(--muted); font-style: italic; }
 .schedule-rows { display: grid; gap: .7rem; margin-bottom: .7rem; }
 .schedule-row { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem; background: var(--panel); }
 .schedule-row .form-grid.compact { gap: .5rem; margin-bottom: .5rem; }
-.notice { padding: .8rem 1rem; border-left: 4px solid var(--accent); background: var(--soft); border-radius: 0 .5rem .5rem 0; }
 
 /* ---- Detail panel (centered modal) ---- */
 .detail-modal {
