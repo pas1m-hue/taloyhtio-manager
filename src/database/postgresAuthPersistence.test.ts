@@ -10,7 +10,7 @@ import {
 } from "./migrationRunner.js";
 import { PostgresCompanyAccessRepository } from "./postgresCompanyAccessRepository.js";
 import { PGliteSqlPool } from "./pgliteSqlPool.js";
-import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
+import { PostgresAdminDataRepository } from "./postgresAdminRepository.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 const IDENTITY: VerifiedIdentity = {
@@ -28,7 +28,7 @@ const GRANT: CompanyAccessGrant = {
   grantedBy: "deployment:bootstrap",
 };
 let pool: PGliteSqlPool;
-let publications: PostgresPublishingRepository;
+let adminData: PostgresAdminDataRepository;
 let access: PostgresCompanyAccessRepository;
 
 beforeAll(async () => {
@@ -39,9 +39,9 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query("DELETE FROM tm_company_access_grants");
   await pool.query("DELETE FROM tm_admin_snapshots");
-  publications = new PostgresPublishingRepository(pool);
+  adminData = new PostgresAdminDataRepository(pool);
   access = new PostgresCompanyAccessRepository(pool);
-  await publications.initializeAdminData(adminBaselineSnapshot);
+  await adminData.initializeAdminData(adminBaselineSnapshot);
   await access.save(GRANT);
 });
 

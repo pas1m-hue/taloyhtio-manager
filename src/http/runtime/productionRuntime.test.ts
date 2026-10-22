@@ -64,7 +64,7 @@ describe("production runtime composition", () => {
     const authentication = createProductionAuthentication(CONFIG, {
       getVerificationKey: async () => publicJwk,
     });
-    const publications = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
+    const adminData = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
     const access = new InMemoryCompanyAccessRepository([{
       companyId: adminBaselineSnapshot.companyId,
       subjectId: SUBJECT_ID,
@@ -74,7 +74,7 @@ describe("production runtime composition", () => {
       grantedBy: "bootstrap",
     }]);
     const server = createApplicationHttpRuntime(authentication, {
-      publications,
+      adminData,
       access,
     }, { clock: new FixedServerClock(NOW) });
     const token = createToken(pair.privateKey, {

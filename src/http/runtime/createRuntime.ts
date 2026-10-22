@@ -6,7 +6,7 @@ import { createHttpServer, type TaloyhtioHttpServer } from "../createHttpServer.
 import type { ServerClock } from "../clock.js";
 
 export interface RuntimeRepositories {
-  readonly publications: AdminDataRepository;
+  readonly adminData: AdminDataRepository;
   readonly access: CompanyAccessRepository;
 }
 
@@ -22,7 +22,7 @@ export function createApplicationHttpRuntime(
   const admin = new SecuredAdminApplicationFacade(
     authentication,
     repositories.access,
-    repositories.publications,
+    repositories.adminData,
   );
   return createHttpServer({
     admin,

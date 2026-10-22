@@ -4,7 +4,7 @@ import { adminBaselineSnapshot } from "../../fixtures/adminBaseline.js";
 import { loadPostgresMigrations, runPostgresMigrations } from "../../database/migrationRunner.js";
 import { PGliteSqlPool } from "../../database/pgliteSqlPool.js";
 import { PostgresCompanyAccessRepository } from "../../database/postgresCompanyAccessRepository.js";
-import { PostgresPublishingRepository } from "../../database/postgresPublishingRepository.js";
+import { PostgresAdminDataRepository } from "../../database/postgresAdminRepository.js";
 import { StaticBearerAuthenticationPort } from "./staticBearerAuthentication.js";
 import { createApplicationHttpRuntime } from "./createRuntime.js";
 
@@ -17,10 +17,10 @@ const STARTED_AT = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
 
 const pool = new PGliteSqlPool();
 await runPostgresMigrations(pool, await loadPostgresMigrations());
-const publications = new PostgresPublishingRepository(pool);
+const adminData = new PostgresAdminDataRepository(pool);
 const access = new PostgresCompanyAccessRepository(pool);
 
-await publications.initializeAdminData({
+await adminData.initializeAdminData({
   ...adminBaselineSnapshot,
   updatedAt: STARTED_AT,
   updatedBy: SUBJECT_ID,
@@ -46,7 +46,7 @@ const publicDirectory = path.resolve(
 );
 const app = createApplicationHttpRuntime(
   authentication,
-  { publications, access },
+  { adminData, access },
   { logger: true, publicDirectory },
 );
 

@@ -226,21 +226,21 @@ describe("V2.4 application services and UI read models", () => {
   });
 
   it("propagates a stale admin revision as an explicit conflict", async () => {
-    const publications = accountedRepository();
-    await applyAdminChanges(publications, adminBatch(0, numericEventOperations()), HORIZON);
+    const adminData = accountedRepository();
+    await applyAdminChanges(adminData, adminBatch(0, numericEventOperations()), HORIZON);
     await expect(applyAdminChanges(
-      publications,
+      adminData,
       adminBatch(0, numericEventOperations("another_event")),
       HORIZON,
     )).rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
   });
 
   it("does not let read-model mutation alter stored admin state", async () => {
-    const publications = accountedRepository();
-    const admin = await loadAdminWorkspace(publications, COMPANY_ID, HORIZON);
+    const adminData = accountedRepository();
+    const admin = await loadAdminWorkspace(adminData, COMPANY_ID, HORIZON);
     ((admin.assets as unknown) as { name: string }[])[0]!.name = "mutated";
 
-    expect((await loadAdminWorkspace(publications, COMPANY_ID, HORIZON)).assets[0]!.name)
+    expect((await loadAdminWorkspace(adminData, COMPANY_ID, HORIZON)).assets[0]!.name)
       .not.toBe("mutated");
   });
 });

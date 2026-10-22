@@ -17,7 +17,7 @@ interface AdminRow extends Record<string, unknown> {
 }
 
 /** PostgreSQL/Supabase-compatible repository for admin state. */
-export class PostgresPublishingRepository implements AdminDataRepository {
+export class PostgresAdminDataRepository implements AdminDataRepository {
   readonly #pool: SqlPool;
 
   public constructor(pool: SqlPool) {

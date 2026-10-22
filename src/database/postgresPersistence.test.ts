@@ -13,7 +13,7 @@ import {
   type SqlMigration,
 } from "./migrationRunner.js";
 import { PGliteSqlPool } from "./pgliteSqlPool.js";
-import { PostgresPublishingRepository } from "./postgresPublishingRepository.js";
+import { PostgresAdminDataRepository } from "./postgresAdminRepository.js";
 
 const COMPANY_ID = adminBaselineSnapshot.companyId;
 
@@ -37,7 +37,7 @@ function adminBatch(
 
 let pool: PGliteSqlPool;
 let migrations: readonly SqlMigration[];
-let publications: PostgresPublishingRepository;
+let adminData: PostgresAdminDataRepository;
 
 beforeAll(async () => {
   pool = new PGliteSqlPool();
@@ -48,7 +48,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query("DELETE FROM tm_company_access_grants");
   await pool.query("DELETE FROM tm_admin_snapshots");
-  publications = new PostgresPublishingRepository(pool);
+  adminData = new PostgresAdminDataRepository(pool);
 });
 
 afterAll(async () => {
@@ -171,7 +171,7 @@ describe("V2.6 PostgreSQL migrations", () => {
     );
     await pool.query("SET ROLE tm_rls_probe");
     try {
-      const error = await publications.initializeAdminData(adminBaselineSnapshot)
+      const error = await adminData.initializeAdminData(adminBaselineSnapshot)
         .then(() => undefined, (thrown: unknown) => thrown);
 
       expect(error).toBeInstanceOf(DomainValidationError);
@@ -195,8 +195,8 @@ describe("V2.6 PostgreSQL migrations", () => {
     // The translation must not swallow the codes the repositories match
     // themselves: a duplicate company is a conflict, not a policy problem,
     // and only the repository knows which table means what.
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await expect(publications.initializeAdminData(adminBaselineSnapshot))
+    await adminData.initializeAdminData(adminBaselineSnapshot);
+    await expect(adminData.initializeAdminData(adminBaselineSnapshot))
       .rejects.toMatchObject({ code: "ADMIN_DATA_ALREADY_EXISTS" });
   });
 
@@ -225,44 +225,44 @@ describe("V2.6 PostgreSQL migrations", () => {
 
 describe("V2.6 PostgreSQL admin repository", () => {
   it("initializes, reloads and defensively copies an admin snapshot", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    const loaded = await publications.load(COMPANY_ID);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
+    const loaded = await adminData.load(COMPANY_ID);
     expect(loaded).toEqual(adminBaselineSnapshot);
     (loaded!.assets as unknown as { name: string }[])[0]!.name = "mutated";
-    expect((await publications.load(COMPANY_ID))!.assets[0]!.name)
+    expect((await adminData.load(COMPANY_ID))!.assets[0]!.name)
       .not.toBe("mutated");
   });
 
   it("prevents duplicate company initialization", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    await expect(publications.initializeAdminData(adminBaselineSnapshot))
+    await adminData.initializeAdminData(adminBaselineSnapshot);
+    await expect(adminData.initializeAdminData(adminBaselineSnapshot))
       .rejects.toMatchObject({ code: "ADMIN_DATA_ALREADY_EXISTS" });
   });
 
   it("persists an admin batch and rejects a stale competing revision", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    const original = await publications.load(COMPANY_ID);
-    const first = await commitAdminBatch(publications, adminBatch(0, "First name"));
+    await adminData.initializeAdminData(adminBaselineSnapshot);
+    const original = await adminData.load(COMPANY_ID);
+    const first = await commitAdminBatch(adminData, adminBatch(0, "First name"));
     expect(first.revision).toBe(1);
     const staleNext = applyAdminBatch(original!, adminBatch(0, "Stale name"));
-    await expect(publications.save(COMPANY_ID, 0, staleNext))
+    await expect(adminData.save(COMPANY_ID, 0, staleNext))
       .rejects.toMatchObject({ code: "ADMIN_REVISION_CONFLICT" });
-    expect((await publications.load(COMPANY_ID))!.housingCompany.name)
+    expect((await adminData.load(COMPANY_ID))!.housingCompany.name)
       .toBe("First name");
   });
 
   it("detects column/payload corruption instead of returning plausible data", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     await pool.query(
       "UPDATE tm_admin_snapshots SET revision = 9 WHERE company_id = $1",
       [COMPANY_ID],
     );
-    await expect(publications.load(COMPANY_ID))
+    await expect(adminData.load(COMPANY_ID))
       .rejects.toMatchObject({ code: "DATABASE_INTEGRITY_ERROR" });
   });
 
   it("defaults additive collection fields missing from a pre-existing stored row instead of throwing", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // Simulates a row written before financialAccounts/financialEntries
     // existed: the JSONB payload simply has no such keys, the way a real
     // pre-vaihe-3A Supabase row does. Without withDefaultedAdminCollections()
@@ -275,7 +275,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.financialAccounts).toEqual([]);
@@ -283,7 +283,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
   });
 
   it("defaults balanceSheetSnapshots missing from a pre-existing stored row instead of throwing", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // Same regression as above (handoff vaihe-4A §1), for the collection
     // field added in this vaihe: a row written before balanceSheetSnapshots
     // existed has no such JSONB key. Without withDefaultedAdminCollections()
@@ -296,14 +296,14 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.balanceSheetSnapshots).toEqual([]);
   });
 
   it("defaults groupBudgets missing from a pre-existing stored row instead of throwing", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // Same regression as above (feature/group-budget handoff §1), for the
     // collection field added in this feature: a row written before
     // groupBudgets existed has no such JSONB key. Without
@@ -317,14 +317,14 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.groupBudgets).toEqual([]);
   });
 
   it("defaults groupActuals missing from a pre-existing stored row instead of throwing", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // Same regression as above (feature/group-level-actuals handoff §4.1), for
     // the collection field added in this feature: a row written before
     // groupActuals existed has no such JSONB key. Without
@@ -338,14 +338,14 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.groupActuals).toEqual([]);
   });
 
   it("defaults maintenanceDocuments missing from a pre-existing stored row instead of throwing", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // Same regression as above (feature/selvitykset handoff §3): every row
     // written before this collection existed has no such JSONB key, and
     // validateAdminDataSnapshot's uniqueBy() would throw "is not iterable".
@@ -356,7 +356,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.maintenanceDocuments).toEqual([]);
@@ -381,7 +381,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
 
   for (const generation of LEGACY_BASELINE_ROWS) {
     it(`loads an admin snapshot written ${generation.name} without the stored figures`, async () => {
-      await publications.initializeAdminData(adminBaselineSnapshot);
+      await adminData.initializeAdminData(adminBaselineSnapshot);
       await pool.query(
         `UPDATE tm_admin_snapshots
          SET payload = replace(payload::text, '"currentCash": ', $2 || '"currentCash": ')::jsonb
@@ -392,7 +392,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
       const stored = await storedBaselineKeys();
       for (const key of generation.keys) expect(stored).toContain(key);
 
-      const loaded = await publications.load(COMPANY_ID);
+      const loaded = await adminData.load(COMPANY_ID);
 
       expect(loaded!.liquidityBaselines).toEqual(adminBaselineSnapshot.liquidityBaselines);
       for (const key of generation.keys) {
@@ -400,14 +400,14 @@ describe("V2.6 PostgreSQL admin repository", () => {
       }
 
       // And they are not written back: the next save stores the current shape.
-      await commitAdminBatch(publications, adminBatch(0, "Legacy row re-saved"));
+      await commitAdminBatch(adminData, adminBatch(0, "Legacy row re-saved"));
       const resaved = await storedBaselineKeys();
       for (const key of generation.keys) expect(resaved).not.toContain(key);
     });
   }
 
   it("defaults every additive collection at once, so removing the defaulting cannot pass unnoticed", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
     // The tests above each pin one field, which means a future field
     // added without a matching test is unprotected. This one strips every
     // collection key withDefaultedAdminCollections() knows about, so deleting
@@ -423,7 +423,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     for (const collection of [
@@ -440,7 +440,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
   it("loads a snapshot written before the maintenance-plan coverage existed", async () => {
     // With account data: this test asserts on a cash path, and the liquidity
     // inputs are derived from accounts rather than from the baseline record.
-    await publications.initializeAdminData({
+    await adminData.initializeAdminData({
       ...adminBaselineSnapshot,
       ...financialActualsFixture,
     });
@@ -457,7 +457,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
        WHERE company_id = $1`,
       [COMPANY_ID],
     );
-    const withCoverage = await publications.load(COMPANY_ID);
+    const withCoverage = await adminData.load(COMPANY_ID);
     expect(withCoverage!.housingCompany.maintenancePlanCoverageThroughYear)
       .toBe(2030);
     const covered = buildSnapshotCalculations(withCoverage!, horizon);
@@ -485,7 +485,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
       [COMPANY_ID],
     );
 
-    const loaded = await publications.load(COMPANY_ID);
+    const loaded = await adminData.load(COMPANY_ID);
 
     expect(loaded).toBeDefined();
     expect(loaded!.housingCompany.maintenancePlanCoverageThroughYear)
@@ -499,8 +499,8 @@ describe("V2.6 PostgreSQL admin repository", () => {
   });
 
   it("round-trips a delete audit entry, which has no `after` value to store", async () => {
-    await publications.initializeAdminData(adminBaselineSnapshot);
-    const stored = await publications.load(COMPANY_ID);
+    await adminData.initializeAdminData(adminBaselineSnapshot);
+    const stored = await adminData.load(COMPANY_ID);
     const added = applyAdminBatch(stored!, {
       companyId: COMPANY_ID,
       expectedRevision: stored!.revision,
@@ -519,7 +519,7 @@ describe("V2.6 PostgreSQL admin repository", () => {
         explanation: "Testirivi.",
       }],
     });
-    await publications.save(COMPANY_ID, stored!.revision, added);
+    await adminData.save(COMPANY_ID, stored!.revision, added);
 
     const next = applyAdminBatch(added, {
       companyId: COMPANY_ID,
@@ -534,9 +534,9 @@ describe("V2.6 PostgreSQL admin repository", () => {
         explanation: "Testidataa, poistetaan.",
       }],
     });
-    await publications.save(COMPANY_ID, added.revision, next);
+    await adminData.save(COMPANY_ID, added.revision, next);
 
-    const reloaded = await publications.load(COMPANY_ID);
+    const reloaded = await adminData.load(COMPANY_ID);
     const audit = reloaded!.auditTrail.at(-1);
     expect(audit?.operation).toBe("delete");
     expect(audit?.after).toBeUndefined();

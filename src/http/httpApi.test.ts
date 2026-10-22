@@ -20,10 +20,10 @@ const PUBLIC_DIR = path.resolve(
 );
 
 let server: TaloyhtioHttpServer;
-let publications: InMemoryAdminDataRepository;
+let adminData: InMemoryAdminDataRepository;
 
 beforeEach(async () => {
-  publications = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
+  adminData = new InMemoryAdminDataRepository([adminBaselineSnapshot]);
   const authentication = new InMemoryAuthenticationPort({
     [ADMIN_TOKEN]: {
       subjectId: "admin:pasi",
@@ -47,7 +47,7 @@ beforeEach(async () => {
     grantedBy: "system",
   }]);
   server = createHttpServer({
-    admin: new SecuredAdminApplicationFacade(authentication, access, publications),
+    admin: new SecuredAdminApplicationFacade(authentication, access, adminData),
     clock: new FixedServerClock(NOW),
     publicDirectory: PUBLIC_DIR,
   });
@@ -226,7 +226,7 @@ describe("V2.7 HTTP API boundary", () => {
       { method: "PATCH", url: "/api/v1/public/sessions/session_1" },
       { method: "POST", url: "/api/v1/public/sessions/session_1/reset" },
       { method: "POST", url: `/api/v1/admin/companies/${COMPANY_ID}/publish` },
-      { method: "GET", url: `/api/v1/admin/companies/${COMPANY_ID}/publications` },
+      { method: "GET", url: `/api/v1/admin/companies/${COMPANY_ID}/adminData` },
     ];
     for (const route of removed) {
       for (const headers of [{}, { authorization: `Bearer ${ADMIN_TOKEN}` }]) {

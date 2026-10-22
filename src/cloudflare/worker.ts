@@ -2,7 +2,7 @@ import { SecuredAdminApplicationFacade } from "../application/securedAdminFacade
 import { RemoteJwksProvider } from "../auth/jwksClient.js";
 import { SupabaseJwtAuthenticationPort } from "../auth/supabaseJwtAuthentication.js";
 import { PostgresCompanyAccessRepository } from "../database/postgresCompanyAccessRepository.js";
-import { PostgresPublishingRepository } from "../database/postgresPublishingRepository.js";
+import { PostgresAdminDataRepository } from "../database/postgresAdminRepository.js";
 import { NodePostgresPool } from "../database/sql.js";
 import { createHttpServer } from "../http/createHttpServer.js";
 
@@ -32,7 +32,7 @@ export default {
     });
 
     try {
-      const publications = new PostgresPublishingRepository(pool);
+      const adminData = new PostgresAdminDataRepository(pool);
       const access = new PostgresCompanyAccessRepository(pool);
       const authentication = new SupabaseJwtAuthenticationPort({
         issuer: required(env.SUPABASE_JWT_ISSUER, "SUPABASE_JWT_ISSUER"),
@@ -41,7 +41,7 @@ export default {
           jwksUrl: required(env.SUPABASE_JWKS_URL, "SUPABASE_JWKS_URL"),
         }),
       });
-      const admin = new SecuredAdminApplicationFacade(authentication, access, publications);
+      const admin = new SecuredAdminApplicationFacade(authentication, access, adminData);
       const api = createHttpServer({ admin, logger: true, publicDirectory: "/" });
       const payload = await readPayload(request);
       const headers = Object.fromEntries(request.headers.entries());
